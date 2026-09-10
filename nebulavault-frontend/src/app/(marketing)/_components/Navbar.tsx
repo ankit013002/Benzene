@@ -3,8 +3,7 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Menu, X, Sun, Moon } from "lucide-react";
-import GlowOrb from "@/components/Gloworb";
-import BenzeneRing, { BenzeneWordmark } from "./BenzeneRing";
+import { BenzeneWordmark } from "./BenzeneRing";
 import { useTheme } from "next-themes";
 
 const navLinks = [

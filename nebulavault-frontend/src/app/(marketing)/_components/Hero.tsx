@@ -29,7 +29,7 @@ export default function Hero() {
       </div>
 
       <div className="flex flex-col gap-4 z-10 max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center pt-20">
-        {/* Enterprise Ready badge */}
+        {/* Keep the promise small and concrete while the product is in preview. */}
         <motion.div
           className="flex justify-center"
           initial={{ opacity: 0, y: 10 }}
@@ -38,7 +38,7 @@ export default function Hero() {
         >
           <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-bz-surface/80 border border-bz-border text-xs font-semibold uppercase tracking-widest text-bz-muted backdrop-blur-sm">
             <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-            Enterprise Ready
+            Private storage, built from your devices
           </span>
         </motion.div>
 
@@ -48,9 +48,9 @@ export default function Hero() {
           transition={{ duration: 0.8, delay: 0.1, ease: "easeOut" }}
         >
           <h1 className="text-4xl sm:text-6xl lg:text-7xl font-bold text-bz-text leading-tight mb-6">
-            Your personal cloud,{" "}
+            One drive. Every computer.{" "}
             <span className="bg-gradient-to-r from-bz-primary via-bz-primary2 to-bz-muted bg-clip-text text-transparent">
-              reimagined
+              in one Vault
             </span>
           </h1>
         </motion.div>
@@ -61,9 +61,9 @@ export default function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.2, ease: "easeOut" }}
         >
-          Secure, blazing-fast personal cloud storage with versioning, sharing,
-          and zero-trust architecture. Built for developers and teams who demand
-          performance and control.
+          Benzene turns the storage you already own across computers into one
+          private Vault. Add your devices, choose what they contribute, and let
+          Benzene handle where your files live.
         </motion.p>
 
         <motion.div
@@ -111,9 +111,9 @@ export default function Hero() {
             className="w-6 h-10 border-2 border-bz-primary/40 rounded-full flex justify-center"
             animate={{
               boxShadow: [
-                "0 0 0px rgba(45, 212, 191, 0.3)",
-                "0 0 20px rgba(45, 212, 191, 0.3)",
-                "0 0 0px rgba(45, 212, 191, 0.3)",
+                "0 0 0 color-mix(in srgb, var(--primary) 30%, transparent)",
+                "0 0 20px color-mix(in srgb, var(--primary) 30%, transparent)",
+                "0 0 0 color-mix(in srgb, var(--primary) 30%, transparent)",
               ],
             }}
             transition={{ duration: 2, repeat: Infinity }}

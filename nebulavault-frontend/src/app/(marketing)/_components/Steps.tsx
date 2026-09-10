@@ -2,23 +2,23 @@
 
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { Lock, UploadCloud, Share2 } from "lucide-react";
+import { HardDrive, Plus, UploadCloud } from "lucide-react";
 
 const steps = [
   {
-    icon: Lock,
-    title: "Authenticate",
-    text: "OIDC at the edge with JWT validation.",
+    icon: Plus,
+    title: "Add a device",
+    text: "Install Benzene on a computer you already own and choose its contribution.",
   },
   {
     icon: UploadCloud,
     title: "Upload",
-    text: "Direct, presigned S3 uploads with multipart.",
+    text: "Save to one Vault. Benzene places the bytes on available devices.",
   },
   {
-    icon: Share2,
-    title: "Browse & share",
-    text: "Gateway routes, previews, and permissions.",
+    icon: HardDrive,
+    title: "Use one drive",
+    text: "Browse your files in one place while Benzene keeps track of their devices.",
   },
 ];
 

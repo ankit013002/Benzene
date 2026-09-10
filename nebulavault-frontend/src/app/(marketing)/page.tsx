@@ -11,9 +11,9 @@ import CTASection from "./_components/CTASection";
 import Footer from "./_components/Footer";
 
 export const metadata = {
-  title: "Benzene — Your personal cloud, reimagined",
+  title: "Benzene — One drive. Every computer.",
   description:
-    "Secure, blazing-fast personal cloud with sharing, versioning, AI-powered search, and a zero-trust gateway.",
+    "Turn the storage you already own into one private Benzene Vault.",
 };
 
 export default function Page() {
@@ -24,7 +24,7 @@ export default function Page() {
         {/* Hero */}
         <Hero />
 
-        {/* Features — bento grid "Engineered for Permanence" */}
+        {/* A clear explanation of the product's current promise. */}
         {/* id="features" is set inside BentoFeatures */}
         <BentoFeatures />
 

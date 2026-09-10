@@ -3,7 +3,7 @@
 import { motion } from "framer-motion";
 import Startfield from "@/components/Startfield";
 import GlowOrb from "@/components/Gloworb";
-import { Shield, UploadCloud, GitBranch } from "lucide-react";
+import { HardDrive, LockKeyhole, Vault } from "lucide-react";
 
 type AuthShellProps = {
   title: string;
@@ -52,25 +52,25 @@ export default function AuthShell({
 
             <div className="space-y-3">
               <FeatureRow
-                icon={<Shield className="size-4 text-bz-primary" />}
-                title="Zero-trust gateway"
-                text="Edge token validation with least-privilege access."
+                icon={<HardDrive className="size-4 text-bz-primary" />}
+                title="Your devices, together"
+                text="Add computers you already own and choose how much storage to contribute."
               />
               <FeatureRow
-                icon={<UploadCloud className="size-4 text-bz-primary" />}
-                title="Blazing uploads"
-                text="Direct multipart uploads to S3 with presigned URLs."
+                icon={<Vault className="size-4 text-bz-primary" />}
+                title="One private Vault"
+                text="Benzene gives your files one familiar place, wherever the bytes live."
               />
               <FeatureRow
-                icon={<GitBranch className="size-4 text-bz-primary" />}
-                title="Versioning & previews"
-                text="Automatic versions with rich previews for docs and images."
+                icon={<LockKeyhole className="size-4 text-bz-primary" />}
+                title="Private by default"
+                text="Your devices are the primary home for your data."
               />
             </div>
 
             <div className="mt-8 h-px w-full bg-gradient-to-r from-transparent via-bz-primary/30 to-transparent" />
             <p className="mt-4 text-sm text-bz-muted">
-              SSO-ready • E2E audit • OpenTelemetry
+              Built around the storage you already own
             </p>
           </motion.div>
 

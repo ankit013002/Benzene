@@ -2,7 +2,7 @@
 
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { Shield, Users, GitBranch, RefreshCw } from "lucide-react";
+import { HardDrive, LockKeyhole, ShieldCheck, Vault } from "lucide-react";
 
 export default function BentoFeatures() {
   const ref = useRef<HTMLDivElement>(null);
@@ -19,20 +19,20 @@ export default function BentoFeatures() {
           transition={{ duration: 0.6 }}
         >
           <h2 className="font-headline text-4xl md:text-5xl font-extrabold tracking-tight text-bz-text">
-            Engineered for{" "}
+            Storage that works with what you already have{" "}
             <span className="bg-gradient-to-r from-bz-primary to-bz-primary2 bg-clip-text text-transparent">
-              Permanence
+              by design
             </span>
           </h2>
           <p className="text-bz-muted max-w-2xl text-lg leading-relaxed">
-            We&apos;ve rebuilt storage from the atomic level up. Benzene isn&apos;t
-            just a place to store files — it&apos;s infrastructure that outlasts you.
+            Benzene makes the computers and drives you already own feel like one
+            simple, private drive.
           </p>
         </motion.div>
 
         {/* Bento grid */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-6 md:min-h-[600px]">
-          {/* Row 1, Left (8 cols): Zero-Trust Gateway */}
+          {/* Row 1, Left (8 cols): user-owned storage */}
           <motion.div
             className="md:col-span-8 rounded-3xl p-10 flex flex-col justify-between overflow-hidden relative group active:scale-[0.99] transition-transform bg-bz-surface border border-bz-border shadow-card"
             initial={{ opacity: 0, y: 24 }}
@@ -41,16 +41,14 @@ export default function BentoFeatures() {
           >
             <div className="relative z-10 space-y-4 max-w-md">
               <div className="w-12 h-12 rounded-xl bg-bz-primary/10 flex items-center justify-center">
-                <Shield className="size-6 text-bz-primary" strokeWidth={1.5} />
+                <HardDrive className="size-6 text-bz-primary" strokeWidth={1.5} />
               </div>
               <h3 className="text-3xl font-bold text-bz-text">
-                Zero-Trust Gateway
+                Your devices, together
               </h3>
               <p className="text-bz-muted leading-relaxed">
-                Every request passes through Spring Cloud Gateway with HS256
-                JWT verification, per-route rate limiting, and least-privilege
-                header injection. Your services never see unauthenticated
-                traffic.
+                Add a desktop, laptop, old computer, or home server. Each can
+                contribute the amount of storage you choose.
               </p>
             </div>
 
@@ -92,42 +90,27 @@ export default function BentoFeatures() {
             </div>
           </motion.div>
 
-          {/* Row 1, Right (4 cols): Collaboration */}
+          {/* Row 1, Right (4 cols): one namespace */}
           <motion.div
-            className="md:col-span-4 bg-bz-primary text-white rounded-3xl p-10 flex flex-col justify-between active:scale-[0.99] transition-transform"
+            className="md:col-span-4 rounded-3xl p-10 flex flex-col justify-between active:scale-[0.99] transition-transform bg-bz-card border border-bz-border shadow-card"
             initial={{ opacity: 0, y: 24 }}
             animate={inView ? { opacity: 1, y: 0 } : {}}
             transition={{ duration: 0.6, delay: 0.14 }}
           >
             <div className="space-y-4">
-              <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center">
-                <Users className="size-5 text-[#9cf0ff]" strokeWidth={1.5} />
+              <div className="w-11 h-11 rounded-xl bg-muted flex items-center justify-center">
+                <Vault className="size-5 text-bz-primary" strokeWidth={1.5} />
               </div>
-              <h3 className="text-2xl font-bold">Seamless Collaboration</h3>
-              <p className="text-white/75 text-sm leading-relaxed">
-                Granular ACL controls, time-limited share links, and real-time
-                delta-syncing. Grant or revoke access to any file or folder
-                instantly. No more conflict files, ever.
+              <h3 className="text-2xl font-bold text-bz-text">One private Vault</h3>
+              <p className="text-bz-muted text-sm leading-relaxed">
+                Your files appear in one familiar hierarchy, regardless of
+                which device holds them.
               </p>
             </div>
-            <div className="flex -space-x-3 pt-8">
-              {[
-                "bg-foreground/70",
-                "bg-foreground/50",
-                "bg-foreground/30",
-              ].map((c, i) => (
-                <div
-                  key={i}
-                  className={`w-10 h-10 rounded-full border-2 border-bz-primary ${c}`}
-                />
-              ))}
-              <div className="w-10 h-10 rounded-full border-2 border-bz-primary bg-white/20 flex items-center justify-center text-white font-bold text-xs">
-                +12
-              </div>
-            </div>
+            <div className="pt-8 text-sm text-bz-muted">One place to browse and save.</div>
           </motion.div>
 
-          {/* Row 2, Left (4 cols): Versioning */}
+          {/* Row 2, Left (4 cols): automatic placement */}
           <motion.div
             className="md:col-span-4 rounded-3xl p-10 flex flex-col gap-6 active:scale-[0.99] transition-transform bg-bz-card border border-bz-border shadow-card"
             initial={{ opacity: 0, y: 24 }}
@@ -135,16 +118,15 @@ export default function BentoFeatures() {
             transition={{ duration: 0.6, delay: 0.2 }}
           >
             <div className="w-11 h-11 rounded-xl bg-bz-primary/12 flex items-center justify-center">
-              <GitBranch className="size-5 text-bz-primary" strokeWidth={1.5} />
+              <LockKeyhole className="size-5 text-bz-primary" strokeWidth={1.5} />
             </div>
             <div>
               <h3 className="text-2xl font-bold text-bz-text">
-                Version Everything
+                Let Benzene place files
               </h3>
               <p className="text-bz-muted text-sm mt-2 leading-relaxed">
-                Every upload is versioned automatically. Browse history,
-                restore any state, and compare diffs — no re-indexing, no
-                gaps, from 1 file to 100 million.
+                You choose the Vault, not a particular computer. Benzene decides
+                where each upload belongs among your available devices.
               </p>
             </div>
             {/* Mini bar chart */}
@@ -166,7 +148,7 @@ export default function BentoFeatures() {
             </div>
           </motion.div>
 
-          {/* Row 2, Right (8 cols): Reliability */}
+          {/* Row 2, Right (8 cols): visible protection state */}
           <motion.div
             className="md:col-span-8 rounded-3xl p-10 flex items-center justify-between active:scale-[0.99] transition-transform bg-bz-surface border border-bz-border shadow-card"
             initial={{ opacity: 0, y: 24 }}
@@ -175,12 +157,12 @@ export default function BentoFeatures() {
           >
             <div className="max-w-md">
               <h3 className="text-2xl font-bold text-bz-text mb-4">
-                99.9999% Reliability
+                Protection you can understand
               </h3>
               <p className="text-bz-muted text-sm leading-relaxed">
-                Self-healing data clusters automatically detect and repair
-                bit-rot before it ever affects your workflow. S3 object storage
-                with 11 nines of durability backs every byte you upload.
+                Benzene shows whether your Vault has the devices it needs to
+                keep files protected. Cloud Protection is an optional future
+                tier, not a requirement for your Vault.
               </p>
             </div>
             {/* SLA spinner */}
@@ -190,7 +172,7 @@ export default function BentoFeatures() {
             >
               <div className="relative w-28 h-28">
                 <div className="absolute inset-0 rounded-full border-[8px] border-bz-primary/15 flex items-center justify-center">
-                  <RefreshCw
+                  <ShieldCheck
                     className="size-10 text-bz-primary"
                     strokeWidth={1.5}
                   />

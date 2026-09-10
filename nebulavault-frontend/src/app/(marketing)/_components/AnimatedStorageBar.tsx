@@ -9,14 +9,11 @@ type Props = {
 };
 
 const COLORS = {
-  textMuted: "rgba(255,255,255,0.65)",
-  textMain: "rgba(255,255,255,0.95)",
-  surface: "#171923",
-  border: "#2a2d3a",
-  primary: "#2DD4BF",
-  primary2: "#22D3EE",
-  glow: "rgba(34,211,238,0.35)",
-  shimmer: "rgba(255,255,255,0.35)",
+  textMuted: "var(--muted-foreground)",
+  surface: "var(--muted)",
+  border: "var(--border)",
+  primary: "var(--primary)",
+  shimmer: "color-mix(in srgb, var(--primary-foreground) 35%, transparent)",
 };
 
 export default function AnimatedStorageBar({
@@ -27,12 +24,10 @@ export default function AnimatedStorageBar({
   const isInView = useInView(ref, { once: true, margin: "-100px" });
   const prefersReduced = useReducedMotion();
   const [pct, setPct] = useState(0);
-  const [timer, setTimer] = useState(0);
   const [usedGB, setUsedGB] = useState(initalIsedGB);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setTimer((prev) => prev + 1);
       setUsedGB(Math.random() * 150);
     }, 5000);
 
@@ -96,7 +91,7 @@ export default function AnimatedStorageBar({
             position: "absolute",
             inset: 0,
             borderRadius: 9999,
-            background: `linear-gradient(90deg, ${COLORS.primary}1F, ${COLORS.primary2}1F)`,
+            background: "color-mix(in srgb, var(--primary) 10%, transparent)",
           }}
         />
 
@@ -105,8 +100,8 @@ export default function AnimatedStorageBar({
             position: "relative",
             height: "100%",
             borderRadius: 9999,
-            background: `linear-gradient(90deg, ${COLORS.primary}, ${COLORS.primary2})`,
-            boxShadow: `0 0 16px ${COLORS.glow}`,
+            background: COLORS.primary,
+            boxShadow: "var(--shadow-glow-sm)",
             width: 0,
           }}
           initial={{ width: 0 }}

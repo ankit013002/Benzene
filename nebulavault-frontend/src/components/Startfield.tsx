@@ -10,7 +10,7 @@ type Props = {
 
 export default function Starfield({
   density = 0.00012,
-  color = "#2DD4BF",
+  color = "var(--primary)",
   opacity = 0.55,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -38,6 +38,12 @@ export default function Starfield({
     };
 
     const stars: Star[] = [];
+
+    const resolveColor = () =>
+      color.startsWith("var(")
+        ? getComputedStyle(canvas).getPropertyValue(color.slice(4, -1)).trim()
+        : color;
+    let resolvedColor = resolveColor();
 
     const hexToRgba = (hex: string, a = 1) => {
       const h = hex.replace("#", "");
@@ -89,9 +95,9 @@ export default function Starfield({
 
     const drawStar = (s: Star) => {
       const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 4);
-      g.addColorStop(0, hexToRgba(color, s.a));
-      g.addColorStop(0.4, hexToRgba(color, s.a * 0.7));
-      g.addColorStop(1, "rgba(0,0,0,0)");
+      g.addColorStop(0, hexToRgba(resolvedColor, s.a));
+      g.addColorStop(0.4, hexToRgba(resolvedColor, s.a * 0.7));
+      g.addColorStop(1, "transparent");
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
@@ -125,9 +131,18 @@ export default function Starfield({
     resize();
     window.addEventListener("resize", resize);
     step();
+    const themeObserver = new MutationObserver(() => {
+      resolvedColor = resolveColor();
+      if (prefersReduced) step();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
 
     return () => {
       window.removeEventListener("resize", resize);
+      themeObserver.disconnect();
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [density, color, opacity]);

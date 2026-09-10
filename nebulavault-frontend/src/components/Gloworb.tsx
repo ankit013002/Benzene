@@ -14,8 +14,8 @@ type GlowOrbProps = {
 export default function GlowOrb({
   size = "md",
   className = "",
-  from = "#2DD4BF",
-  to = "#22D3EE",
+  from = "var(--primary)",
+  to = "var(--muted-foreground)",
   glow = 0.6,
 }: GlowOrbProps) {
   const prefersReduced = useReducedMotion();
@@ -25,11 +25,12 @@ export default function GlowOrb({
   const glowOuter = Math.round(px * 4);
   const glowInner = Math.max(2, Math.round(px / 3));
 
+  const glowColor = `color-mix(in srgb, ${to} ${Math.round(
+    glow * 100,
+  )}%, transparent)`;
   const boxShadow = [
-    `0 0 ${glowOuter}px ${glowInner}px rgba(34,211,238,${glow})`,
-    `0 0 ${glowOuter * 1.6}px ${Math.round(
-      glowInner * 1.2
-    )}px rgba(34,211,238,${glow * 0.45})`,
+    `0 0 ${glowOuter}px ${glowInner}px ${glowColor}`,
+    `0 0 ${glowOuter * 1.6}px ${Math.round(glowInner * 1.2)}px ${glowColor}`,
   ].join(", ");
 
   return (

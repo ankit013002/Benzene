@@ -26,6 +26,8 @@ export default function SideBarMenuOption({
     setPageSelected(option.name);
     if (option.name === "Dashboard") {
       router.push("/dashboard");
+    } else if (option.name === "Trash") {
+      router.push("/Trash");
     } else {
       router.push(`/${option.name.toLowerCase()}`);
     }
@@ -35,7 +37,7 @@ export default function SideBarMenuOption({
     <label
       className={`join-item btn btn-ghost w-full justify-start gap-3 border-r-0 border-y-0  ${
         isOptionSelected
-          ? "bg-[#181c23] border-l-accent"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground border-l-2 border-l-sidebar-primary"
           : "bg-transparent border-l-0"
       }`}
     >

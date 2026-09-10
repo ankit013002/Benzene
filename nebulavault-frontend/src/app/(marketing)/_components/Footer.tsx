@@ -19,7 +19,7 @@ export default function Footer() {
           <div className="space-y-1.5">
             <p className="font-bold text-bz-text text-lg">Benzene</p>
             <p className="text-xs text-bz-muted uppercase tracking-widest">
-              © {year} Benzene Cloud Storage. Secure by Design.
+              © {year} Benzene. Private storage, by design.
             </p>
           </div>
 

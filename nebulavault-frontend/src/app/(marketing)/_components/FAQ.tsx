@@ -1,28 +1,28 @@
 export default function FAQ() {
   const faqs = [
     {
-      q: "Is my data encrypted?",
-      a: "Yes. Objects are encrypted at rest in S3 and in transit via TLS. Tokens are short-lived and validated at the gateway.",
+      q: "Where are my files stored?",
+      a: "Your files are stored on the computers and drives you add to your Vault. Benzene keeps the physical location out of your way.",
     },
     {
-      q: "How does sharing work?",
-      a: "Create time-limited links or grant explicit permissions to members. Owners can revoke access anytime.",
+      q: "Do I need cloud storage?",
+      a: "No. Your own devices are the primary storage. An optional Cloud Protection tier is planned for people who want extra durability or availability.",
     },
     {
-      q: "What does the free tier include?",
-      a: "Starter includes 100 MB and basic sharing—perfect for development and light use.",
+      q: "What is a Vault?",
+      a: "A Vault combines the storage contributed by your devices into one private drive with one familiar file hierarchy.",
     },
     {
-      q: "Do you support file versioning?",
-      a: "Yep—uploads create versions automatically and the UI exposes a quick history.",
+      q: "How does Benzene protect files?",
+      a: "Benzene places protected copies across available devices and reports the Vault's current protection state. Repair automation is still being built.",
     },
     {
-      q: "Can I self-host?",
-      a: "Benzene is built with a microservice mindset. A self-hosted option is on the roadmap.",
+      q: "Can I add an older computer?",
+      a: "Yes. Any supported computer with available disk space can contribute storage, so older hardware can become useful again.",
     },
     {
-      q: "How do I import existing files?",
-      a: "Drag and drop in the Files view or use the API to batch upload with presigned URLs.",
+      q: "Can I use Benzene away from home?",
+      a: "The current preview is focused on devices reachable on your local network. Remote access is planned, but is not available yet.",
     },
   ];
 

@@ -2,23 +2,23 @@
 
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { ShieldCheck, Globe, History } from "lucide-react";
+import { LockKeyhole, ShieldCheck } from "lucide-react";
 
 const items = [
   {
     icon: ShieldCheck,
-    title: "SOC 2 Type II Ready",
-    body: "Continuous monitoring and strict access controls for peace of mind across your entire organisation.",
+    title: "Your devices first",
+    body: "The computers and drives you add are the primary home for your files.",
   },
   {
-    icon: Globe,
-    title: "GDPR & HIPAA Aligned",
-    body: "Data residency controls, encrypted audit trails, and configurable retention across global deployments.",
+    icon: ShieldCheck,
+    title: "Protection is visible",
+    body: "Your Vault reports whether the available devices can provide the protection you chose.",
   },
   {
-    icon: History,
-    title: "Unlimited Versioning",
-    body: "Travel back to any file state, any point in the last ten years. One click — no support ticket required.",
+    icon: LockKeyhole,
+    title: "Private by default",
+    body: "Benzene is designed to minimize unnecessary exposure of your data to the service.",
   },
 ];
 
@@ -50,11 +50,11 @@ export default function TrustSection() {
               {/* Server rack card */}
               <div className="absolute inset-4 bg-bz-card rounded-3xl shadow-2xl overflow-hidden border border-bz-border flex flex-col items-stretch justify-center gap-3 p-8">
                 {[
-                  { width: "78%", pulse: "bg-success", label: "NODE-01" },
-                  { width: "62%", pulse: "bg-bz-primary", label: "NODE-02" },
-                  { width: "91%", pulse: "bg-success", label: "NODE-03" },
-                  { width: "55%", pulse: "bg-bz-primary", label: "NODE-04" },
-                  { width: "83%", pulse: "bg-success", label: "NODE-05" },
+                  { width: "78%", pulse: "bg-success", label: "DESKTOP" },
+                  { width: "62%", pulse: "bg-bz-primary", label: "LAPTOP" },
+                  { width: "91%", pulse: "bg-success", label: "HOME PC" },
+                  { width: "55%", pulse: "bg-bz-primary", label: "SERVER" },
+                  { width: "83%", pulse: "bg-success", label: "DRIVE" },
                 ].map((row, i) => (
                   <div
                     key={i}
@@ -94,10 +94,10 @@ export default function TrustSection() {
                 transition={{ duration: 0.5, delay: 0.45 }}
               >
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-bz-primary mb-0.5">
-                  Data Latency
+                  Devices in your Vault
                 </p>
                 <p className="text-2xl font-black tracking-tight text-bz-text leading-none">
-                  0.02ms
+                  Your devices
                 </p>
               </motion.div>
 
@@ -109,9 +109,9 @@ export default function TrustSection() {
                 transition={{ duration: 0.5, delay: 0.55 }}
               >
                 <p className="text-[10px] font-black uppercase tracking-[0.2em] text-bz-muted mb-0.5">
-                  Encryption
+                  Storage you control
                 </p>
-                <p className="text-base font-bold text-bz-text">AES-256-GCM</p>
+                <p className="text-base font-bold text-bz-text">At home</p>
               </motion.div>
             </div>
           </motion.div>
@@ -124,9 +124,9 @@ export default function TrustSection() {
             transition={{ duration: 0.7, delay: 0.12, ease: "easeOut" }}
           >
             <h2 className="text-4xl font-extrabold tracking-tight text-bz-text leading-tight">
-              Enterprise Compliance{" "}
+              Private storage, made simple{" "}
               <span className="bg-gradient-to-r from-bz-primary to-bz-primary2 bg-clip-text text-transparent">
-                by Default
+                by design
               </span>
             </h2>
 

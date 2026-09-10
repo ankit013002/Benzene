@@ -4,49 +4,49 @@ import { MotionConfig, motion, useInView } from "framer-motion";
 import { useRef } from "react";
 import {
   Zap,
-  GitBranch,
-  Share2,
   Activity,
-  Shield,
-  BarChart3,
+  ShieldCheck,
+  Cloud,
+  Laptop,
+  LockKeyhole,
 } from "lucide-react";
 
 const features = [
   {
+    icon: Laptop,
+    title: "Use your devices",
+    description:
+      "Bring together the computers and drives you already own.",
+  },
+  {
     icon: Zap,
-    title: "Blazing uploads",
+    title: "Automatic placement",
     description:
-      "Direct-to-S3 presigned uploads with multipart support for speed and reliability.",
+      "Save to one Vault and let Benzene choose an available device.",
   },
   {
-    icon: GitBranch,
-    title: "Versioning & previews",
+    icon: ShieldCheck,
+    title: "Protection status",
     description:
-      "Automatic versions with rich previews for docs, images, and code.",
+      "See whether your Vault has the storage it needs to stay protected.",
   },
   {
-    icon: Share2,
-    title: "Share & permissions",
+    icon: LockKeyhole,
+    title: "Private by default",
     description:
-      "Granular controls, time-limited links, and fine-grained access.",
+      "Your own devices are the primary home for your files.",
+  },
+  {
+    icon: Cloud,
+    title: "Cloud Protection later",
+    description:
+      "Add an optional cloud durability tier when you need it. Coming later.",
   },
   {
     icon: Activity,
-    title: "Audit & activity",
+    title: "A calm, clear view",
     description:
-      "End-to-end audit trail with real-time activity feeds and logs.",
-  },
-  {
-    icon: Shield,
-    title: "Zero-trust gateway",
-    description:
-      "Edge token validation and least-privilege access across services.",
-  },
-  {
-    icon: BarChart3,
-    title: "Observability",
-    description:
-      "Built-in OpenTelemetry with traces, metrics, and performance insights.",
+      "Browse your files without managing storage locations or device details.",
   },
 ];
 
@@ -70,13 +70,14 @@ export default function FeatureCards() {
           transition={{ duration: 0.6 }}
         >
           <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-bz-text mb-4">
-            Built for{" "}
+            A simpler way to use your storage{" "}
             <span className="bg-gradient-to-r from-bz-primary via-bz-primary2 to-bz-muted bg-clip-text text-transparent">
-              performance
+              together
             </span>
           </h2>
           <p className="text-lg text-bz-muted max-w-2xl mx-auto">
-            Enterprise-grade capabilities designed for modern teams.
+            The first Benzene experience is focused on one person, one Vault,
+            and the devices they already own.
           </p>
         </motion.div>
 

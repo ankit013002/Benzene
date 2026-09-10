@@ -57,7 +57,7 @@ export default function Showcase() {
               {rows.map((r, i) => (
                 <motion.div
                   key={r.name}
-                  className="grid grid-cols-12 px-5 py-4 hover:bg-white/5 transition-colors"
+                  className="grid grid-cols-12 px-5 py-4 hover:bg-muted/50 transition-colors"
                   initial={{ opacity: 0, y: 10 }}
                   animate={inView ? { opacity: 1, y: 0 } : {}}
                   transition={{ duration: 0.4, delay: 0.05 * i }}

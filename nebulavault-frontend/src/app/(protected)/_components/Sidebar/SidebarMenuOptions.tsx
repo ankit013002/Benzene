@@ -21,7 +21,7 @@ const SideBarMenuOptions = () => {
 
   return (
     <div className="flex flex-col w-full">
-      {SideBarOptions.map((option, index) => (
+      {SideBarOptions.map((option) => (
         <SideBarMenuOption
           key={option.id}
           option={option}

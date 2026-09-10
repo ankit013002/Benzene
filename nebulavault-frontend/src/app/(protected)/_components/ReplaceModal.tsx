@@ -14,16 +14,16 @@ const ReplaceModal = ({
   handleConfirmReplace,
 }: ReplaceModalProps) => {
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
+    <div className="fixed inset-0 flex items-center justify-center bg-background/70 z-50">
       <div className="bg-card border border-border rounded-2xl shadow-2xl w-[90%] max-w-md p-6 flex flex-col gap-4 animate-fade-in">
-        <div className="text-center text-xl font-semibold text-white">
+        <div className="text-center text-xl font-semibold text-foreground">
           Replace Files?
         </div>
-        <div className="bg-[#1f2029] rounded-lg p-3 max-h-40 overflow-y-auto text-sm text-gray-300">
+        <div className="bg-muted rounded-lg p-3 max-h-40 overflow-y-auto text-sm text-muted-foreground">
           {replaceFiles.map((file) => (
             <div
               key={file}
-              className="border-b border-gray-700 py-1 last:border-none"
+              className="border-b border-border py-1 last:border-none"
             >
               {file}
             </div>

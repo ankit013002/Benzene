@@ -3,8 +3,6 @@
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
 
-const LOGOS = ["QUANTUM_CO", "VOID_TECH", "MERIDIAN_LABS"] as const;
-
 export default function CTASection() {
   const ref = useRef<HTMLDivElement>(null);
   const inView = useInView(ref, { once: true, margin: "-80px" });
@@ -19,46 +17,38 @@ export default function CTASection() {
       >
         {/* Gradient-border wrapper — 1px gradient ring around the card */}
         <div className="p-px rounded-[2rem] bg-gradient-to-br from-bz-primary via-bz-primary2 to-bz-muted shadow-2xl shadow-bz-primary/20">
-          <div className="bg-[#1e2a3d] text-white py-16 px-8 md:py-20 md:px-20 rounded-[1.95rem] flex flex-col items-center text-center space-y-8">
+          <div className="bg-bz-card text-bz-text py-16 px-8 md:py-20 md:px-20 rounded-[1.95rem] flex flex-col items-center text-center space-y-8">
             {/* Headline */}
             <h2 className="text-4xl md:text-6xl font-extrabold tracking-tight leading-tight">
-              Ready to transcend?
+              Ready to use the storage you already own?
             </h2>
 
             {/* Subtitle */}
-            <p className="text-white/65 max-w-lg text-lg leading-relaxed">
-              Join developers and teams who&apos;ve moved their critical files
-              to Benzene. Start free — no credit card required.
+            <p className="text-bz-muted max-w-lg text-lg leading-relaxed">
+              Create a private Vault, add a device, and see your storage as one
+              simple drive.
             </p>
 
             {/* CTAs */}
             <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto pt-2">
               <motion.a
                 href="/register"
-                className="px-10 py-4 bg-white text-bz-primary rounded-xl font-bold text-lg hover:bg-white/90 transition-all duration-200 active:scale-95"
+                className="px-10 py-4 bg-bz-primary text-bz-bg rounded-xl font-bold text-lg hover:opacity-90 transition-all duration-200 active:scale-95"
                 whileHover={{ y: -2 }}
                 whileTap={{ scale: 0.97 }}
               >
-                Start Free Trial
+                Create your Vault
               </motion.a>
               <motion.a
                 href="#faq"
-                className="px-10 py-4 border border-white/20 text-white rounded-xl font-bold text-lg hover:bg-white/5 transition-all duration-200 active:scale-95"
+                className="px-10 py-4 border border-bz-border text-bz-text rounded-xl font-bold text-lg hover:bg-bz-surface transition-all duration-200 active:scale-95"
                 whileHover={{ y: -2 }}
                 whileTap={{ scale: 0.97 }}
               >
-                Talk to us
+                Read the FAQs
               </motion.a>
             </div>
 
-            {/* Social proof logos */}
-            <div className="pt-6 flex flex-wrap justify-center gap-8 opacity-30 grayscale">
-              {LOGOS.map((name) => (
-                <span key={name} className="font-bold text-xl tracking-widest">
-                  {name}
-                </span>
-              ))}
-            </div>
           </div>
         </div>
       </motion.div>

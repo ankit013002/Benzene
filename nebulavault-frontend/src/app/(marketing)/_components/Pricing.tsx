@@ -1,166 +1,42 @@
-"use client";
-
-import { motion } from "framer-motion";
-import { useState } from "react";
+import Link from "next/link";
 import { Check } from "lucide-react";
 
-type Plan = {
-  name: "Starter" | "Pro" | "Team";
-  priceMonthly: number;
-  priceYearly: number;
-  tagline: string;
-  features: string[];
-  highlighted?: boolean;
-};
-
-const plans: Plan[] = [
-  {
-    name: "Starter",
-    priceMonthly: 0,
-    priceYearly: 0,
-    tagline: "For personal dev & testing.",
-    features: ["100 MB storage", "Basic sharing", "Email support"],
-  },
-  {
-    name: "Pro",
-    priceMonthly: 8,
-    priceYearly: 80,
-    tagline: "For power users and creators.",
-    features: ["50 GB storage", "Versioning & previews", "Priority support"],
-    highlighted: true,
-  },
-  {
-    name: "Team",
-    priceMonthly: 15,
-    priceYearly: 150,
-    tagline: "For small teams who ship fast.",
-    features: [
-      "200 GB storage",
-      "Roles & permissions",
-      "Audit logs & SSO-ready",
-    ],
-  },
-];
-
+/** Pricing is intentionally not invented while the product is in preview. */
 export default function Pricing() {
-  const [yearly, setYearly] = useState(false);
-  const signup = "/register";
-
   return (
     <section id="pricing" className="py-24 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="text-center mb-10">
-          <h2 className="text-3xl sm:text-4xl font-bold text-bz-text">
-            Simple pricing
-          </h2>
-          <p className="text-bz-muted mt-2">
-            Start free. Upgrade when you need more.
+      <div className="max-w-3xl mx-auto text-center">
+        <h2 className="text-3xl sm:text-4xl font-bold text-bz-text">
+          Start with the storage you own
+        </h2>
+        <p className="text-bz-muted mt-2">
+          Benzene is in an early preview. There is no cloud plan to choose yet:
+          your devices are the starting point.
+        </p>
+
+        <div className="mt-10 rounded-2xl border border-bz-border bg-bz-surface/60 p-8 text-left shadow-card">
+          <h3 className="text-2xl font-semibold text-bz-text">Personal Vault</h3>
+          <p className="text-bz-muted mt-1">
+            One private drive made from your computers and available storage.
           </p>
-
-          <div className="mt-6 inline-flex items-center rounded-full border border-bz-border bg-bz-surface/60 p-1">
-            <button
-              type="button"
-              aria-pressed={!yearly}
-              className={`relative px-4 py-2 rounded-full text-sm transition ${
-                !yearly ? "text-bz-bg" : "text-bz-muted"
-              }`}
-              onClick={() => setYearly(false)}
-            >
-              <motion.span
-                layout
-                className={`absolute inset-0 rounded-full ${
-                  !yearly
-                    ? "bg-gradient-to-r from-bz-primary to-bz-primary2"
-                    : ""
-                }`}
-                transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              />
-              <span className="relative">Monthly</span>
-            </button>
-            <button
-              type="button"
-              aria-pressed={yearly}
-              className={`relative px-4 py-2 rounded-full text-sm transition ${
-                yearly ? "text-bz-bg" : "text-bz-muted"
-              }`}
-              onClick={() => setYearly(true)}
-            >
-              <motion.span
-                layout
-                className={`absolute inset-0 rounded-full ${
-                  yearly
-                    ? "bg-gradient-to-r from-bz-primary to-bz-primary2"
-                    : ""
-                }`}
-                transition={{ type: "spring", stiffness: 400, damping: 30 }}
-              />
-              <span className="relative">Yearly</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="grid md:grid-cols-3 gap-6">
-          {plans.map((p, i) => {
-            const price = yearly ? p.priceYearly : p.priceMonthly;
-            const unit = yearly ? "/yr" : "/mo";
-            return (
-              <motion.div
-                key={p.name}
-                className={`rounded-2xl border bg-bz-surface/60 backdrop-blur-sm p-6 shadow-card ${
-                  p.highlighted ? "border-bz-primary/40" : "border-bz-border"
-                }`}
-                initial={{ opacity: 0, y: 24 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-100px" }}
-                transition={{ duration: 0.5, delay: i * 0.06 }}
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-semibold text-bz-text">
-                    {p.name}
-                  </h3>
-                  {p.highlighted && (
-                    <span className="text-xs px-2 py-1 rounded-full border border-bz-border bg-bz-card/60 text-bz-muted">
-                      Popular
-                    </span>
-                  )}
-                </div>
-                <p className="text-bz-muted mt-1">{p.tagline}</p>
-
-                <div className="mt-4">
-                  <span className="text-4xl font-bold text-bz-text">
-                    {price === 0 ? "Free" : `$${price}`}
-                  </span>
-                  {price !== 0 && (
-                    <span className="text-bz-muted ml-1">{unit}</span>
-                  )}
-                </div>
-
-                <ul className="mt-6 space-y-2">
-                  {p.features.map((f) => (
-                    <li
-                      key={f}
-                      className="flex items-start gap-2 text-bz-muted"
-                    >
-                      <Check className="size-4 mt-0.5 text-bz-primary" />
-                      <span>{f}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <a
-                  href={signup}
-                  className={`mt-6 inline-flex w-full justify-center rounded-xl2 px-4 py-2 font-semibold transition
-                    ${
-                      p.highlighted
-                        ? "bg-gradient-to-r from-bz-primary to-bz-primary2 text-bz-bg hover:shadow-glow-sm"
-                        : "border border-bz-border text-bz-text hover:border-bz-primary/40"
-                    }`}
-                >
-                  Get started
-                </a>
-              </motion.div>
-            );
-          })}
+          <ul className="mt-6 space-y-3">
+            {[
+              "Add devices and choose their storage contribution",
+              "Browse files through one familiar Vault",
+              "See when your Vault needs more protection",
+            ].map((feature) => (
+              <li key={feature} className="flex items-start gap-2 text-bz-muted">
+                <Check className="size-4 mt-0.5 text-bz-primary" />
+                <span>{feature}</span>
+              </li>
+            ))}
+          </ul>
+          <Link
+            href="/register"
+            className="mt-8 inline-flex rounded-xl2 border border-bz-border px-5 py-2 font-semibold text-bz-text transition hover:border-bz-primary/40"
+          >
+            Create your Vault
+          </Link>
         </div>
       </div>
     </section>
