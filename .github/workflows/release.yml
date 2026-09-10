@@ -50,7 +50,7 @@ jobs:
     name: Build & push — Web
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: needs.detect-changes.outputs.web == 'true'
+    if: github.ref_type == 'tag' || needs.detect-changes.outputs.web == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -83,7 +83,7 @@ jobs:
     name: Build & push — Auth
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: needs.detect-changes.outputs.auth == 'true'
+    if: github.ref_type == 'tag' || needs.detect-changes.outputs.auth == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -116,7 +116,7 @@ jobs:
     name: Build & push — Gateway
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: needs.detect-changes.outputs.gateway == 'true'
+    if: github.ref_type == 'tag' || needs.detect-changes.outputs.gateway == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -149,7 +149,7 @@ jobs:
     name: Build & push — Control plane
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: needs.detect-changes.outputs.control_plane == 'true'
+    if: github.ref_type == 'tag' || needs.detect-changes.outputs.control_plane == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
@@ -177,7 +177,7 @@ jobs:
     name: Build & push — User service
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: needs.detect-changes.outputs.user_service == 'true'
+    if: github.ref_type == 'tag' || needs.detect-changes.outputs.user_service == 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3

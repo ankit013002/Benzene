@@ -1,2 +1,7 @@
 YAGNI-CODE
 simple-flask-server
+
+# Local root environment overrides; keep committed root templates trackable.
+/.env
+/.env.*
+!/.env.example
