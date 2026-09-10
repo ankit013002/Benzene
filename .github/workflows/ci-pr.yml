@@ -69,10 +69,7 @@ jobs:
         run: |
           if [ -f package-lock.json ]; then npm ci --include=dev; else npm i; fi
       - name: Lint (if present)
-        run: |
-          if npm run -s | grep -qE '(^| )lint( |$)'; then
-            npm run lint || echo "lint had issues (not failing CI)"
-          fi
+        run: npm run lint --if-present
       - name: Typecheck (if present)
         run: npm run typecheck --if-present
       - name: Build (with fallback)
@@ -106,7 +103,7 @@ jobs:
           cache: npm
           cache-dependency-path: benzene-auth-service/package-lock.json
       - name: Install
-        run: npm install
+        run: npm ci --include=dev
       - name: Build (with fallback)
         run: |
           if npm run -s | grep -qE '(^| )build( |$)'; then
@@ -178,7 +175,7 @@ jobs:
           cache: npm
           cache-dependency-path: benzene-control-plane/package-lock.json
       - name: Install
-        run: npm install
+        run: npm ci --include=dev
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
       - name: Build
@@ -230,7 +227,7 @@ jobs:
           cache: npm
           cache-dependency-path: benzene-node-agent/package-lock.json
       - name: Install
-        run: npm install
+        run: npm ci --include=dev
       - name: Typecheck
         run: npx tsc --noEmit -p tsconfig.json
       - name: Build
