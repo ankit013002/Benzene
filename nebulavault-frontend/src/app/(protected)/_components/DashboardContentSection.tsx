@@ -14,12 +14,9 @@ import {
   UploadProgress,
   deleteNode,
   downloadFile,
+  downloadLegacyFile,
   uploadFiles,
 } from "@/utils/file-system/uploadFiles";
-import {
-  SHORTFALL_MESSAGE,
-  uploadToDevices,
-} from "@/utils/file-system/deviceUpload";
 
 interface ListedFile {
   id: string;
@@ -30,6 +27,8 @@ interface ListedFile {
   ext?: string;
   lastModified: number | null;
   hasContent: boolean;
+  objectHash?: string;
+  protection?: FileType["protection"];
 }
 
 interface ListedFolder {
@@ -66,15 +65,22 @@ export default function DashboardContentSection() {
         data?: { files?: ListedFile[]; folders?: ListedFolder[] };
       };
 
-      const files: FileType[] = (payload.data?.files ?? []).map((file) => ({
-        id: file.id,
-        name: file.name,
-        path: file.path,
-        size: getNormalizedSize(file.bytes),
-        type: file.contentType,
-        lastModified: file.lastModified ?? undefined,
-        hasContent: file.hasContent,
-      }));
+      // Pending reservations have no committed bytes and cannot be downloaded.
+      // The backend has no cancellation endpoint, so keep abandoned uploads
+      // out of the ordinary drive listing instead of leaving permanent rows.
+      const files: FileType[] = (payload.data?.files ?? [])
+        .filter((file) => file.hasContent !== false)
+        .map((file) => ({
+          id: file.id,
+          name: file.name,
+          path: file.path,
+          size: getNormalizedSize(file.bytes),
+          type: file.contentType,
+          lastModified: file.lastModified ?? undefined,
+          hasContent: file.hasContent,
+          objectHash: file.objectHash,
+          protection: file.protection,
+        }));
 
       const folders: FolderType[] = (payload.data?.folders ?? []).map((folder) => ({
         id: folder.id,
@@ -118,56 +124,17 @@ export default function DashboardContentSection() {
     setNotice(null);
 
     try {
-      // Metadata first: the drive tree, folders and names live in the control
-      // plane regardless of which device ends up holding the bytes.
-      await uploadFiles(currPath, files, folderPaths, setUploadProgress);
-
-      // Then the bytes themselves, browser straight to the user's devices.
-      const problems: string[] = [];
-      let stored = 0;
-
-      for (const [index, { file }] of files.entries()) {
-        setUploadProgress({
-          completed: index,
-          total: files.length,
-          currentFile: file.name,
-        });
-
-        const result = await uploadToDevices(file, (message) =>
-          setUploadProgress({
-            completed: index,
-            total: files.length,
-            currentFile: message,
-          })
-        );
-
-        if (result.storedOn.length === 0) {
-          problems.push(`${file.name} could not be stored on any device`);
-          continue;
-        }
-        stored += 1;
-
-        // A partial success is still a success — the file exists, just with
-        // less redundancy than the policy wants.
-        if (result.shortfall) {
-          problems.push(
-            `${file.name} is stored on ${result.storedOn.length} of ` +
-              `${result.desiredReplicas} devices`
-          );
-        }
-        for (const failure of result.failed) {
-          problems.push(`${failure.deviceName}: ${failure.reason}`);
-        }
-      }
-
-      if (problems.length > 0) {
+      // The reservation owns both metadata and placement. It is completed
+      // only after the device has accepted and signed possession of the bytes.
+      const result = await uploadFiles(currPath, files, folderPaths, setUploadProgress);
+      if (result.issues.length > 0) {
         setNotice(
-          `${stored} of ${files.length} file(s) stored. ${problems.join(". ")}.`
+          `${result.uploaded} of ${files.length} file(s) stored. ${result.issues.join(". ")}.`
         );
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : "Upload failed";
-      setError(SHORTFALL_MESSAGE[message] ?? message);
+      setError(message);
     } finally {
       setUploadProgress(null);
       await fetchDir();
@@ -177,7 +144,13 @@ export default function DashboardContentSection() {
   const handleDownload = async (file: FileType) => {
     setError(null);
     try {
-      await downloadFile(file.id, file.name);
+      if (file.objectHash) {
+        await downloadFile(file.objectHash, file.name);
+      } else {
+        // Older metadata may not have an object hash yet. Keep this explicit
+        // fallback narrow so new device-backed files never use the old path.
+        await downloadLegacyFile(file.id, file.name);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Download failed");
     }

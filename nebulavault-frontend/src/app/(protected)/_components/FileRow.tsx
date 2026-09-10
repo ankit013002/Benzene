@@ -15,6 +15,12 @@ interface FileRowProps {
 const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
   // A reserved-but-unfinished upload has no bytes to fetch yet.
   const canDownload = file.hasContent !== false;
+  const protection = file.protection;
+  const isReducedProtection =
+    protection?.state === "at_risk" ||
+    (typeof protection?.healthyReplicas === "number" &&
+      typeof protection.desiredReplicas === "number" &&
+      protection.healthyReplicas < protection.desiredReplicas);
 
   return (
     <>
@@ -22,6 +28,9 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
         <span>{file.name}</span>
         {!canDownload && (
           <span className="badge badge-sm badge-warning">Uploading</span>
+        )}
+        {canDownload && isReducedProtection && (
+          <span className="badge badge-sm badge-warning">Reduced protection</span>
         )}
       </div>
       <div>Owner</div>

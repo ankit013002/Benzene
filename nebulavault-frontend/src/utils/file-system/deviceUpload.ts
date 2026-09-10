@@ -14,39 +14,6 @@ export interface UploadTarget {
   expiresAt: string;
 }
 
-export interface UploadPlan {
-  objectHash: string;
-  sizeBytes: number;
-  desiredReplicas: number;
-  alreadyHeldBy: string[];
-  targets: UploadTarget[];
-  shortfall: boolean;
-  reason?: string;
-  singleCopy: boolean;
-}
-
-export interface DeviceUploadResult {
-  objectHash: string;
-  /** Devices that accepted the bytes. */
-  storedOn: string[];
-  /** Devices that could not be reached or refused. */
-  failed: Array<{ deviceName: string; reason: string }>;
-  desiredReplicas: number;
-  shortfall: boolean;
-}
-
-/** Human wording for a placement shortfall. */
-export const SHORTFALL_MESSAGE: Record<string, string> = {
-  no_devices:
-    "You have not added any devices yet, so there is nowhere to store this.",
-  none_online:
-    "None of your devices are online right now, so there is nowhere to store this.",
-  insufficient_capacity:
-    "Your devices do not have enough free space for the number of copies you asked for.",
-  unreachable_devices:
-    "Your devices are online but have not reported an address this browser can reach.",
-};
-
 /**
  * SHA-256 of the file, computed in the browser.
  *
@@ -73,98 +40,6 @@ async function messageFrom(res: Response, fallback: string): Promise<string> {
     // Non-JSON body.
   }
   return fallback;
-}
-
-/** Asks the control plane where an object should be stored. */
-export async function planUpload(
-  objectHash: string,
-  sizeBytes: number
-): Promise<UploadPlan> {
-  const res = await fetch("/api/placement/upload-targets", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ objectHash, sizeBytes }),
-  });
-
-  if (!res.ok) {
-    throw new Error(await messageFrom(res, "Could not work out where to store this"));
-  }
-
-  return ((await res.json()) as { data: UploadPlan }).data;
-}
-
-/**
- * Sends one file to every device the control plane chose.
- *
- * Failures are collected rather than thrown: reaching one of two devices still
- * stores the file, and the vault reports it as degraded so repair can finish
- * later. Throwing would discard a copy that did land.
- */
-export async function uploadToDevices(
-  file: File,
-  onProgress?: (message: string) => void
-): Promise<DeviceUploadResult> {
-  onProgress?.(`Preparing ${file.name}…`);
-  const objectHash = await hashFile(file);
-
-  const plan = await planUpload(objectHash, file.size);
-
-  const storedOn = [...plan.alreadyHeldBy];
-  const failed: DeviceUploadResult["failed"] = [];
-
-  for (const target of plan.targets) {
-    onProgress?.(`Sending ${file.name} to ${target.deviceName}…`);
-    try {
-      const res = await fetch(target.url, {
-        method: "PUT",
-        headers: {
-          "X-Transfer-Grant": target.grant,
-          "Content-Type": "application/octet-stream",
-        },
-        body: file,
-      });
-
-      if (!res.ok) {
-        failed.push({
-          deviceName: target.deviceName,
-          reason: await messageFrom(res, `refused with ${res.status}`),
-        });
-        continue;
-      }
-
-      // Only now does the control plane consider the copy real.
-      await confirmStored(objectHash, target.deviceId, file.size);
-      storedOn.push(target.deviceId);
-    } catch {
-      // A device on a LAN this browser cannot reach fails here rather than
-      // returning a status, so it is reported as unreachable, not refused.
-      failed.push({ deviceName: target.deviceName, reason: "could not be reached" });
-    }
-  }
-
-  return {
-    objectHash,
-    storedOn,
-    failed,
-    desiredReplicas: plan.desiredReplicas,
-    shortfall: storedOn.length < plan.desiredReplicas,
-  };
-}
-
-async function confirmStored(
-  objectHash: string,
-  deviceId: string,
-  sizeBytes: number
-): Promise<void> {
-  const res = await fetch("/api/placement/confirm", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ objectHash, deviceId, sizeBytes }),
-  });
-
-  if (!res.ok) {
-    throw new Error(await messageFrom(res, "Could not record where the file was stored"));
-  }
 }
 
 /** Fetches an object back from whichever device holds it. */

@@ -1,24 +1,48 @@
 import { FlatFile } from "@/types/FileFolderBuffer";
+import { downloadFromDevices, hashFile } from "./deviceUpload";
 
 interface UploadTarget {
+  deviceId: string;
+  deviceName: string;
   url: string;
-  method: "PUT";
-  headers: Record<string, string>;
+  grant: string;
   expiresAt: string;
 }
 
-interface PresignedUpload {
+interface PlacementPlan {
+  alreadyHeldBy: string[];
+  desiredReplicas: number;
+  targets: UploadTarget[];
+  shortfall: boolean;
+  reason?: string;
+  singleCopy: boolean;
+}
+
+interface DeviceUploadReservation {
   nodeId: string;
   versionId: string;
-  version: number;
-  name: string;
-  path: string;
-  key: string;
-  upload: UploadTarget;
+  objectHash: string;
+  placement: PlacementPlan;
+}
+
+/**
+ * Keeps browser drop paths rooted at the directory the user is viewing.
+ * `webkitGetAsEntry` already includes that directory in some browsers, while
+ * plain file drops and older callers pass paths relative to it.
+ */
+function joinDrivePath(basePath: string, candidatePath: string): string {
+  const base = basePath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const candidate = candidatePath.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+
+  if (!base) return candidate;
+  if (!candidate || candidate === base || candidate.startsWith(`${base}/`)) {
+    return candidate || base;
+  }
+  return `${base}/${candidate}`;
 }
 
 export interface UploadProgress {
-  /** Files whose bytes have finished transferring. */
+  /** Files whose bytes have finished transferring and committing. */
   completed: number;
   total: number;
   currentFile: string | null;
@@ -27,6 +51,8 @@ export interface UploadProgress {
 export interface UploadResult {
   uploaded: number;
   bytes: number;
+  /** Device or protection issues that did not prevent other files completing. */
+  issues: string[];
 }
 
 async function readJson(res: Response): Promise<unknown> {
@@ -47,119 +73,213 @@ function errorMessageFrom(payload: unknown, fallback: string): string {
   return fallback;
 }
 
+async function transferFailureMessage(
+  res: Response,
+  fallback: string,
+): Promise<string> {
+  const payload = await readJson(res);
+  if (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { code?: unknown }).code === "POSSESSION_UNCONFIRMED"
+  ) {
+    return "The device stored the file, but protection confirmation is pending. Retry this upload safely.";
+  }
+  return errorMessageFrom(payload, fallback);
+}
+
+async function reserveDeviceUpload(
+  file: File,
+  filePath: string,
+): Promise<DeviceUploadReservation> {
+  const objectHash = await hashFile(file);
+  const res = await fetch("/api/files/uploads/device", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: file.name,
+      path: filePath,
+      size: file.size,
+      contentType: file.type || "application/octet-stream",
+      sha256: objectHash,
+    }),
+  });
+
+  const payload = await readJson(res);
+  if (!res.ok) {
+    throw new Error(errorMessageFrom(payload, "Could not reserve a place for this file"));
+  }
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    typeof (payload as { data?: unknown }).data !== "object" ||
+    (payload as { data?: unknown }).data === null
+  ) {
+    throw new Error("The storage service returned an invalid upload reservation");
+  }
+  return (payload as { data: DeviceUploadReservation }).data;
+}
+
+async function completeDeviceUpload(versionId: string): Promise<unknown> {
+  const res = await fetch("/api/files/uploads/device/complete", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ versionIds: [versionId] }),
+  });
+  const payload = await readJson(res);
+  if (!res.ok) {
+    throw new Error(errorMessageFrom(payload, "Could not finish this device upload"));
+  }
+  return payload;
+}
+
+async function uploadOneDeviceBackedFile(
+  file: File,
+  filePath: string,
+): Promise<{ bytes: number; issues: string[] }> {
+  const reservation = await reserveDeviceUpload(file, filePath);
+  const placement = reservation.placement;
+  const storedOn = [...placement.alreadyHeldBy];
+  const issues: string[] = [];
+  let possessionPending = false;
+
+  for (const target of placement.targets) {
+    try {
+      const putRes = await fetch(target.url, {
+        method: "PUT",
+        headers: {
+          "X-Transfer-Grant": target.grant,
+          "Content-Type": file.type || "application/octet-stream",
+        },
+        body: file,
+      });
+
+      // Agent 201 includes its signed possession report. A 503 means the
+      // bytes may be present, but this browser cannot claim a healthy copy.
+      if (putRes.status !== 201) {
+        if (putRes.status === 503) possessionPending = true;
+        issues.push(
+          `${target.deviceName}: ${await transferFailureMessage(
+            putRes,
+            `refused with ${putRes.status}`,
+          )}`,
+        );
+        continue;
+      }
+      storedOn.push(target.deviceId);
+    } catch {
+      issues.push(`${target.deviceName}: could not be reached`);
+    }
+  }
+
+  if (storedOn.length === 0) {
+    const reason = placement.reason
+      ? {
+          no_devices: "You have not added any devices yet",
+          none_online: "None of your devices are online right now",
+          insufficient_capacity: "Your devices do not have enough free space",
+          unreachable_devices: "Your devices could not be reached",
+        }[placement.reason]
+      : undefined;
+    issues.push(
+      possessionPending
+        ? `${file.name} is not confirmed on any device yet; retry this upload safely`
+        : reason
+        ? `${file.name} could not be stored: ${reason.toLowerCase()}`
+        : `${file.name} could not be stored on any device`,
+    );
+    return { bytes: 0, issues };
+  }
+
+  try {
+    await completeDeviceUpload(reservation.versionId);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : "Could not finish this device upload");
+    return { bytes: 0, issues };
+  }
+
+  if (placement.shortfall) {
+    issues.push(
+      `${file.name} has reduced protection: stored on ${storedOn.length} of ${placement.desiredReplicas} devices`,
+    );
+  }
+  return { bytes: file.size, issues };
+}
+
 /**
- * Uploads a batch of files straight to object storage.
- *
- * Three steps, mirroring how the service is designed:
- *  1. ask the API to reserve versions and hand back presigned URLs,
- *  2. PUT each file's bytes directly to storage — they never pass through
- *     Next.js or the gateway, so large uploads are not bounded by a request
- *     body limit,
- *  3. tell the API which uploads landed, so it can mark them current.
- *
- * A version that is never completed stays pending and is not shown in the
- * drive, so a partial failure leaves no phantom files behind.
+ * Places files on user-owned devices. Metadata remains pending until the
+ * device reports possession, and only then is the version committed.
  */
 export async function uploadFiles(
   path: string,
   files: FlatFile[],
   folderPaths: string[],
-  onProgress?: (progress: UploadProgress) => void
+  onProgress?: (progress: UploadProgress) => void,
 ): Promise<UploadResult> {
   if (files.length === 0 && folderPaths.length === 0) {
-    return { uploaded: 0, bytes: 0 };
+    return { uploaded: 0, bytes: 0, issues: [] };
   }
 
-  // A folder containing no files is implied by nothing, so it is created
-  // explicitly rather than as a side effect of an upload.
-  if (files.length === 0) {
+  const rootedFolderPaths = [
+    ...new Set(folderPaths.map((folderPath) => joinDrivePath(path, folderPath))),
+  ];
+
+  if (rootedFolderPaths.length > 0) {
     const res = await fetch("/api/folders", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ paths: folderPaths }),
+      body: JSON.stringify({ paths: rootedFolderPaths }),
     });
+    const payload = await readJson(res);
     if (!res.ok) {
-      throw new Error(errorMessageFrom(await readJson(res), "Could not create folders"));
+      throw new Error(errorMessageFrom(payload, "Could not create folders"));
     }
-    return { uploaded: 0, bytes: 0 };
   }
 
-  const presignRes = await fetch("/api/files/uploads", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      path,
-      folderPaths,
-      files: files.map(({ file, path: filePath }) => ({
-        name: file.name,
-        size: file.size,
-        contentType: file.type || "application/octet-stream",
-        // Absolute directory for this file, so a dropped tree keeps its shape.
-        path: filePath || path,
-      })),
-    }),
-  });
-
-  if (!presignRes.ok) {
-    throw new Error(
-      errorMessageFrom(await readJson(presignRes), "Could not start the upload")
-    );
-  }
-
-  const presignPayload = (await presignRes.json()) as {
-    data?: { uploads?: PresignedUpload[] };
-  };
-  const uploads = presignPayload.data?.uploads ?? [];
-
-  const keyOf = (dir: string, name: string): string =>
-    `${dir.replace(/^\/+/, "").replace(/\/?$/, "/")}${name}`;
-  const byPath = new Map(
-    files.map(({ file, path: filePath }) => [keyOf(filePath || path, file.name), file])
-  );
-  const completedVersionIds: string[] = [];
+  let uploaded = 0;
   let bytes = 0;
+  const issues: string[] = [];
 
-  for (const [index, upload] of uploads.entries()) {
-    const file = byPath.get(keyOf(upload.path, upload.name));
-    if (!file) continue;
-
-    onProgress?.({ completed: index, total: uploads.length, currentFile: upload.name });
-
-    const putRes = await fetch(upload.upload.url, {
-      method: upload.upload.method,
-      headers: upload.upload.headers,
-      body: file,
+  for (const [index, { file, path: filePath }] of files.entries()) {
+    onProgress?.({
+      completed: uploaded,
+      total: files.length,
+      currentFile: file.name,
     });
-
-    if (!putRes.ok) {
-      throw new Error(`Upload of "${upload.name}" failed (${putRes.status})`);
+    const destinationPath = joinDrivePath(path, filePath);
+    let result: { bytes: number; issues: string[] };
+    try {
+      result = await uploadOneDeviceBackedFile(file, destinationPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload could not be started";
+      result = { bytes: 0, issues: [`${file.name}: ${message}`] };
     }
-
-    completedVersionIds.push(upload.versionId);
-    bytes += file.size;
+    bytes += result.bytes;
+    if (result.bytes > 0) uploaded += 1;
+    issues.push(...result.issues);
+    onProgress?.({
+      completed: index + 1,
+      total: files.length,
+      currentFile: index + 1 === files.length ? null : file.name,
+    });
   }
 
-  onProgress?.({ completed: uploads.length, total: uploads.length, currentFile: null });
-
-  if (completedVersionIds.length > 0) {
-    const completeRes = await fetch("/api/files/uploads/complete", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ versionIds: completedVersionIds }),
-    });
-
-    if (!completeRes.ok) {
-      throw new Error(
-        errorMessageFrom(await readJson(completeRes), "Could not finalise the upload")
-      );
-    }
-  }
-
-  return { uploaded: completedVersionIds.length, bytes };
+  return { uploaded, bytes, issues };
 }
 
-/** Resolves a node to a short-lived storage URL and starts the download. */
-export async function downloadFile(nodeId: string, filename: string): Promise<void> {
+/** Downloads through healthy device replicas using a scoped transfer grant. */
+export async function downloadFile(
+  objectHash: string,
+  filename: string,
+): Promise<void> {
+  await downloadFromDevices(objectHash, filename);
+}
+
+/** Explicit legacy fallback for pre-device-backed metadata only. */
+export async function downloadLegacyFile(
+  nodeId: string,
+  filename: string,
+): Promise<void> {
   const res = await fetch(`/api/files/${encodeURIComponent(nodeId)}/download`);
   if (!res.ok) {
     throw new Error(errorMessageFrom(await readJson(res), "Could not download the file"));

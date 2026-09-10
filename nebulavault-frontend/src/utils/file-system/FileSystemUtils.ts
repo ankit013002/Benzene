@@ -63,11 +63,12 @@ export const walkEntry = async (
       buffer: null,
     });
   } else if (entry.isDirectory) {
+    const childBuffer: FileFolderBuffer[] = [];
     const dirNode: FileFolderBuffer = {
       file: null,
       folder: entry.name,
       path: parentPath,
-      buffer: [],
+      buffer: childBuffer,
     };
     into.push(dirNode);
 
@@ -75,7 +76,7 @@ export const walkEntry = async (
     const reader = entry.createReader();
     const children = await readAllEntries(reader);
     for (const child of children) {
-      await walkEntry(child, `${parentPath}${entry.name}/`, dirNode.buffer!);
+      await walkEntry(child, `${parentPath}${entry.name}/`, childBuffer);
     }
   }
 };

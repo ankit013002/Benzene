@@ -7,7 +7,7 @@ export type FileSize = {
 };
 
 export type FileType = {
-  /** DriveNode id, used to address the file for download and delete. */
+  /** DriveNode id, used to delete the logical file (legacy downloads only). */
   id: string;
   name: string;
   owner?: string;
@@ -17,4 +17,12 @@ export type FileType = {
   path: string;
   /** False while an upload is reserved but its bytes have not landed yet. */
   hasContent?: boolean;
+  /** Content address used for direct device downloads. */
+  objectHash?: string;
+  /** Current device protection state, when reported by the control plane. */
+  protection?: {
+    state?: string;
+    healthyReplicas?: number;
+    desiredReplicas?: number;
+  };
 };
