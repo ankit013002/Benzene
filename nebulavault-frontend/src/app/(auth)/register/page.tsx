@@ -11,7 +11,7 @@ export default function Page() {
   return (
     <AuthShell
       title="Create your account"
-      subtitle="One login for web & Electron. You control the keys."
+      subtitle="Create a private Vault from the storage you already own."
       footer={
         <p className="text-sm text-bz-muted">
           Already have an account?{" "}

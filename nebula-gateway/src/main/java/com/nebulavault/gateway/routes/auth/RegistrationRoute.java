@@ -11,25 +11,15 @@ public class RegistrationRoute {
     @Bean
     public RouteLocator registrationRouteLocator(RouteLocatorBuilder builder, @Value("${routes.auth.uri}") String authUri) {
         return builder.routes()
-                .route("auth-oidc-start",r -> r
-                        .path("/auth/oidc/start/**")
+                // Keep authentication public: these endpoints establish or
+                // renew the session cookie that protected routes require.
+                // The auth service mounts all handlers under /api/auth, while
+                // the gateway exposes the stable /auth/** surface.
+                .route("auth-api", r -> r
+                        .path("/auth/**")
                         .filters(f -> f
                                 .prefixPath("/api")
-                                .addResponseHeader("Nebula-Gateway","Nebula Vault")
-                        ).uri(authUri)
-                )
-                .route("auth-oidc-callback",r -> r
-                        .path("/auth/oidc/callback/**")
-                        .filters(f -> f
-                                .prefixPath("/api")
-                                .addResponseHeader("Nebula-Gateway","Nebula Vault")
-                        ).uri(authUri)
-                )
-                .route("auth-logout", r -> r
-                        .path("/auth/logout/**")
-                        .filters(f -> f
-                                .prefixPath("/api")
-                                .addResponseHeader("Nebula-Gateway", "Nebula Vault")
+                                .addResponseHeader("Nebula-Gateway", "Benzene")
                         ).uri(authUri)
                 )
                 .build();

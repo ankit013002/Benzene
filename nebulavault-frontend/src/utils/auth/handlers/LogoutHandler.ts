@@ -2,7 +2,7 @@
 
 export async function logout() {
   try {
-    const res = await fetch(`http://localhost:8080/auth/logout`, {
+    const res = await fetch("/api/auth/logout", {
       method: "POST",
       credentials: "include",
       cache: "no-store",

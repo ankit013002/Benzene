@@ -1,6 +1,7 @@
 package com.nebulavault.gateway.filters;
 
 import com.nimbusds.jose.JWSVerifier;
+import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.crypto.MACVerifier;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
@@ -17,6 +18,7 @@ import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Date;
 
 @Component
 public class SessionToHeadersFilter implements GatewayFilter, Ordered {
@@ -62,6 +64,13 @@ public class SessionToHeadersFilter implements GatewayFilter, Ordered {
 
         try {
             SignedJWT jwt = SignedJWT.parse(token);
+            // The auth service only issues HS256 access tokens. Checking the
+            // algorithm before verification prevents accepting a token under
+            // a different MAC algorithm if the implementation changes later.
+            if (!JWSAlgorithm.HS256.equals(jwt.getHeader().getAlgorithm())) {
+                exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+                return exchange.getResponse().setComplete();
+            }
             JWSVerifier verifier = new MACVerifier(hmacKey);
 
             if (!jwt.verify(verifier)) {
@@ -70,6 +79,16 @@ public class SessionToHeadersFilter implements GatewayFilter, Ordered {
             }
 
             JWTClaimsSet claims = jwt.getJWTClaimsSet();
+            Date now = new Date();
+            Date expiration = claims.getExpirationTime();
+            Date notBefore = claims.getNotBeforeTime();
+            // A session without an expiry is not a session we can safely
+            // bound. Reject nbf tokens until their validity window begins.
+            if (expiration == null || !expiration.after(now)
+                    || (notBefore != null && notBefore.after(now))) {
+                exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
+                return exchange.getResponse().setComplete();
+            }
             String sub   = claims.getStringClaim("sub");
             String email = claims.getStringClaim("email");
             String name  = claims.getStringClaim("name");

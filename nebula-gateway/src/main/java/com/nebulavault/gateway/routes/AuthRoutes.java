@@ -11,11 +11,13 @@ public class AuthRoutes {
     @Bean
     public RouteLocator authRouteLocator(RouteLocatorBuilder builder, @Value("${routes.auth.uri}") String filesUri) {
         return builder.routes()
-                .route("login-route",r -> r
-                        .path("/login/**")
+                // Compatibility for clients that used the original /login
+                // gateway path. New clients should use /auth/login.
+                .route("login-compatibility", r -> r
+                        .path("/login")
                         .filters(f -> f
-                                .prefixPath("/api")
-                                .addResponseHeader("Nebula-Gateway","Nebula Vault")
+                                .setPath("/api/auth/login")
+                                .addResponseHeader("Nebula-Gateway", "Benzene")
                         ).uri(filesUri)
                 )
                 .build();

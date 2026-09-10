@@ -13,6 +13,7 @@ import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.util.Date;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,14 +36,25 @@ class SessionToHeadersFilterTest {
 
     private static String token(String secret, String sub, String email, String name)
             throws Exception {
-        JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder().subject(sub);
+        return token(secret, sub, email, name,
+                new Date(System.currentTimeMillis() + 60_000), null, JWSAlgorithm.HS256);
+    }
+
+    private static String token(String secret, String sub, String email, String name,
+            Date expiration, Date notBefore, JWSAlgorithm algorithm) throws Exception {
+        JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
+                .subject(sub)
+                .expirationTime(expiration);
+        if (notBefore != null) {
+            claims.notBeforeTime(notBefore);
+        }
         if (email != null) {
             claims.claim("email", email);
         }
         if (name != null) {
             claims.claim("name", name);
         }
-        SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims.build());
+        SignedJWT jwt = new SignedJWT(new JWSHeader(algorithm), claims.build());
         jwt.sign(new MACSigner(hexToBytes(secret)));
         return jwt.serialize();
     }
@@ -148,6 +160,40 @@ class SessionToHeadersFilterTest {
     void rejectsATokenWithoutAnEmailClaim() throws Exception {
         MockServerWebExchange exchange =
                 exchangeWithSession(token(SECRET, "user-1", null, "Ada"));
+
+        assertThat(run(exchange)).isNull();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void rejectsAnExpiredToken() throws Exception {
+        String expired = token(SECRET, "user-1", "ada@example.com", "Ada",
+                new Date(System.currentTimeMillis() - 1_000), null, JWSAlgorithm.HS256);
+        MockServerWebExchange exchange = exchangeWithSession(expired);
+
+        assertThat(run(exchange)).isNull();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void rejectsATokenThatIsNotValidYet() throws Exception {
+        String notYetValid = token(SECRET, "user-1", "ada@example.com", "Ada",
+                new Date(System.currentTimeMillis() + 60_000),
+                new Date(System.currentTimeMillis() + 60_000), JWSAlgorithm.HS256);
+        MockServerWebExchange exchange = exchangeWithSession(notYetValid);
+
+        assertThat(run(exchange)).isNull();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void rejectsATokenUsingAnUnexpectedAlgorithm() throws Exception {
+        String longSecret =
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        String wrongAlgorithm = token(longSecret, "user-1", "ada@example.com", "Ada",
+                new Date(System.currentTimeMillis() + 60_000), null, JWSAlgorithm.HS512);
+        MockServerWebExchange exchange = exchangeWithSession(wrongAlgorithm);
 
         assertThat(run(exchange)).isNull();
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);

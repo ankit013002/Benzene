@@ -11,7 +11,7 @@ export default function Page() {
   return (
     <AuthShell
       title="Welcome back"
-      subtitle="Sign in to access your files, versions, and shares."
+      subtitle="Sign in to open your Benzene Vault."
       footer={
         <p className="text-sm text-bz-muted">
           New here?{" "}

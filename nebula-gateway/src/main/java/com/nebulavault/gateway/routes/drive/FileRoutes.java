@@ -36,6 +36,16 @@ public class FileRoutes {
                                 .addResponseHeader("Nebula-Gateway", "Benzene"))
                         .uri(filesUri)
                 )
+                // Placement decisions are user-scoped. The control plane
+                // trusts identity headers only when this filter has verified
+                // the session cookie at the gateway boundary.
+                .route("placement", r -> r
+                        .path("/placement/**")
+                        .filters(f -> f
+                                .filter(sessionFilter)
+                                .addResponseHeader("Nebula-Gateway", "Benzene"))
+                        .uri(filesUri)
+                )
                 // The node agent API deliberately skips the session filter: a
                 // machine mid-enrollment holds no session, and an enrolled one
                 // authenticates by Ed25519 request signature instead, which the
