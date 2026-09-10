@@ -7,6 +7,8 @@ import { storage } from "../storage/index.js";
 import type { UploadTarget } from "../storage/types.js";
 import { AppError } from "../utils/AppError.js";
 import { buildObjectKey } from "../utils/objectKeys.js";
+import { getObjectProtection, type ObjectProtection } from "../modules/placement/placement.service.js";
+import { planUpload, type UploadPlan } from "../modules/placement/uploadTargets.service.js";
 
 export interface PresignFileInput {
   name: string;
@@ -28,6 +30,28 @@ export interface PresignedUpload {
   path: string;
   key: string;
   upload: UploadTarget;
+}
+
+export interface DeviceUploadReservation {
+  nodeId: string;
+  versionId: string;
+  version: number;
+  name: string;
+  path: string;
+  objectHash: string;
+  sizeBytes: number;
+  contentType: string;
+  placement: UploadPlan;
+}
+
+export interface DeviceCompletedUpload {
+  nodeId: string;
+  versionId: string;
+  version: number;
+  objectHash: string;
+  bytes: number;
+  protection: ObjectProtection;
+  shortfall: boolean;
 }
 
 const DEFAULT_CONTENT_TYPE = "application/octet-stream";
@@ -180,6 +204,86 @@ export async function presignUploads(
   return results;
 }
 
+/**
+ * Creates pending logical metadata for an object that will live on devices.
+ *
+ * Unlike the legacy presign path this never creates a StorageDriver object or
+ * URL. The placement plan reserves device replicas, while this Mongo row stays
+ * pending until a signed device possession report makes at least one copy real.
+ */
+export async function reserveDeviceUpload(
+  ownerId: string,
+  input: { name: string; path: string; size: number; contentType?: string; sha256: string }
+): Promise<DeviceUploadReservation> {
+  const cfg = config();
+  if (input.size > cfg.maxUploadBytes) {
+    throw AppError.payloadTooLarge(
+      `"${input.name}" is ${input.size} bytes, over the ${cfg.maxUploadBytes}-byte limit`
+    );
+  }
+
+  const contentType = input.contentType?.trim() || DEFAULT_CONTENT_TYPE;
+  const filePath = normalizePath(input.path);
+  const parent = await ensureFolderChain(ownerId, filePath);
+  const node = await DriveNodeModel.findOneAndUpdate(
+    { ownerId, path: filePath, nameLower: input.name.toLowerCase(), isDeleted: false },
+    {
+      $setOnInsert: {
+        ownerId,
+        type: "file",
+        name: input.name,
+        nameLower: input.name.toLowerCase(),
+        path: filePath,
+        parentId: parent?._id ?? null,
+        ancestors: parent ? [...parent.ancestors, parent._id] : [],
+        createdBy: ownerId,
+      },
+      $set: { updatedBy: ownerId, contentType },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  if (node.type !== "file") {
+    throw AppError.conflict(`"${input.name}" already exists as a folder`);
+  }
+
+  const objectHash = input.sha256.toLowerCase();
+  const version = await nextVersionFor(node._id);
+  const versionDoc = await FileVersionModel.create({
+    nodeId: node._id,
+    ownerId,
+    version,
+    bytes: input.size,
+    contentType,
+    sha256: objectHash,
+    objectHash,
+    status: "pending",
+    uploadedBy: ownerId,
+    isCurrent: false,
+  });
+
+  let placement: UploadPlan;
+  try {
+    placement = await planUpload(ownerId, { objectHash, sizeBytes: input.size });
+  } catch (error) {
+    // Metadata is intentionally retained as pending so a transient placement
+    // or configuration failure cannot make an untracked logical file.
+    throw error;
+  }
+
+  return {
+    nodeId: node._id.toString(),
+    versionId: versionDoc._id.toString(),
+    version,
+    name: node.name,
+    path: filePath,
+    objectHash,
+    sizeBytes: input.size,
+    contentType,
+    placement,
+  };
+}
+
 async function nextVersionFor(nodeId: Types.ObjectId): Promise<number> {
   const latest = await FileVersionModel.findOne({ nodeId })
     .sort({ version: -1 })
@@ -222,6 +326,12 @@ export async function completeUploads(
         bytes: version.bytes,
       });
       continue;
+    }
+
+    if (!version.storage?.key) {
+      throw AppError.badRequest(
+        `Version ${versionId} is device-backed; use device upload completion`
+      );
     }
 
     const stored = await driver.headObject(version.storage.key);
@@ -270,6 +380,69 @@ export async function completeUploads(
   return completed;
 }
 
+/** Commits a device-backed version only after signed possession exists. */
+export async function completeDeviceUploads(
+  ownerId: string,
+  versionIds: string[]
+): Promise<DeviceCompletedUpload[]> {
+  const completed: DeviceCompletedUpload[] = [];
+
+  for (const versionId of versionIds) {
+    const version = await FileVersionModel.findOne({ _id: versionId, ownerId });
+    if (!version) throw AppError.notFound(`Upload ${versionId} not found`);
+    if (!version.objectHash) {
+      throw AppError.badRequest(`Version ${versionId} is not device-backed`);
+    }
+
+    const protection = await getObjectProtection(ownerId, version.objectHash);
+    if (protection.healthyReplicas < 1) {
+      throw new AppError(
+        409,
+        "NO_HEALTHY_REPLICA",
+        `No device has confirmed possession for version ${versionId}`,
+        { protection, shortfall: true }
+      );
+    }
+
+    if (version.status !== "committed") {
+      await FileVersionModel.updateMany(
+        { nodeId: version.nodeId, isCurrent: true },
+        { $set: { isCurrent: false } }
+      );
+
+      version.status = "committed";
+      version.isCurrent = true;
+      version.uploadedAt = new Date();
+      await version.save();
+
+      await DriveNodeModel.updateOne(
+        { _id: version.nodeId, ownerId },
+        {
+          $set: {
+            bytes: version.bytes,
+            versionsCount: version.version,
+            uploadedAt: version.uploadedAt,
+            updatedBy: ownerId,
+            ...(version.contentType ? { contentType: version.contentType } : {}),
+          },
+        }
+      );
+    }
+
+    completed.push({
+      nodeId: version.nodeId.toString(),
+      versionId,
+      version: version.version,
+      objectHash: version.objectHash,
+      bytes: version.bytes,
+      protection,
+      shortfall: protection.healthyReplicas < protection.desiredReplicas,
+    });
+  }
+
+  return completed;
+}
+
 /** Time-limited download URL for the current version of a node. */
 export async function createDownloadUrlForNode(
   ownerId: string,
@@ -285,6 +458,10 @@ export async function createDownloadUrlForNode(
     status: "committed",
   });
   if (!current) throw AppError.notFound("File has no uploaded content yet");
+
+  if (!current.storage?.key) {
+    throw AppError.conflict("File is stored on devices; download it using its object hash");
+  }
 
   return storage().createDownloadUrl({
     key: current.storage.key,

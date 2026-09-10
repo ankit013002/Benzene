@@ -1,5 +1,5 @@
 import { createHash, sign } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -82,6 +82,76 @@ describe("authorisation", () => {
     const res = await request(app).get("/health").expect(200);
 
     expect(res.body).toMatchObject({ status: "ok", service: "benzene-node-agent" });
+  });
+
+  it("allows the browser's narrowly scoped transfer preflight", async () => {
+    const res = await request(app)
+      .options(`/objects/${sha256("x")}`)
+      .set("Origin", "https://app.example")
+      .set("Access-Control-Request-Method", "PUT")
+      .set("Access-Control-Request-Headers", "X-Transfer-Grant, Content-Type")
+      .expect(204);
+
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+    expect(res.headers["access-control-allow-methods"]).toContain("PUT");
+    expect(res.headers["access-control-allow-headers"]).toContain("X-Transfer-Grant");
+    expect(res.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+  });
+
+  it("reports possession after a successful upload", async () => {
+    const reports: Array<{ objectHash: string; sizeBytes: number }> = [];
+    app = createTransferServer({
+      store,
+      deviceId: DEVICE_ID,
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      reportPossession: async (report) => {
+        reports.push(report);
+      },
+    });
+    const body = "reported payload";
+    const hash = sha256(body);
+
+    await request(app)
+      .put(`/objects/${hash}`)
+      .set("X-Transfer-Grant", grantFor(hash, "put"))
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(201);
+
+    expect(reports).toEqual([{ objectHash: hash, sizeBytes: body.length }]);
+  });
+
+  it("does not serve an object whose on-disk bytes have been corrupted", async () => {
+    const body = "integrity payload";
+    const hash = sha256(body);
+    await store.put(Readable.from([Buffer.from(body)]));
+    await writeFile(path.join(root, "objects", hash.slice(0, 2), hash), "corrupted");
+
+    const res = await request(app)
+      .get(`/objects/${hash}`)
+      .set("X-Transfer-Grant", grantFor(hash, "get"))
+      .expect(422);
+
+    expect(res.body.code).toBe("INTEGRITY");
+  });
+
+  it("passes unexpected integrity-store errors to Express", async () => {
+    const body = "store failure payload";
+    const hash = sha256(body);
+    await store.put(Readable.from([Buffer.from(body)]));
+    const originalRead = store.read;
+    store.read = () => {
+      throw new Error("disk unavailable");
+    };
+
+    try {
+      await request(app)
+        .get(`/objects/${hash}`)
+        .set("X-Transfer-Grant", grantFor(hash, "get"))
+        .expect(500);
+    } finally {
+      store.read = originalRead;
+    }
   });
 
   // The scoping a shared secret could not provide: this is why grants replaced

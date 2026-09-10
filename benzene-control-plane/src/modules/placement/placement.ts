@@ -22,6 +22,8 @@ export interface PlacementCandidate {
   usedBytes: number;
   /** Total replicas this device already holds, used to spread load. */
   replicaCount: number;
+  /** Whether a browser can reach this device for direct transfer. */
+  reachable?: boolean;
 }
 
 export interface PlacementRequest {
@@ -35,7 +37,8 @@ export interface PlacementRequest {
 export type PlacementShortfallReason =
   | "no_devices"
   | "none_online"
-  | "insufficient_capacity";
+  | "insufficient_capacity"
+  | "unreachable_devices";
 
 export interface PlacementPlan {
   /** Devices selected, best first. May be shorter than `desiredReplicas`. */
@@ -87,7 +90,8 @@ export function rankCandidates(
  */
 export function planPlacement(
   candidates: PlacementCandidate[],
-  request: PlacementRequest
+  request: PlacementRequest,
+  options: { requireReachable?: boolean } = {}
 ): PlacementPlan {
   const desired = Math.max(1, Math.floor(request.desiredReplicas));
   const excluded = new Set(request.existingDeviceIds ?? []);
@@ -100,11 +104,20 @@ export function planPlacement(
     (candidate) =>
       candidate.online &&
       !candidate.draining &&
+      (!options.requireReachable || candidate.reachable !== false) &&
       !excluded.has(candidate.deviceId) &&
       freeBytes(candidate) >= request.sizeBytes
   );
 
-  const anyOnline = candidates.some((c) => c.online && !c.draining);
+  const anyOnline = candidates.some(
+    (c) =>
+      c.online &&
+      !c.draining &&
+      (!options.requireReachable || c.reachable !== false)
+  );
+  const anyUnreachableOnline =
+    options.requireReachable &&
+    candidates.some((c) => c.online && !c.draining && c.reachable === false);
   const chosen = rankCandidates(eligible)
     .slice(0, desired)
     .map((candidate) => candidate.deviceId);
@@ -120,7 +133,11 @@ export function planPlacement(
   };
 
   if (shortfall) {
-    plan.reason = !anyOnline ? "none_online" : "insufficient_capacity";
+    plan.reason = !anyOnline
+      ? anyUnreachableOnline
+        ? "unreachable_devices"
+        : "none_online"
+      : "insufficient_capacity";
   }
   return plan;
 }

@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, sql } from "drizzle-orm";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
@@ -88,12 +88,13 @@ async function loadCandidates(vaultId: string): Promise<PlacementCandidate[]> {
       deviceId: devices.id,
       status: devices.status,
       lastSeenAt: devices.lastSeenAt,
+      advertisedUrl: devices.advertisedUrl,
       allocatedBytes: deviceStorageAllocations.allocatedBytes,
       usedBytes: deviceStorageAllocations.usedBytes,
       replicaCount: sql<number>`(
         select count(*)::int from ${replicas}
         where ${replicas.deviceId} = ${devices.id}
-          and ${replicas.status} <> 'deleting'
+          and ${replicas.status} = 'healthy'
       )`,
     })
     .from(devices)
@@ -112,6 +113,7 @@ async function loadCandidates(vaultId: string): Promise<PlacementCandidate[]> {
       allocatedBytes: Number(row.allocatedBytes ?? 0),
       usedBytes: Number(row.usedBytes ?? 0),
       replicaCount: Number(row.replicaCount ?? 0),
+      reachable: Boolean(row.advertisedUrl),
     };
   });
 }
@@ -134,11 +136,27 @@ export interface PlacementDecision extends PlacementPlan {
  */
 export async function decidePlacement(
   ownerId: string,
-  input: { objectHash: string; sizeBytes: number }
+  input: { objectHash: string; sizeBytes: number },
+  options: { requireReachable?: boolean } = {}
 ): Promise<PlacementDecision> {
   const vault = await ensureVaultForOwner(ownerId);
   const policy = await getPolicy(ownerId);
   const desiredReplicas = replicasForMode(policy.mode);
+
+  // A browser can disappear after receiving a plan. Do not let that abandoned
+  // reservation consume the unique (vault, object, device) slot forever.
+  await db()
+    .delete(replicas)
+    .where(
+      and(
+        eq(replicas.vaultId, vault.id),
+        eq(replicas.status, "placing"),
+        lt(
+          replicas.updatedAt,
+          new Date(Date.now() - config().transferGrantTtlSeconds * 1000)
+        )
+      )
+    );
 
   const held = await db()
     .select({ deviceId: replicas.deviceId })
@@ -147,7 +165,9 @@ export async function decidePlacement(
       and(
         eq(replicas.vaultId, vault.id),
         eq(replicas.objectHash, input.objectHash),
-        sql`${replicas.status} in ('placing','healthy')`
+        // A reservation is not possession. Only a device-confirmed copy may
+        // satisfy the policy or be reported as already held.
+        eq(replicas.status, "healthy")
       )
     );
 
@@ -158,7 +178,7 @@ export async function decidePlacement(
     sizeBytes: input.sizeBytes,
     desiredReplicas,
     existingDeviceIds,
-  });
+  }, options);
 
   return {
     ...plan,
@@ -178,18 +198,22 @@ export async function decidePlacement(
  */
 export async function reservePlacement(
   ownerId: string,
-  input: { objectHash: string; sizeBytes: number; deviceIds: string[] }
+  input: { objectHash: string; sizeBytes: number; deviceIds: string[] },
+  options: { requireReachable?: boolean } = {}
 ): Promise<Replica[]> {
   const vault = await ensureVaultForOwner(ownerId);
   if (input.deviceIds.length === 0) return [];
 
   const owned = await db()
-    .select({ id: devices.id })
+    .select({ id: devices.id, advertisedUrl: devices.advertisedUrl })
     .from(devices)
     .where(and(eq(devices.vaultId, vault.id), inArray(devices.id, input.deviceIds)));
 
   if (owned.length !== input.deviceIds.length) {
     throw AppError.badRequest("One or more devices are not part of this vault");
+  }
+  if (options.requireReachable && owned.some((device) => !device.advertisedUrl)) {
+    throw AppError.badRequest("One or more devices cannot receive transfers");
   }
 
   return db()
@@ -238,6 +262,70 @@ export async function confirmReplica(
 
   if (!updated) throw AppError.notFound("No placement reserved for that device");
   return updated;
+}
+
+/**
+ * Promotes a reservation on behalf of an authenticated device.
+ *
+ * The user-facing placement API intentionally cannot call this function:
+ * possession is evidence from the node that accepted and hash-checked the
+ * bytes, not an assertion a browser can make after receiving a grant.
+ */
+export async function confirmReplicaForDevice(
+  deviceId: string,
+  input: { objectHash: string; sizeBytes: number }
+): Promise<Replica> {
+  const [placing] = await db()
+    .select()
+    .from(replicas)
+    .where(
+      and(
+        eq(replicas.objectHash, input.objectHash),
+        eq(replicas.deviceId, deviceId),
+        eq(replicas.status, "placing")
+      )
+    )
+    .limit(1);
+
+  if (placing && Number(placing.sizeBytes) !== input.sizeBytes) {
+    throw AppError.badRequest("Possession size does not match the reservation");
+  }
+
+  if (placing) {
+    const [updated] = await db()
+      .update(replicas)
+      .set({
+        status: "healthy",
+        verifiedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(replicas.id, placing.id))
+      .returning();
+    if (updated) return updated;
+  }
+
+  // Retries are expected: the device may have committed the bytes but lost
+  // the response to its first possession report. Keep the operation idempotent
+  // while still refusing a device that never had a reservation.
+  const [healthy] = await db()
+    .select()
+    .from(replicas)
+    .where(
+      and(
+        eq(replicas.objectHash, input.objectHash),
+        eq(replicas.deviceId, deviceId),
+        eq(replicas.status, "healthy")
+      )
+    )
+    .limit(1);
+  if (healthy) {
+    if (Number(healthy.sizeBytes) !== input.sizeBytes) {
+      throw AppError.badRequest("Possession size does not match the reservation");
+    }
+    return healthy;
+  }
+
+  throw AppError.notFound("No placement reserved for that device");
 }
 
 export interface ObjectProtection {

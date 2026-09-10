@@ -4,6 +4,7 @@ import DriveNodeModel, { normalizePath } from "../models/driveNode.model.js";
 import FileVersionModel from "../models/fileVersion.model.js";
 import { storage } from "../storage/index.js";
 import { AppError } from "../utils/AppError.js";
+import { getObjectProtection, type ObjectProtection } from "../modules/placement/placement.service.js";
 import { ensureFolderChain } from "./uploads.services.js";
 
 export interface ListedFile {
@@ -15,6 +16,10 @@ export interface ListedFile {
   ext: string | undefined;
   lastModified: number | null;
   hasContent: boolean;
+  /** Present for a committed device-backed version. */
+  objectHash?: string;
+  /** Protection state used by the device download flow. */
+  protection?: ObjectProtection;
 }
 
 export interface ListedFolder {
@@ -50,6 +55,18 @@ export async function listDirectory(
 
   const folderIds = nodes.filter((n) => n.type === "folder").map((n) => n._id);
   const rollups = await rollUpFolderSizes(ownerId, folderIds);
+  const fileNodes = nodes.filter((node) => node.type === "file");
+  const currentVersions = await FileVersionModel.find({
+    ownerId,
+    nodeId: { $in: fileNodes.map((node) => node._id) },
+    isCurrent: true,
+    status: "committed",
+  })
+    .select("nodeId objectHash sha256")
+    .lean();
+  const versionByNode = new Map(
+    currentVersions.map((version) => [version.nodeId.toString(), version])
+  );
 
   const files: ListedFile[] = [];
   const folders: ListedFolder[] = [];
@@ -65,6 +82,11 @@ export async function listDirectory(
         lastModified: rollup?.lastModified ?? node.updatedAt?.getTime() ?? null,
       });
     } else {
+      const current = versionByNode.get(node._id.toString());
+      const objectHash = current?.objectHash ?? current?.sha256;
+      const protection = objectHash
+        ? await getObjectProtection(ownerId, objectHash)
+        : undefined;
       files.push({
         id: node._id.toString(),
         name: node.name,
@@ -75,6 +97,8 @@ export async function listDirectory(
         lastModified: (node.uploadedAt ?? node.updatedAt)?.getTime() ?? null,
         // Distinguishes a real file from one whose upload never completed.
         hasContent: Boolean(node.uploadedAt),
+        ...(objectHash ? { objectHash } : {}),
+        ...(protection ? { protection } : {}),
       });
     }
   }
@@ -192,7 +216,11 @@ export async function deleteNode(
       .select("storage.key")
       .lean();
 
-    const keys = versions.map((v) => v.storage.key).filter(Boolean);
+    // Device-backed versions intentionally have no legacy storage key. Their
+    // bytes remain on devices until reference-counted GC exists.
+    const keys = versions
+      .map((v) => v.storage?.key)
+      .filter((key): key is string => Boolean(key));
     if (keys.length > 0) {
       await storage().deleteObjects(keys);
       purgedObjects = keys.length;

@@ -10,14 +10,17 @@ export interface FileVersion {
   contentType?: string;
   etag?: string;
   sha256?: string;
-  storage: {
+  /** Content-addressed object held by one or more Benzene devices. */
+  objectHash?: string;
+  /** Legacy cloud/local storage descriptor. Absent for device-backed versions. */
+  storage?: {
     driver: string;
     bucket: string;
     key: string;
   };
   /**
-   * "pending" is written before the browser uploads; it flips to "committed"
-   * only after the object is confirmed present in storage. Rows left pending
+   * "pending" is written before bytes move; it flips to "committed" only
+   * after the selected storage path confirms possession. Rows left pending
    * represent abandoned uploads and are safe to reap.
    */
   status: UploadStatus;
@@ -45,10 +48,18 @@ const fileVersionSchema = new Schema<FileVersion>(
     contentType: { type: String },
     etag: { type: String, trim: true },
     sha256: { type: String, trim: true },
+    objectHash: { type: String, trim: true, lowercase: true, index: true },
     storage: {
-      driver: { type: String, required: [true, "storage.driver is required"] },
-      bucket: { type: String, required: [true, "storage.bucket is required"] },
-      key: { type: String, required: [true, "storage.key is required"] },
+      type: new Schema(
+        {
+          driver: { type: String, required: [true, "storage.driver is required"] },
+          bucket: { type: String, required: [true, "storage.bucket is required"] },
+          key: { type: String, required: [true, "storage.key is required"] },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
     },
     status: {
       type: String,

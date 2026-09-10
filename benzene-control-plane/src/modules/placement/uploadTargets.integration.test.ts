@@ -145,6 +145,63 @@ describe("planning an upload", () => {
     expect(plan.targets).toEqual([]);
     expect(plan.shortfall).toBe(true);
     expect(plan.reason).toBe("unreachable_devices");
+    expect(await db.select().from(schema.replicas)).toEqual([]);
+  });
+
+  it("chooses reachable substitutes instead of underfilling around an unreachable device", async () => {
+    const a = await reachableDevice("reachable-a", "http://192.168.1.10:7070", 100 * GB);
+    const b = await reachableDevice("unreachable-b", null, 100 * GB);
+    const c = await reachableDevice("reachable-c", "http://192.168.1.12:7070", 100 * GB);
+
+    // Make B rank first by free capacity, followed by A, then C. Upload
+    // planning must skip B before selecting its two policy copies.
+    await recordHeartbeat(a, { usedBytes: 10 * GB });
+    await recordHeartbeat(b, { usedBytes: 0 });
+    await recordHeartbeat(c, { usedBytes: 20 * GB });
+
+    const hash = hashOf("reachable substitute");
+    const plan = await planUpload(OWNER, { objectHash: hash, sizeBytes: 10 });
+
+    expect(plan.targets.map((target) => target.deviceId).sort()).toEqual([a, c].sort());
+    expect(plan.shortfall).toBe(false);
+    const replicas = await db.select().from(schema.replicas);
+    expect(replicas.map((row) => row.deviceId).sort()).toEqual([a, c].sort());
+    expect(replicas.some((row) => row.deviceId === b)).toBe(false);
+  });
+
+  it("can retry an unfinished placement without treating it as held", async () => {
+    const deviceId = await reachableDevice("desktop", "http://192.168.1.10:7070");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    const hash = hashOf("retryable");
+
+    const first = await planUpload(OWNER, { objectHash: hash, sizeBytes: 10 });
+    expect(first.targets).toHaveLength(1);
+
+    // No possession report arrived. A second plan must still hand out a
+    // target, while the API must not claim that the bytes are already held.
+    const retry = await planUpload(OWNER, { objectHash: hash, sizeBytes: 10 });
+    expect(retry.alreadyHeldBy).toEqual([]);
+    expect(retry.targets.map((target) => target.deviceId)).toEqual([deviceId]);
+    expect(
+      (await db.select().from(schema.replicas)).map((row) => row.status)
+    ).toEqual(["placing"]);
+  });
+
+  it("releases an abandoned reservation after the grant window", async () => {
+    await reachableDevice("desktop", "http://192.168.1.10:7070");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    const hash = hashOf("abandoned");
+
+    await planUpload(OWNER, { objectHash: hash, sizeBytes: 10 });
+    const [before] = await db.select().from(schema.replicas);
+    await db
+      .update(schema.replicas)
+      .set({ updatedAt: new Date(Date.now() - 301_000) });
+
+    const retry = await planUpload(OWNER, { objectHash: hash, sizeBytes: 10 });
+    const [after] = await db.select().from(schema.replicas);
+    expect(retry.targets).toHaveLength(1);
+    expect(after?.id).not.toBe(before?.id);
   });
 
   it("reports a shortfall when fewer devices exist than the policy wants", async () => {

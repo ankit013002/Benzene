@@ -71,7 +71,10 @@ export async function planUpload(
   const key = signingKey();
   const vault = await ensureVaultForOwner(ownerId);
 
-  const decision = await decidePlacement(ownerId, input);
+  // Reachability is part of upload placement, not a post-selection filter. A
+  // high-ranked offline-address device must not consume a slot that a lower-
+  // ranked reachable device could fill.
+  const decision = await decidePlacement(ownerId, input, { requireReachable: true });
 
   if (decision.deviceIds.length === 0) {
     return {
@@ -86,13 +89,11 @@ export async function planUpload(
     };
   }
 
-  await reservePlacement(ownerId, {
-    objectHash: input.objectHash,
-    sizeBytes: input.sizeBytes,
-    deviceIds: decision.deviceIds,
-  });
-
-  const rows = await db()
+  // Placement is allowed to consider only live capacity, but an online
+  // device without an advertised URL still cannot receive browser traffic.
+  // Filter before inserting replica rows so an unreachable machine is never
+  // recorded as a physical copy (and cannot leave a false reservation behind).
+  const deviceRows = await db()
     .select({
       id: devices.id,
       name: devices.name,
@@ -102,6 +103,20 @@ export async function planUpload(
     .where(
       and(eq(devices.vaultId, vault.id), inArray(devices.id, decision.deviceIds))
     );
+  const reachableIds = new Set(
+    deviceRows.filter((row) => row.advertisedUrl).map((row) => row.id)
+  );
+  const reservableDeviceIds = decision.deviceIds.filter((id) => reachableIds.has(id));
+
+  if (reservableDeviceIds.length > 0) {
+    await reservePlacement(ownerId, {
+      objectHash: input.objectHash,
+      sizeBytes: input.sizeBytes,
+      deviceIds: reservableDeviceIds,
+    }, { requireReachable: true });
+  }
+
+  const rows = deviceRows.filter((row) => reachableIds.has(row.id));
 
   const ttl = config().transferGrantTtlSeconds;
   const expiresAt = Math.floor(Date.now() / 1000) + ttl;

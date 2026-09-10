@@ -5,6 +5,8 @@ import { PLATFORMS } from "../../db/schema.js";
 import { requireDevice } from "../../middleware/requireDevice.js";
 import { AppError } from "../../utils/AppError.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { confirmReplicaForDevice } from "../placement/placement.service.js";
+import { pollRepairForDevice } from "../placement/repair.service.js";
 import { transferPublicKey } from "../placement/uploadTargets.service.js";
 import {
   getEnrollmentStatus,
@@ -35,6 +37,11 @@ const heartbeatSchema = z.object({
   availableBytes: z.number().int().nonnegative().optional(),
   appVersion: z.string().max(40).optional(),
   advertisedUrl: z.string().url().max(512).optional(),
+});
+
+const possessionSchema = z.object({
+  objectHash: z.string().regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest"),
+  sizeBytes: z.number().int().nonnegative(),
 });
 
 function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
@@ -82,6 +89,33 @@ router.post(
     const body = parse(heartbeatSchema, req.body);
     if (!req.deviceId) throw AppError.unauthorized();
     res.status(200).json({ data: await recordHeartbeat(req.deviceId, body) });
+  })
+);
+
+/**
+ * A node calls this only after its transfer server has accepted and
+ * hash-validated an object. The device signature is the authority here; a
+ * browser cannot promote a reservation by claiming that its PUT succeeded.
+ */
+router.post(
+  "/possession",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    const body = parse(possessionSchema, req.body);
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({
+      data: await confirmReplicaForDevice(req.deviceId, body),
+    });
+  })
+);
+
+/** Returns at most one source assignment for this authenticated target node. */
+router.get(
+  "/repair",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await pollRepairForDevice(req.deviceId) });
   })
 );
 

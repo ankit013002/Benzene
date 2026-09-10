@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ import { loadAgentConfig, type AgentConfig } from "./config.js";
 import {
   ControlPlaneClient,
   ControlPlaneError,
+  type RepairAssignment,
   type EnrollmentStatus,
   type EnrollmentTicket,
   type HeartbeatResult,
@@ -30,6 +32,9 @@ class FakeControlPlane extends ControlPlaneClient {
   status: EnrollmentStatus["status"] = "pending";
   approvedDeviceId = "device-123";
   statusError: ControlPlaneError | undefined;
+  repairPolls = 0;
+  repairAssignment: RepairAssignment | null = null;
+  possessionReports: Array<{ objectHash: string; sizeBytes: number }> = [];
 
   constructor() {
     super("http://control-plane.invalid");
@@ -62,6 +67,22 @@ class FakeControlPlane extends ControlPlaneClient {
   }): Promise<HeartbeatResult> {
     this.heartbeats.push({ deviceId: input.deviceId, usedBytes: input.usedBytes });
     return { status: "online" };
+  }
+
+  override async pollRepair(): Promise<RepairAssignment | null> {
+    this.repairPolls += 1;
+    return this.repairAssignment;
+  }
+
+  override async reportPossession(input: {
+    objectHash: string;
+    sizeBytes: number;
+  }): Promise<{ status: string }> {
+    this.possessionReports.push({
+      objectHash: input.objectHash,
+      sizeBytes: input.sizeBytes,
+    });
+    return { status: "healthy" };
   }
 }
 
@@ -286,6 +307,46 @@ describe("heartbeat", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(plane.heartbeats.length).toBe(seen);
+  });
+});
+
+describe("repair", () => {
+  it("returns no work and does not poll again inside the repair interval", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    await expect(agent.attemptRepair()).resolves.toBe(false);
+    await expect(agent.attemptRepair()).resolves.toBe(false);
+    expect(plane.repairPolls).toBe(1);
+  });
+
+  it("streams an assignment into the store and reports possession", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const body = "repair bytes";
+    const objectHash = createHash("sha256").update(body).digest("hex");
+    plane.repairAssignment = {
+      objectHash,
+      sizeBytes: body.length,
+      source: {
+        deviceId: "source-device",
+        deviceName: "Source",
+        url: "http://source.invalid/objects/" + objectHash,
+        grant: "grant",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
+
+    await expect(agent.attemptRepair()).resolves.toBe(true);
+    expect(await agent.store.verify(objectHash)).toBe(true);
+    expect(plane.possessionReports).toEqual([{ objectHash, sizeBytes: body.length }]);
+    vi.unstubAllGlobals();
   });
 });
 

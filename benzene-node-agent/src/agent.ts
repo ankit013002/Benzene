@@ -1,9 +1,13 @@
+import { Readable } from "node:stream";
+import type { ReadableStream } from "node:stream/web";
+
 import type { AgentConfig } from "./config.js";
 import { ControlPlaneClient, ControlPlaneError } from "./controlPlane.js";
 import { IdentityStore, type DeviceIdentity } from "./identity.js";
 import { ObjectStore } from "./store.js";
 
 export const AGENT_VERSION = "0.1.0";
+const REPAIR_FETCH_TIMEOUT_MS = 30_000;
 
 export interface EnrollmentPrompt {
   code: string;
@@ -29,6 +33,8 @@ export class Agent {
   private readonly client: ControlPlaneClient;
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private identity: DeviceIdentity | undefined;
+  private repairInFlight = false;
+  private lastRepairAttemptAt = 0;
 
   constructor(
     private readonly config: AgentConfig,
@@ -156,6 +162,67 @@ export class Agent {
     return report;
   }
 
+  /** Reports possession using the device key, never a browser credential. */
+  async reportPossession(objectHash: string, sizeBytes: number): Promise<void> {
+    const identity = this.requireIdentity();
+    if (!identity.deviceId) {
+      throw new Error("Cannot report possession before enrollment");
+    }
+
+    await this.client.reportPossession({
+      deviceId: identity.deviceId,
+      privateKey: identity.privateKey,
+      objectHash,
+      sizeBytes,
+    });
+  }
+
+  /**
+   * Performs at most one whole-file LAN repair when work is available.
+   *
+   * The source streams directly into this agent; neither the browser nor the
+   * control plane sees object bytes. A failed transfer leaves the durable
+   * `placing` reservation intact so a later bounded poll can retry it.
+   */
+  async attemptRepair(): Promise<boolean> {
+    const identity = this.requireIdentity();
+    if (!identity.deviceId || this.repairInFlight) return false;
+
+    const now = Date.now();
+    if (now - this.lastRepairAttemptAt < this.config.repairIntervalMs) return false;
+    this.lastRepairAttemptAt = now;
+    this.repairInFlight = true;
+
+    try {
+      const assignment = await this.client.pollRepair({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+      });
+      if (!assignment) return false;
+
+      const response = await fetch(assignment.source.url, {
+        method: "GET",
+        headers: { "X-Transfer-Grant": assignment.source.grant },
+        signal: AbortSignal.timeout(REPAIR_FETCH_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        throw new Error(
+          `Repair source ${assignment.source.deviceName} refused the object (${response.status})`
+        );
+      }
+      if (!response.body) throw new Error("Repair source returned no body");
+
+      const stored = await this.store.put(
+        Readable.fromWeb(response.body as ReadableStream<Uint8Array>),
+        { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes }
+      );
+      await this.reportPossession(stored.hash, stored.size);
+      return true;
+    } finally {
+      this.repairInFlight = false;
+    }
+  }
+
   /**
    * Begins reporting presence on a timer.
    *
@@ -167,9 +234,11 @@ export class Agent {
     if (this.heartbeatTimer) return;
 
     const tick = (): void => {
-      void this.sendHeartbeat().catch((err: unknown) => {
-        this.events.onError?.(err);
-      });
+      void this.sendHeartbeat()
+        .then(() => this.attemptRepair())
+        .catch((err: unknown) => {
+          this.events.onError?.(err);
+        });
     };
 
     tick();

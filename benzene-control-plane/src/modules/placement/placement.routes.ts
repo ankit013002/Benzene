@@ -6,7 +6,6 @@ import { requireUser } from "../../middleware/requireUser.js";
 import { AppError } from "../../utils/AppError.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import {
-  confirmReplica,
   decidePlacement,
   getObjectProtection,
   getPolicy,
@@ -37,12 +36,6 @@ const reserveSchema = z.object({
   objectHash,
   sizeBytes: z.number().int().nonnegative(),
   deviceIds: z.array(z.string().uuid()).min(1).max(10),
-});
-
-const confirmSchema = z.object({
-  objectHash,
-  deviceId: z.string().uuid(),
-  sizeBytes: z.number().int().nonnegative().optional(),
 });
 
 function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
@@ -87,16 +80,20 @@ router.post(
   "/reserve",
   asyncHandler(async (req, res) => {
     const body = parse(reserveSchema, req.body);
-    const reserved = await reservePlacement(ownerOf(req), body);
+    const reserved = await reservePlacement(ownerOf(req), body, { requireReachable: true });
     res.status(201).json({ data: { reserved } });
   })
 );
 
 router.post(
   "/confirm",
-  asyncHandler(async (req, res) => {
-    const body = parse(confirmSchema, req.body);
-    res.status(200).json({ data: await confirmReplica(ownerOf(req), body) });
+  asyncHandler(async (_req, _res) => {
+    // Healthy status is evidence from the device, not a browser assertion.
+    throw new AppError(
+      410,
+      "DEVICE_CONFIRMATION_REQUIRED",
+      "Replica confirmation is reported by the device after it stores the object"
+    );
   })
 );
 

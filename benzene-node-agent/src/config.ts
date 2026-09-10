@@ -22,6 +22,8 @@ export interface AgentConfig {
    */
   advertisedUrl: string;
   heartbeatIntervalMs: number;
+  /** Minimum interval between bounded repair polls. */
+  repairIntervalMs: number;
   deviceName: string;
   platform: "macos" | "windows" | "linux" | "other";
 }
@@ -72,6 +74,8 @@ export function loadAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConf
       `http://${lanAddress()}:${overrides.port ?? intFromEnv("BENZENE_AGENT_PORT", 7070)}`,
     heartbeatIntervalMs:
       overrides.heartbeatIntervalMs ?? intFromEnv("BENZENE_HEARTBEAT_MS", 30_000),
+    repairIntervalMs:
+      overrides.repairIntervalMs ?? intFromEnv("BENZENE_REPAIR_MS", 60_000),
     deviceName:
       overrides.deviceName ?? process.env["BENZENE_DEVICE_NAME"] ?? defaultDeviceName(),
     platform: overrides.platform ?? detectPlatform(),

@@ -22,6 +22,8 @@ export interface TransferServerOptions {
   deviceId: string;
   /** Control plane's Ed25519 public key, received at enrollment. */
   controlPlanePublicKey: string;
+  /** Called after a successful, hash-checked PUT to promote the placement. */
+  reportPossession?: (input: { objectHash: string; sizeBytes: number }) => Promise<void>;
 }
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
@@ -30,6 +32,23 @@ export function createTransferServer(options: TransferServerOptions): Express {
   const app = express();
 
   app.use(helmet());
+
+  // Browser-to-device transfers are direct LAN requests. CORS only makes the
+  // narrowly scoped transfer methods/headers usable from a web origin; every
+  // object request still requires a grant checked below. Override Helmet's
+  // same-origin CORP because a cross-origin response is intentional here.
+  app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, PUT, DELETE, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "X-Transfer-Grant, Content-Type");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Length, X-Object-Encryption");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
 
   app.get("/health", (_req, res) => {
     res.status(200).json({
@@ -78,8 +97,8 @@ export function createTransferServer(options: TransferServerOptions): Express {
     return true;
   }
 
-  app.head("/objects/:hash", (req, res) => {
-    void (async () => {
+  app.head("/objects/:hash", async (req, res, next) => {
+    try {
       if (!authorise(req, res, "get")) return;
       const hash = req.params["hash"] as string;
       const meta = await options.store.metadata(hash);
@@ -87,24 +106,40 @@ export function createTransferServer(options: TransferServerOptions): Express {
         res.status(404).end();
         return;
       }
+      if (!(await options.store.verify(hash))) {
+        res.status(422).json({ message: "Object failed integrity check", code: "INTEGRITY" });
+        return;
+      }
       res.setHeader("Content-Length", String(meta.size));
       res.setHeader("X-Object-Encryption", meta.encryption);
       res.status(200).end();
-    })();
+    } catch (err) {
+      next(err);
+    }
   });
 
-  app.get("/objects/:hash", (req, res) => {
-    void (async () => {
+  app.get("/objects/:hash", async (req, res, next) => {
+    try {
       if (!authorise(req, res, "get")) return;
       const hash = req.params["hash"] as string;
       if (!(await options.store.has(hash))) {
         res.status(404).json({ message: "Object not held", code: "NOT_FOUND" });
         return;
       }
+      // Verify before opening the stream. A silently corrupted object is
+      // worse than a missing one because the caller could persist bad bytes.
+      if (!(await options.store.verify(hash))) {
+        res.status(422).json({ message: "Object failed integrity check", code: "INTEGRITY" });
+        return;
+      }
 
       res.setHeader("Content-Type", "application/octet-stream");
-      options.store.read(hash).pipe(res);
-    })();
+      const stream = options.store.read(hash);
+      stream.once("error", next);
+      stream.pipe(res);
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.put("/objects/:hash", (req, res) => {
@@ -120,6 +155,24 @@ export function createTransferServer(options: TransferServerOptions): Express {
           expectedHash: hash,
           ...(Number.isFinite(declared) ? { expectedSize: declared } : {}),
         });
+
+        if (options.reportPossession) {
+          try {
+            await options.reportPossession({
+              objectHash: stored.hash,
+              sizeBytes: stored.size,
+            });
+          } catch {
+            // The bytes are safe on disk, but the control plane must not show
+            // them as protected until the signed possession report arrives.
+            // The browser can retry the idempotent PUT/report sequence.
+            res.status(503).json({
+              message: "Object stored but possession could not be confirmed",
+              code: "POSSESSION_UNCONFIRMED",
+            });
+            return;
+          }
+        }
         res.status(201).json({ data: stored });
       } catch (err) {
         if (err instanceof AllocationExceededError) {
@@ -135,12 +188,14 @@ export function createTransferServer(options: TransferServerOptions): Express {
     })();
   });
 
-  app.delete("/objects/:hash", (req, res) => {
-    void (async () => {
+  app.delete("/objects/:hash", async (req, res, next) => {
+    try {
       if (!authorise(req, res, "delete")) return;
       await options.store.delete(req.params["hash"] as string);
       res.status(204).end();
-    })();
+    } catch (err) {
+      next(err);
+    }
   });
 
   app.use((_req, res) => {

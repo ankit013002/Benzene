@@ -9,8 +9,10 @@ import {
 } from "../services/driveNodes.services.js";
 import {
   completeUploads,
+  completeDeviceUploads,
   createDownloadUrlForNode,
   presignUploads,
+  reserveDeviceUpload,
 } from "../services/uploads.services.js";
 import { AppError } from "../utils/AppError.js";
 
@@ -63,6 +65,21 @@ const completeSchema = z.object({
     .max(500),
 });
 
+const deviceUploadSchema = z.object({
+  name: safeName,
+  path: pathString.default(""),
+  size: z.number().int().nonnegative(),
+  contentType: z.string().max(255).optional(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i, "sha256 must be a SHA-256 hex digest"),
+});
+
+const completeDeviceSchema = z.object({
+  versionIds: z
+    .array(z.string().regex(/^[a-f0-9]{24}$/i, "versionId must be an ObjectId"))
+    .min(1)
+    .max(500),
+});
+
 const foldersSchema = z.object({
   paths: z.array(pathString).min(1).max(500),
 });
@@ -104,6 +121,24 @@ export async function presignUploadsHandler(req: Request, res: Response): Promis
 export async function completeUploadsHandler(req: Request, res: Response): Promise<void> {
   const body = parse(completeSchema, req.body);
   const completed = await completeUploads(ownerOf(req), body.versionIds);
+  res.status(200).json({ data: { completed } });
+}
+
+export async function reserveDeviceUploadHandler(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const body = parse(deviceUploadSchema, req.body);
+  const reservation = await reserveDeviceUpload(ownerOf(req), body);
+  res.status(201).json({ data: reservation });
+}
+
+export async function completeDeviceUploadsHandler(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const body = parse(completeDeviceSchema, req.body);
+  const completed = await completeDeviceUploads(ownerOf(req), body.versionIds);
   res.status(200).json({ data: { completed } });
 }
 

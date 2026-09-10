@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { eq } from "drizzle-orm";
 import type { Express } from "express";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -14,6 +16,7 @@ import {
   type DeviceKeyPair,
 } from "./deviceIdentity.js";
 import { approveEnrollment, requestEnrollment } from "./devices.service.js";
+import { reservePlacement } from "../placement/placement.service.js";
 
 const OWNER = "auth|owner-1";
 const GB = 1024 * 1024 * 1024;
@@ -172,6 +175,63 @@ describe("device signature authentication", () => {
       .expect(200);
 
     expect(res.body.data.status).toBe("online");
+  });
+
+  it("accepts a signed possession report and promotes only its own reservation", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    const objectHash = createHash("sha256").update("payload").digest("hex");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 7, deviceIds: [deviceId] });
+    const body = { objectHash, sizeBytes: 7 };
+
+    const res = await request(app)
+      .post("/agent/possession")
+      .set(
+        signedHeaders({
+          keys,
+          deviceId,
+          method: "POST",
+          path: "/agent/possession",
+          body,
+        })
+      )
+      .send(body)
+      .expect(200);
+
+    expect(res.body.data).toMatchObject({ objectHash, deviceId, status: "healthy" });
+  });
+
+  it("rejects a conflicting possession size without changing the reservation", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    const objectHash = createHash("sha256").update("payload").digest("hex");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 7, deviceIds: [deviceId] });
+    const body = { objectHash, sizeBytes: 99 };
+
+    await request(app)
+      .post("/agent/possession")
+      .set(
+        signedHeaders({
+          keys,
+          deviceId,
+          method: "POST",
+          path: "/agent/possession",
+          body,
+        })
+      )
+      .send(body)
+      .expect(400);
+
+    const [row] = await db
+      .select()
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, objectHash));
+    expect(row).toMatchObject({ deviceId, objectHash, sizeBytes: 7, status: "placing" });
+  });
+
+  it("refuses an unsigned possession report", async () => {
+    await request(app)
+      .post("/agent/possession")
+      .send({ objectHash: "a".repeat(64), sizeBytes: 1 })
+      .expect(401);
   });
 
   it("rejects a heartbeat with no signature headers", async () => {

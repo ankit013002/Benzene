@@ -57,6 +57,8 @@ async function main(): Promise<void> {
       store,
       deviceId: identity.deviceId,
       controlPlanePublicKey: identity.controlPlanePublicKey,
+      reportPossession: ({ objectHash, sizeBytes }) =>
+        agent.reportPossession(objectHash, sizeBytes),
     }).listen(config.port, () => {
       console.log(`[agent] transfer server listening on ${config.advertisedUrl}`);
     });
