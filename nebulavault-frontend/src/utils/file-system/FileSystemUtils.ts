@@ -4,28 +4,53 @@ import {
   FlatFolder,
 } from "../../types/FileFolderBuffer";
 
-const entryToFile = (fileEntry: any) =>
-  new Promise<File>((resolve, reject) => fileEntry.file(resolve, reject));
+/** The webkit-prefixed drag/drop entry API is not consistently in lib.dom. */
+interface FileSystemEntryLike {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  file?: (
+    onSuccess: (file: File) => void,
+    onError: (error: unknown) => void,
+  ) => void;
+  createReader?: () => FileSystemDirectoryReaderLike;
+}
 
-const readAllEntries = (reader: any) =>
-  new Promise<any[]>((resolve, reject) => {
-    const out: any[] = [];
+interface FileSystemDirectoryReaderLike {
+  readEntries: (
+    onSuccess: (entries: FileSystemEntryLike[]) => void,
+    onError: (error: unknown) => void,
+  ) => void;
+}
+
+const entryToFile = (fileEntry: FileSystemEntryLike) =>
+  new Promise<File>((resolve, reject) => {
+    if (!fileEntry.file) {
+      reject(new Error("Dropped file entry could not be read"));
+      return;
+    }
+    fileEntry.file(resolve, reject);
+  });
+
+const readAllEntries = (reader: FileSystemDirectoryReaderLike) =>
+  new Promise<FileSystemEntryLike[]>((resolve, reject) => {
+    const out: FileSystemEntryLike[] = [];
     const read = () =>
       reader.readEntries(
-        (batch: any[]) => {
+        (batch) => {
           if (batch.length === 0) resolve(out);
           else {
             out.push(...batch);
             read();
           }
         },
-        (err: any) => reject(err)
+        reject,
       );
     read();
   });
 
 export const walkEntry = async (
-  entry: any,
+  entry: FileSystemEntryLike,
   parentPath: string,
   into: FileFolderBuffer[]
 ) => {
@@ -46,6 +71,7 @@ export const walkEntry = async (
     };
     into.push(dirNode);
 
+    if (!entry.createReader) return;
     const reader = entry.createReader();
     const children = await readAllEntries(reader);
     for (const child of children) {

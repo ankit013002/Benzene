@@ -5,12 +5,10 @@ import { useRouter } from "next/navigation";
 
 export default function RegisterForm() {
   const router = useRouter();
-  const nameId = useId();
   const emailId = useId();
   const passwordId = useId();
   const confirmPasswordId = useId();
   const termsId = useId();
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -22,12 +20,7 @@ export default function RegisterForm() {
     event.preventDefault();
     setError(null);
 
-    const normalizedName = name.trim();
     const normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedName) {
-      setError("Enter your name.");
-      return;
-    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       setError("Enter a valid email.");
       return;
@@ -52,7 +45,6 @@ export default function RegisterForm() {
         headers: { "content-type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          name: normalizedName,
           email: normalizedEmail,
           password,
         }),
@@ -77,21 +69,6 @@ export default function RegisterForm() {
 
   return (
     <form className="space-y-4" onSubmit={onSubmit} noValidate>
-      <label htmlFor={nameId} className="label">
-        Your name
-      </label>
-      <input
-        id={nameId}
-        name="name"
-        type="text"
-        autoComplete="name"
-        className="input input-bordered w-full"
-        placeholder="Ada Lovelace"
-        value={name}
-        onChange={(event) => setName(event.target.value)}
-        required
-      />
-
       <label htmlFor={emailId} className="label">
         Email
       </label>

@@ -129,7 +129,7 @@ const RecentFiles = ({
         e.preventDefault();
         setIsDragging(true);
       }}
-      onDragLeave={(e) => setIsDragging(false)}
+      onDragLeave={() => setIsDragging(false)}
       onDragEnd={(e) => {
         e.preventDefault();
         setIsDragging(false);

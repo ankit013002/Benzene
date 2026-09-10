@@ -1,5 +1,5 @@
 export type ActionErrors = Partial<
-  Record<"name" | "email" | "password" | "confirmPassword" | "general", string>
+  Record<"email" | "password" | "confirmPassword" | "general", string>
 >;
 
 export type ActionState =
