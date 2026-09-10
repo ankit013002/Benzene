@@ -1,48 +1,27 @@
 import { ReactNode } from "react";
 import {
   FaRegFolder,
-  FaFileAlt,
-  FaClock,
-  FaStar,
-  FaTrash,
   FaLaptop,
 } from "react-icons/fa";
 
 export type SideBarOptionType = {
   id: number;
   name: string;
+  href: string;
   icon?: ReactNode;
 };
 
 export const SideBarOptions: SideBarOptionType[] = [
   {
     id: 0,
-    name: "Dashboard",
-    icon: <FaFileAlt />,
-  },
-  {
-    id: 1,
-    name: "Files",
+    name: "Vault",
+    href: "/dashboard",
     icon: <FaRegFolder />,
   },
   {
-    id: 2,
-    name: "Recent",
-    icon: <FaClock />,
-  },
-  {
-    id: 3,
-    name: "Starred",
-    icon: <FaStar />,
-  },
-  {
-    id: 4,
-    name: "Trash",
-    icon: <FaTrash />,
-  },
-  {
-    id: 5,
+    id: 1,
     name: "Devices",
+    href: "/devices",
     icon: <FaLaptop />,
   },
 ];

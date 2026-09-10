@@ -25,7 +25,7 @@ export default async function ProtectedLayout({
   const session = await getSession();
   if (!session) redirect("/login");
   let me: Me = null;
-  // TODO: Add if(session.isNew) after done testing and setting up serivce
+  // Bootstrap the profile only when the user service has no record yet.
   try {
     const cookieHeader = (await cookies()).toString();
     let res = null;
