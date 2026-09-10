@@ -127,6 +127,11 @@ node -e "console.log(require('crypto').generateKeyPairSync('ed25519').privateKey
 cd benzene-control-plane && npm install && npm run db:migrate
 ```
 
+The production control-plane image includes the committed Drizzle SQL and a
+compiled migrator. Run `npm run db:migrate:runtime` as an explicit one-off
+release step before starting the server; migrations are not run automatically
+at startup.
+
 The gateway reads `AUTH_SECRET` from the environment, not a file:
 
 ```bash
@@ -207,16 +212,19 @@ User → Vault → Device → StorageAllocation
 Files belong to a **vault**, not a user — so household/family vaults later need
 no reshaping.
 
-Chunking, manifests and file versions exist in the architecture doc but are
-**not implemented yet**. Whole-file placement first, deliberately (§107).
+Chunking and manifests are described in the architecture doc but are **not
+implemented yet**. Immutable whole-file versions are implemented; device-upload
+completion records and promotes them. Whole-file placement first, deliberately
+(§107).
 
 ### The upload path
 
 ```
 1. Browser hashes the file (SHA-256)
-2. POST /placement/upload-targets   → control plane decides + reserves + signs grants
-3. Browser PUTs bytes straight to each device
-4. POST /placement/confirm          → replica promoted to healthy
+2. POST /files/uploads/device       → control plane decides + reserves + signs grants
+3. Browser PUTs bytes straight to each reachable device
+4. Device reports possession using its Ed25519 identity
+5. POST /files/uploads/device/complete → version committed when a healthy replica exists
 ```
 
 Bytes never pass through Next.js, the gateway or the control plane.
@@ -315,8 +323,8 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **245**, agent **75**, auth **71**, gateway **10**,
-smoke **29 checks**.
+Current counts: control plane **263**, agent **81**, auth **71**, gateway **14**,
+smoke **34 checks**.
 
 ### Testing conventions
 
@@ -380,32 +388,37 @@ the standard to match.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
 - Placement engine with protection policies (1/2/3 copies) and health reporting
+- Automatic whole-file LAN repair fills recorded replica shortfalls via direct
+  healthy-peer transfer, with hash verification before recording the new replica
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
 - Devices screen and vault summary in the web app
 - Terraform for the S3 bucket (validated, never applied)
+- Production Dockerfiles for the frontend, auth service, gateway, control plane
+  and user service; the node agent remains a host/LAN process
 
 ### Not built
 
-- **Repair engine** — a degraded object stays degraded. This is the most
-  important gap: without it, protection decays permanently on first device
-  failure. `listUnderProtectedObjects` is its queue.
-- **Rebalancing**, device draining (status exists; nothing moves data)
+- **Outage/loss classification, coordinated drain completion and rebalancing**
+  — repair currently acts on recorded replica shortfalls, but failure/loss
+  classification and coordinated data moves remain unfinished
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later
   without a migration, but the key hierarchy and recovery story (§33) are
   undesigned. **Design this before real user data lands.**
 - **Remote access / NAT traversal / relay** — LAN only
+- **Garbage collection (GC)** for unreferenced stored objects
 - Desktop and mobile apps, filesystem mount, sharing, search, billing
 - File metadata still in MongoDB, not yet migrated to Postgres
 
 ### Known limits worth repeating
 
-- **Browser-to-device only works over http.** An https-hosted app cannot PUT to
-  `http://192.168.x.x` — mixed content. Fine locally; production needs local
-  certs or the relay path (§39).
+- **Browser-to-device works over the HTTP LAN development path.** CORS is
+  configured for it, but an HTTPS-hosted app cannot PUT to `http://192.168.x.x`
+  because of mixed content; production remote/HTTPS transfer support remains
+  unfinished (§39).
 - **The browser hashes whole files in memory.** `crypto.subtle` needs the full
   buffer; large files need the streaming hash chunking would bring.
 - **The agent's private key is a `0600` file**, not Keychain/DPAPI/Keystore
