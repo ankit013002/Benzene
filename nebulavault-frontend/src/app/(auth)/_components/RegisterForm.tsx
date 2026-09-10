@@ -8,11 +8,9 @@ export default function RegisterForm() {
   const emailId = useId();
   const passwordId = useId();
   const confirmPasswordId = useId();
-  const termsId = useId();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [acceptTerms, setAcceptTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -33,11 +31,6 @@ export default function RegisterForm() {
       setError("Passwords do not match.");
       return;
     }
-    if (!acceptTerms) {
-      setError("You must accept the terms.");
-      return;
-    }
-
     setPending(true);
     try {
       const response = await fetch("/api/auth/signup", {
@@ -113,24 +106,6 @@ export default function RegisterForm() {
         onChange={(event) => setConfirmPassword(event.target.value)}
         required
       />
-
-      <div className="form-control pt-2">
-        <label htmlFor={termsId} className="label cursor-pointer justify-start gap-3">
-          <input
-            id={termsId}
-            name="acceptTerms"
-            type="checkbox"
-            className="checkbox border-1 border-bz-primary"
-            checked={acceptTerms}
-            onChange={(event) => setAcceptTerms(event.target.checked)}
-            required
-          />
-          <span className="label-text">
-            I agree to the <a className="link link-hover">Terms</a> and{" "}
-            <a className="link link-hover">Privacy</a>.
-          </span>
-        </label>
-      </div>
 
       {error && (
         <div className="alert alert-error" role="alert">

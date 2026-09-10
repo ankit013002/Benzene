@@ -6,9 +6,6 @@ export default function Footer() {
     { href: "#security", label: "Security" },
     { href: "#pricing", label: "Pricing" },
     { href: "#faq", label: "Support" },
-    { href: "#", label: "Privacy Policy" },
-    { href: "#", label: "Terms of Service" },
-    { href: "#", label: "Security Whitepaper" },
   ];
 
   return (
