@@ -1,10 +1,8 @@
 package com.nebulavault.user_service.user;
 
-import com.nebulavault.user_service.user.dto.BootstrapResponse;
+import com.nebulavault.user_service.user.dto.UserProfileResponse;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.ResponseEntity;
-
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/user")
@@ -16,18 +14,17 @@ public class UserController {
     }
 
     @PostMapping("/bootstrap")
-    public ResponseEntity<BootstrapResponse> bootstrap(
+    public ResponseEntity<UserProfileResponse> bootstrap(
             @RequestHeader("X-User-AuthSub") String authSub,
             @RequestHeader("X-User-Email") String email,
             @RequestHeader(value = "X-User-Name", required = false) String name
     ){
         var user = userService.bootstrap(authSub, email, name);
-        return ResponseEntity.ok(new BootstrapResponse(true, user.getId(), user.getPlan(), user.getQuotaBytes(), user.getUsedBytes()));
+        return ResponseEntity.ok(UserProfileResponse.from(user));
     }
 
     @GetMapping("/me")
-    public User me(@RequestHeader("X-User-AuthSub") String authSub) {
-        System.out.println((authSub));
-        return userService.meByAuthSub(authSub);
+    public UserProfileResponse me(@RequestHeader("X-User-AuthSub") String authSub) {
+        return UserProfileResponse.from(userService.meByAuthSub(authSub));
     }
 }
