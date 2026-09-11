@@ -4,7 +4,7 @@ import type { ReadableStream } from "node:stream/web";
 import type { AgentConfig } from "./config.js";
 import { ControlPlaneClient, ControlPlaneError } from "./controlPlane.js";
 import { IdentityStore, type DeviceIdentity } from "./identity.js";
-import { ObjectStore } from "./store.js";
+import { IntegrityError, ObjectStore, type StoredObject } from "./store.js";
 
 export const AGENT_VERSION = "0.1.0";
 const REPAIR_FETCH_TIMEOUT_MS = 30_000;
@@ -223,10 +223,27 @@ export class Agent {
       }
       if (!response.body) throw new Error("Repair source returned no body");
 
-      const stored = await this.store.put(
-        Readable.fromWeb(response.body as ReadableStream<Uint8Array>),
-        { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes }
-      );
+      let stored: StoredObject;
+      try {
+        stored = await this.store.put(
+          Readable.fromWeb(response.body as ReadableStream<Uint8Array>),
+          { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes }
+        );
+      } catch (err) {
+        // A successful response can still change between the source's
+        // preflight hash check and streaming. Quarantine only a hash failure;
+        // a size mismatch is metadata inconsistency and must remain retryable.
+        if (err instanceof IntegrityError) {
+          await this.client.reportRepairFailure({
+            deviceId: identity.deviceId,
+            privateKey: identity.privateKey,
+            objectHash: assignment.objectHash,
+            sourceDeviceId: assignment.source.deviceId,
+            repairAssignmentId: assignment.repairAssignmentId,
+          });
+        }
+        throw err;
+      }
       await this.reportPossession(stored.hash, stored.size);
       return true;
     } finally {

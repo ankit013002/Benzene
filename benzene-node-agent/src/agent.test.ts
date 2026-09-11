@@ -402,6 +402,68 @@ describe("repair", () => {
     ]);
     vi.unstubAllGlobals();
   });
+
+  it("quarantines a source when a 200 response contains corrupt bytes", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const expectedBody = "repair bytes";
+    const objectHash = createHash("sha256").update(expectedBody).digest("hex");
+    plane.repairAssignment = {
+      objectHash,
+      sizeBytes: expectedBody.length,
+      repairAssignmentId: "22222222-2222-4222-8222-222222222222",
+      source: {
+        deviceId: "source-device",
+        deviceName: "Source",
+        url: `http://source.invalid/objects/${objectHash}`,
+        grant: "grant",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("corrupt data")));
+
+    await expect(agent.attemptRepair()).rejects.toThrow(/failed integrity check/);
+    expect(plane.repairFailures).toEqual([
+      {
+        objectHash,
+        sourceDeviceId: "source-device",
+        repairAssignmentId: "22222222-2222-4222-8222-222222222222",
+      },
+    ]);
+    expect(plane.possessionReports).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it("does not quarantine a source for a valid-hash size mismatch", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const body = "repair bytes";
+    const objectHash = createHash("sha256").update(body).digest("hex");
+    plane.repairAssignment = {
+      objectHash,
+      sizeBytes: body.length + 1,
+      repairAssignmentId: "33333333-3333-4333-8333-333333333333",
+      source: {
+        deviceId: "source-device",
+        deviceName: "Source",
+        url: `http://source.invalid/objects/${objectHash}`,
+        grant: "grant",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
+
+    await expect(agent.attemptRepair()).rejects.toThrow(/expected 13/);
+    expect(plane.repairFailures).toEqual([]);
+    expect(plane.possessionReports).toEqual([]);
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("startup order", () => {
