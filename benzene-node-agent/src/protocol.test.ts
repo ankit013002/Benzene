@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { canonicalRequest, generateDeviceKeyPair, signRequest, signedHeaders } from "./protocol.js";
 import {
@@ -78,5 +78,29 @@ describe("signedHeaders", () => {
     });
 
     expect(headers["X-Device-Timestamp"]).toBe("1757000000");
+  });
+
+  it("keeps automatic calls unique within one second", () => {
+    const keys = generateDeviceKeyPair();
+    const input = {
+      deviceId: "automatic-retry-device",
+      privateKey: keys.privateKey,
+      method: "POST",
+      path: "/agent/heartbeat",
+      body: "{}",
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(1_757_000_000_000));
+    try {
+      const first = signedHeaders(input);
+      vi.advanceTimersByTime(1);
+      const second = signedHeaders(input);
+
+      expect(second["X-Device-Timestamp"]).not.toBe(first["X-Device-Timestamp"]);
+      expect(second["X-Device-Signature"]).not.toBe(first["X-Device-Signature"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

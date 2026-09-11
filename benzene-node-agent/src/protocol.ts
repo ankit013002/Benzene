@@ -66,7 +66,13 @@ export function signedHeaders(input: {
   body: string;
   now?: number;
 }): SignedHeaders {
-  const timestamp = String(Math.floor((input.now ?? Date.now()) / 1000));
+  // Automatic calls retain millisecond uniqueness without a nonce or
+  // process-global state. Explicit test/vector timestamps preserve the
+  // established whole-second wire behavior.
+  const timestamp =
+    input.now === undefined
+      ? String(Date.now() / 1000)
+      : String(Math.floor(input.now / 1000));
   const signature = signRequest(
     input.privateKey,
     canonicalRequest({
