@@ -341,8 +341,8 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **288**, agent **88**,
-auth **74**, gateway **15**, smoke **34 checks**.
+Current counts: control plane **291**, agent **106**,
+auth **77**, gateway **15**, smoke **50 checks**.
 
 The auth-service and gateway production runtime images run as dedicated
 non-root `benzene` users. The verified auth-service production-only dependency
@@ -419,9 +419,11 @@ the standard to match.
   healthy-peer transfer, with hash verification before recording the new replica
   and serialized possession-versus-repair transitions that reject stale device
   confirmations
-- Coordinated whole-file drain preparation: capacity is preflighted, draining
-  replicas leave protection counts, repair may copy from the draining source,
-  and the UI reports `Ready to disconnect` once healthy copies exist elsewhere
+- Coordinated whole-file drain and safe final device removal: capacity is
+  preflighted, draining replicas leave protection counts, repair may copy from
+  the draining source, and a signed, retry-safe node handshake waits for
+  protection to return before quiescing transfers, erasing only
+  Benzene-managed entries, and removing the device from the Vault
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
@@ -434,9 +436,10 @@ the standard to match.
 
 ### Not built
 
-- **Final drain detach/device-row removal, outage/loss classification and
-  rebalancing** — drain preparation is implemented, but removal after readiness
-  and failure/loss lifecycle handling remain unfinished
+- **Outage/loss classification and rebalancing** — repair currently acts on
+  recorded replica shortfalls and can use a draining source; final drain
+  detach and device-row removal are implemented only after protection is
+  restored and the node completes its signed removal handshake
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later
@@ -444,6 +447,10 @@ the standard to match.
   undesigned. **Design this before real user data lands.**
 - **Remote access / NAT traversal / relay** — LAN only
 - **Garbage collection (GC)** for unreferenced stored objects
+- Device removal deletes managed filesystem entries rather than securely
+  overwriting media. The agent refuses unsafe roots and refuses nonempty
+  legacy/unmarked store roots; use a new empty path or perform an explicit
+  manual migration before enrolling such a store
 - Desktop and mobile apps, filesystem mount, sharing, search, billing
 - File metadata still in MongoDB, not yet migrated to Postgres
 

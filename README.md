@@ -11,8 +11,8 @@ upload path.
 The repository contains a working local/LAN development slice. Automatic
 whole-file LAN repair fills recorded replica shortfalls via direct healthy-peer
 transfer, but this is not yet a production-ready remote drive: outage/loss
-classification, final drain detach, encryption, remote access, chunking,
-garbage collection and several client surfaces remain unfinished.
+classification, encryption, remote access, chunking, garbage collection and
+several client surfaces remain unfinished.
 
 ## How it fits together
 
@@ -72,9 +72,11 @@ repository-wide audit.
 - Whole-file placement with protection policies and replica health reporting.
 - Automatic whole-file LAN repair that fills recorded replica shortfalls by
   copying from a healthy peer, verifying the hash and recording the new replica.
-- Coordinated whole-file drain preparation: capacity is preflighted, draining
-  replicas leave protection counts, repair may copy from the draining source,
-  and the UI reports `Ready to disconnect` once healthy copies exist elsewhere.
+- Coordinated whole-file drain and safe final device removal: capacity is
+  preflighted, draining replicas leave protection counts, repair may copy from
+  the draining source, and a signed, retry-safe node handshake waits for
+  protection to return before quiescing transfers, erasing only Benzene-managed
+  entries, and removing the device from the Vault.
 - Browser-to-device upload and download over a LAN, with SHA-256 content
   addressing and device-side integrity checks.
 - An atomic, allocation-bounded node object store with restart-safe usage
@@ -87,9 +89,10 @@ repository-wide audit.
 
 ## Deliberate limits
 
-- Drain preparation is implemented, but final detach/device-row removal,
-  outage/loss classification and rebalancing are not; repair currently acts on
-  recorded replica shortfalls and can use a draining source.
+- General outage/loss classification and rebalancing are not implemented;
+  repair currently acts on recorded replica shortfalls and can use a draining
+  source. Final drain detach and device-row removal are implemented only after
+  protection is restored and the node completes its signed removal handshake.
 - Objects are whole files; chunking, manifests and streaming browser hashing are
   future work. The browser currently hashes a complete file in memory.
 - Encryption at rest and key recovery are not implemented. Stored objects are
@@ -100,6 +103,10 @@ repository-wide audit.
   directly PUT to an HTTP device; remote/HTTPS transfer support remains
   unfinished.
 - Garbage collection (GC) for unreferenced stored objects is not implemented.
+- Device removal deletes managed filesystem entries rather than securely
+  overwriting media. The agent refuses unsafe roots and refuses nonempty
+  legacy/unmarked store roots; use a new empty path or perform an explicit
+  manual migration before enrolling such a store.
 - A replication policy of one copy is possible but can lose data when that
   device fails. Whether that choice should remain available is unresolved.
 - Desktop/mobile apps, filesystem mounts, sharing, search, billing and cloud
@@ -255,8 +262,8 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **288** tests, agent **88**, auth **74**, gateway
-**15**, and **34 smoke checks**.
+Verified counts: control plane **291** tests, agent **106**, auth **77**, gateway
+**15**, and **50 smoke checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. Frontend lint errors
@@ -286,9 +293,8 @@ scripts/smoke-agent.mjs      Cross-package HTTP smoke test
 
 The next priorities follow the architecture: design encryption and key recovery
 before real user data; then make remote/HTTPS access safe; then complete
-outage/loss classification and the drain lifecycle, including final detach and
-device-row removal after `Ready to disconnect`. Rebalancing, chunking, garbage
-collection and richer clients follow those foundations.
+outage/loss classification. Rebalancing, chunking, garbage collection and
+richer clients follow those foundations.
 
 ## Contributing
 
