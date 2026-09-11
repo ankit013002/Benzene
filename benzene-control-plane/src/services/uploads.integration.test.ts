@@ -33,6 +33,9 @@ function makeConfig(): AppConfig {
     storageDriver: "local",
     maxUploadBytes: 1024 * 1024,
     presignTtlSeconds: 900,
+    enrollmentCodeTtlSeconds: 600,
+    enrollmentRateLimitMax: 10,
+    enrollmentRateLimitWindowSeconds: 60,
     s3: { bucket: "", region: "", endpoint: undefined, forcePathStyle: false },
     local: { rootDir: storageRoot, publicBaseUrl: "http://localhost:5000/local-objects" },
   };

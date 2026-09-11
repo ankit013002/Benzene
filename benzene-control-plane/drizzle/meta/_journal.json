@@ -50,6 +50,13 @@
       "when": 1789158181799,
       "tag": "0006_wide_wendell_rand",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789159251525,
+      "tag": "0007_sudden_rick_jones",
+      "breakpoints": true
     }
   ]
 }

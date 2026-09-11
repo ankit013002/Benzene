@@ -118,10 +118,15 @@ export function generatePairingCode(randomBytes: Buffer): string {
   return `${out.slice(0, 4)}-${out.slice(4)}`;
 }
 
+/** Canonical form used for indexed pairing-code lookups. */
+export function normalizePairingCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
 /** Constant-time comparison for user-supplied pairing codes. */
 export function codesMatch(a: string, b: string): boolean {
-  const left = Buffer.from(a.trim().toUpperCase(), "utf8");
-  const right = Buffer.from(b.trim().toUpperCase(), "utf8");
+  const left = Buffer.from(normalizePairingCode(a), "utf8");
+  const right = Buffer.from(normalizePairingCode(b), "utf8");
   if (left.length !== right.length) return false;
   return timingSafeEqual(left, right);
 }

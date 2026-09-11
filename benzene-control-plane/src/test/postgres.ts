@@ -93,6 +93,7 @@ export async function truncateAll(
   await db.execute(
     sql`truncate table
       ${schema.deviceRequestReplays},
+      ${schema.enrollmentCreationAttempts},
       ${schema.replicas},
       ${schema.storagePolicies},
       ${schema.deviceEnrollments},

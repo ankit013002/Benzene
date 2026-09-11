@@ -23,9 +23,13 @@ import {
   codesMatch,
   generatePairingCode,
   isValidPublicKey,
+  normalizePairingCode,
 } from "./deviceIdentity.js";
+import { deriveDeviceStatus as deriveStatus } from "./liveness.js";
 
-type DbExecutor = Pick<ReturnType<typeof db>, "select" | "update" | "delete">;
+export { deriveDeviceStatus as deriveStatus } from "./liveness.js";
+
+type DbExecutor = Pick<ReturnType<typeof db>, "select" | "update" | "delete" | "execute">;
 
 export interface EnrollmentRequest {
   publicKey: string;
@@ -49,6 +53,8 @@ export interface PendingEnrollment {
 export async function requestEnrollment(
   input: EnrollmentRequest
 ): Promise<PendingEnrollment> {
+  await expirePendingEnrollments();
+
   if (!isValidPublicKey(input.publicKey)) {
     throw AppError.badRequest("publicKey must be a base64 Ed25519 SPKI key");
   }
@@ -181,6 +187,7 @@ export async function approveEnrollment(
   allocatedBytes: number
 ): Promise<Device> {
   const vault = await ensureVaultForOwner(ownerId);
+  const normalizedCode = normalizePairingCode(code);
 
   // Expiry is settled before the transaction opens, not inside it. Throwing
   // from a transaction callback rolls the whole thing back, which would
@@ -189,10 +196,16 @@ export async function approveEnrollment(
   const pending = await db()
     .select()
     .from(deviceEnrollments)
-    .where(eq(deviceEnrollments.status, "pending"));
+    .where(
+      and(
+        eq(deviceEnrollments.status, "pending"),
+        eq(deviceEnrollments.code, normalizedCode)
+      )
+    )
+    .limit(1);
 
   const stale = pending.find(
-    (row) => codesMatch(row.code, code) && row.expiresAt.getTime() <= Date.now()
+    (row) => codesMatch(row.code, normalizedCode) && row.expiresAt.getTime() <= Date.now()
   );
   if (stale) {
     await db()
@@ -202,17 +215,27 @@ export async function approveEnrollment(
     throw AppError.badRequest("That pairing code has expired");
   }
 
+  await expirePendingEnrollments();
+
   return db().transaction(async (tx) => {
     // Re-read under a row lock: the check above is advisory, this is the one
     // that makes redeeming a code exactly-once under concurrency.
     const candidates = await tx
       .select()
       .from(deviceEnrollments)
-      .where(eq(deviceEnrollments.status, "pending"))
-      .for("update");
+      .where(
+        and(
+          eq(deviceEnrollments.status, "pending"),
+          eq(deviceEnrollments.code, normalizedCode)
+        )
+      )
+      .for("update")
+      .limit(1);
 
-    const match = candidates.find((row) => codesMatch(row.code, code));
-    if (!match) throw AppError.notFound("No pending enrollment with that code");
+    const match = candidates[0];
+    if (!match || !codesMatch(match.code, normalizedCode)) {
+      throw AppError.notFound("No pending enrollment with that code");
+    }
     if (match.expiresAt.getTime() <= Date.now()) {
       throw AppError.badRequest("That pairing code has expired");
     }
@@ -251,19 +274,58 @@ export async function approveEnrollment(
 
 export async function rejectEnrollment(ownerId: string, code: string): Promise<void> {
   await ensureVaultForOwner(ownerId);
+  const normalizedCode = normalizePairingCode(code);
+  await expirePendingEnrollments();
 
-  const pending = await db()
-    .select()
-    .from(deviceEnrollments)
-    .where(eq(deviceEnrollments.status, "pending"));
+  await db().transaction(async (tx) => {
+    const [match] = await tx
+      .select()
+      .from(deviceEnrollments)
+      .where(
+        and(
+          eq(deviceEnrollments.status, "pending"),
+          eq(deviceEnrollments.code, normalizedCode)
+        )
+      )
+      .for("update")
+      .limit(1);
 
-  const match = pending.find((row) => codesMatch(row.code, code));
-  if (!match) throw AppError.notFound("No pending enrollment with that code");
+    if (!match || !codesMatch(match.code, normalizedCode)) {
+      throw AppError.notFound("No pending enrollment with that code");
+    }
+    if (match.expiresAt.getTime() <= Date.now()) {
+      await tx
+        .update(deviceEnrollments)
+        .set({ status: "expired" })
+        .where(eq(deviceEnrollments.id, match.id));
+      throw AppError.badRequest("That pairing code has expired");
+    }
 
-  await db()
-    .update(deviceEnrollments)
-    .set({ status: "rejected" })
-    .where(eq(deviceEnrollments.id, match.id));
+    await tx
+      .update(deviceEnrollments)
+      .set({ status: "rejected" })
+      .where(
+        and(eq(deviceEnrollments.id, match.id), eq(deviceEnrollments.status, "pending"))
+      );
+  });
+}
+
+/** Persist expiry without allowing a cleanup request to scan unbounded rows. */
+async function expirePendingEnrollments(executor: DbExecutor = db()): Promise<void> {
+  const cutoff = new Date();
+  await executor.execute(sql`
+    WITH expired AS (
+      SELECT ${deviceEnrollments.id}
+      FROM ${deviceEnrollments}
+      WHERE ${deviceEnrollments.status} = 'pending'
+        AND ${deviceEnrollments.expiresAt} <= ${cutoff}
+      ORDER BY ${deviceEnrollments.expiresAt} ASC
+      LIMIT 100
+    )
+    UPDATE ${deviceEnrollments}
+    SET status = 'expired'
+    WHERE id IN (SELECT id FROM expired)
+  `);
 }
 
 export interface DeviceView {
@@ -483,19 +545,6 @@ export async function completeDeviceRemoval(
       .where(and(eq(devices.id, deviceId), eq(devices.status, "draining")));
     return { status: "removed" };
   });
-}
-
-/** Terminal and in-progress states are authoritative; only liveness is derived. */
-export function deriveStatus(
-  stored: string,
-  lastSeenAt: Date | null,
-  offlineAfterMs: number
-): string {
-  if (stored === "draining" || stored === "removed" || stored === "suspected_lost") {
-    return stored;
-  }
-  if (!lastSeenAt) return "pending";
-  return Date.now() - lastSeenAt.getTime() <= offlineAfterMs ? "online" : "offline";
 }
 
 export interface HeartbeatInput {

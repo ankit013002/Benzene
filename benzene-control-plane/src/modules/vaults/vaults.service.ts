@@ -3,6 +3,8 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { deviceStorageAllocations, devices, vaults, type Vault } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
+import { config } from "../../config/env.js";
+import { deviceOnlineSince } from "../devices/liveness.js";
 
 /**
  * Returns the caller's vault, creating it on first use.
@@ -63,6 +65,7 @@ export interface VaultSummary {
  */
 export async function getVaultSummary(ownerId: string): Promise<VaultSummary> {
   const vault = await ensureVaultForOwner(ownerId);
+  const onlineSince = deviceOnlineSince(config().deviceOfflineAfterSeconds * 1000);
 
   const [row] = await db()
     .select({
@@ -71,7 +74,10 @@ export async function getVaultSummary(ownerId: string): Promise<VaultSummary> {
       `,
       onlineCapacityBytes: sql<number>`
         coalesce(sum(${deviceStorageAllocations.allocatedBytes})
-          filter (where ${devices.status} = 'online'), 0)::bigint
+          filter (
+            where ${devices.status} not in ('draining', 'removed', 'suspected_lost')
+              and ${devices.lastSeenAt} >= ${onlineSince}
+          ), 0)::bigint
       `,
       usedBytes: sql<number>`
         coalesce(sum(${deviceStorageAllocations.usedBytes}), 0)::bigint
@@ -80,7 +86,10 @@ export async function getVaultSummary(ownerId: string): Promise<VaultSummary> {
         count(distinct ${devices.id})::int
       `,
       onlineDeviceCount: sql<number>`
-        count(distinct ${devices.id}) filter (where ${devices.status} = 'online')::int
+        count(distinct ${devices.id}) filter (
+          where ${devices.status} not in ('draining', 'removed', 'suspected_lost')
+            and ${devices.lastSeenAt} >= ${onlineSince}
+        )::int
       `,
     })
     .from(devices)

@@ -17,6 +17,10 @@ export interface AppConfig {
   presignTtlSeconds: number;
   /** How long a device pairing code remains usable. */
   enrollmentCodeTtlSeconds: number;
+  /** Maximum unauthenticated enrollment requests from one network peer per window. */
+  enrollmentRateLimitMax: number;
+  /** Window for unauthenticated enrollment creation throttling. */
+  enrollmentRateLimitWindowSeconds: number;
   /** Tolerated clock difference when verifying a device request signature. */
   deviceClockSkewSeconds: number;
   /** Silence after which a device is reported offline rather than online. */
@@ -83,6 +87,11 @@ export function loadConfig(): AppConfig {
     databaseUrl: required("DATABASE_URL"),
     mongooseUri: required("MONGOOSE_URI"),
     enrollmentCodeTtlSeconds: intFromEnv("ENROLLMENT_CODE_TTL_SECONDS", 600),
+    enrollmentRateLimitMax: intFromEnv("ENROLLMENT_RATE_LIMIT_MAX", 10),
+    enrollmentRateLimitWindowSeconds: intFromEnv(
+      "ENROLLMENT_RATE_LIMIT_WINDOW_SECONDS",
+      60
+    ),
     deviceClockSkewSeconds: intFromEnv("DEVICE_CLOCK_SKEW_SECONDS", 300),
     deviceOfflineAfterSeconds: intFromEnv("DEVICE_OFFLINE_AFTER_SECONDS", 120),
     transferSigningKey: optional("TRANSFER_SIGNING_KEY"),

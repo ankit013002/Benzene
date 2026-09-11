@@ -147,6 +147,123 @@ describe("enrollment", () => {
     expect(row?.status).toBe("expired");
   });
 
+  it("expires older pending rows during a later enrollment request", async () => {
+    const first = await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Expired Laptop",
+      platform: "linux",
+    });
+
+    vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+
+    await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Fresh Laptop",
+      platform: "linux",
+    });
+
+    const [row] = await db
+      .select({ status: schema.deviceEnrollments.status })
+      .from(schema.deviceEnrollments)
+      .where(eq(schema.deviceEnrollments.id, first.id));
+    expect(row?.status).toBe("expired");
+  });
+
+  it("bounds opportunistic expiry cleanup per request", async () => {
+    for (let attempt = 0; attempt < 101; attempt += 1) {
+      await requestEnrollment({
+        publicKey: generateDeviceKeyPair().publicKey,
+        deviceName: `Expired Laptop ${attempt}`,
+        platform: "linux",
+      });
+    }
+
+    vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+    await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Fresh Laptop",
+      platform: "linux",
+    });
+
+    const rows = await db
+      .select({ status: schema.deviceEnrollments.status })
+      .from(schema.deviceEnrollments);
+    expect(rows.filter((row) => row.status === "expired")).toHaveLength(100);
+    expect(rows.filter((row) => row.status === "pending")).toHaveLength(2);
+  });
+
+  it("approves a code with surrounding whitespace and different case", async () => {
+    const enrollment = await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Typed Laptop",
+      platform: "linux",
+    });
+
+    await expect(
+      approveEnrollment(OWNER, `  ${enrollment.code.toLowerCase()}  `, GB)
+    ).resolves.toMatchObject({ name: "Typed Laptop" });
+  });
+
+  it("does not block approval of another code behind an unrelated enrollment lock", async () => {
+    const first = await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Locked Laptop",
+      platform: "linux",
+    });
+    const second = await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Available Laptop",
+      platform: "linux",
+    });
+
+    let approval: Promise<unknown> | undefined;
+    await db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.deviceEnrollments.id })
+        .from(schema.deviceEnrollments)
+        .where(eq(schema.deviceEnrollments.id, first.id))
+        .for("update")
+        .limit(1);
+
+      const pendingApproval = approveEnrollment(OWNER, second.code, GB);
+      approval = pendingApproval;
+      const result = await Promise.race([
+        pendingApproval.then(() => "approved"),
+        new Promise<string>((resolve) => setTimeout(() => resolve("timed-out"), 750)),
+      ]);
+      expect(result).toBe("approved");
+    });
+
+    await approval;
+  });
+
+  it("serializes approval and rejection of the same code without corrupting state", async () => {
+    const enrollment = await requestEnrollment({
+      publicKey: generateDeviceKeyPair().publicKey,
+      deviceName: "Contended Laptop",
+      platform: "linux",
+    });
+
+    const results = await Promise.allSettled([
+      approveEnrollment(OWNER, enrollment.code, GB),
+      rejectEnrollment(OWNER, enrollment.code),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+
+    const [row] = await db
+      .select({ status: schema.deviceEnrollments.status })
+      .from(schema.deviceEnrollments)
+      .where(eq(schema.deviceEnrollments.id, enrollment.id));
+    const devices = await db.select().from(schema.devices);
+    if (row?.status === "consumed") {
+      expect(devices).toHaveLength(1);
+    } else {
+      expect(row?.status).toBe("rejected");
+      expect(devices).toHaveLength(0);
+    }
+  });
+
   it("refuses to enroll a public key that already belongs to a device", async () => {
     const { keys } = await enrollDevice(OWNER, "Desktop");
 
@@ -392,6 +509,27 @@ describe("vault summary", () => {
     expect(summary.rawCapacityBytes).toBe(1500 * GB);
     expect(summary.onlineCapacityBytes).toBe(1000 * GB);
     expect(summary.onlineDeviceCount).toBe(1);
+  });
+
+  it("excludes a device with a stale heartbeat without losing its raw capacity", async () => {
+    const stale = await enrollDevice(OWNER, "Old Laptop", 1000 * GB);
+    const current = await enrollDevice(OWNER, "Mini PC", 500 * GB);
+    await recordHeartbeat(stale.deviceId, { usedBytes: 0 });
+    await recordHeartbeat(current.deviceId, { usedBytes: 0 });
+
+    // Keep the second device reachable while the first device's last heartbeat
+    // ages past the same liveness window used by listDevices.
+    vi.setSystemTime(Date.now() + 5 * 60 * 1000);
+    await recordHeartbeat(current.deviceId, { usedBytes: 0 });
+
+    const summary = await getVaultSummary(OWNER);
+
+    expect(summary).toMatchObject({
+      rawCapacityBytes: 1500 * GB,
+      onlineCapacityBytes: 500 * GB,
+      deviceCount: 2,
+      onlineDeviceCount: 1,
+    });
   });
 
   it("reports an empty vault rather than failing", async () => {

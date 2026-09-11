@@ -102,6 +102,40 @@ describe("enrollment over HTTP", () => {
     expect(res.body.data.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   });
 
+  it("throttles unauthenticated enrollment creation from one peer", async () => {
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 11; attempt += 1) {
+      const keys = generateDeviceKeyPair();
+      const res = await request(app)
+        .post("/agent/enrollments")
+        .send({ publicKey: keys.publicKey, deviceName: `Desktop ${attempt}`, platform: "linux" });
+      statuses.push(res.status);
+    }
+
+    expect(statuses.slice(0, 10)).toEqual(Array.from({ length: 10 }, () => 201));
+    expect(statuses[10]).toBe(429);
+  });
+
+  it("uses the gateway-owned client key to isolate enrollment throttle buckets", async () => {
+    // This header is trusted only because the production gateway removes and
+    // rewrites it on /agent/**; the control plane is not a public edge.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const keys = generateDeviceKeyPair();
+      await request(app)
+        .post("/agent/enrollments")
+        .set("X-Benzene-Client-Ip", "198.51.100.10")
+        .send({ publicKey: keys.publicKey, deviceName: `A ${attempt}`, platform: "linux" })
+        .expect(201);
+    }
+
+    const keys = generateDeviceKeyPair();
+    await request(app)
+      .post("/agent/enrollments")
+      .set("X-Benzene-Client-Ip", "198.51.100.11")
+      .send({ publicKey: keys.publicKey, deviceName: "B", platform: "linux" })
+      .expect(201);
+  });
+
   it("rejects an enrollment with a non-Ed25519 key", async () => {
     await request(app)
       .post("/agent/enrollments")

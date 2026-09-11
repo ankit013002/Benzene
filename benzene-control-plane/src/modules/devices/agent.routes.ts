@@ -21,6 +21,7 @@ import {
   recordHeartbeat,
   requestEnrollment,
 } from "./devices.service.js";
+import { enrollmentCreationThrottle } from "./enrollmentThrottle.js";
 
 /**
  * The node agent API.
@@ -69,6 +70,7 @@ function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
 
 router.post(
   "/enrollments",
+  enrollmentCreationThrottle,
   asyncHandler(async (req, res) => {
     const enrollment = await requestEnrollment(parse(enrollmentRequestSchema, req.body));
     res.status(201).json({ data: enrollment });

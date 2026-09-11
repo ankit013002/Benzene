@@ -11,6 +11,9 @@ function makeConfig(): AppConfig {
     storageDriver: "s3",
     maxUploadBytes: 5 * 1024 * 1024 * 1024,
     presignTtlSeconds: 900,
+    enrollmentCodeTtlSeconds: 600,
+    enrollmentRateLimitMax: 10,
+    enrollmentRateLimitWindowSeconds: 60,
     s3: {
       bucket: "benzene-test-bucket",
       region: "us-east-1",

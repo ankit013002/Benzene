@@ -3,6 +3,7 @@ import {
   bigint,
   boolean,
   index,
+  integer,
   pgTable,
   text,
   timestamp,
@@ -208,6 +209,21 @@ export const deviceEnrollments = pgTable(
     uniqueIndex("enrollments_code_idx").on(table.code),
     index("enrollments_status_idx").on(table.status, table.expiresAt),
   ]
+);
+
+/**
+ * Database-backed throttle state for unauthenticated enrollment creation.
+ * Keeping the counter in PostgreSQL makes the limit hold across control-plane
+ * instances instead of silently becoming per-process state.
+ */
+export const enrollmentCreationAttempts = pgTable(
+  "enrollment_creation_attempts",
+  {
+    clientKey: text("client_key").primaryKey(),
+    windowStartedAt: timestamp("window_started_at", { withTimezone: true }).notNull(),
+    attemptCount: integer("attempt_count").notNull().default(0),
+  },
+  (table) => [index("enrollment_creation_attempts_window_idx").on(table.windowStartedAt)]
 );
 
 /**
