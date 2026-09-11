@@ -9,6 +9,7 @@ import * as schema from "../../db/schema.js";
 import { setupTestDb, teardownTestDb, truncateAll } from "../../test/postgres.js";
 import {
   approveEnrollment,
+  beginDeviceRemoval,
   recordHeartbeat,
   requestEnrollment,
 } from "../devices/devices.service.js";
@@ -150,6 +151,103 @@ describe("whole-file repair assignments", () => {
       expect.arrayContaining([source, retryTarget])
     );
     expect(rows.some((row) => row.deviceId === abandonedTarget)).toBe(false);
+  });
+
+  it("treats a draining copy as leaving and repairs it from that device", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070");
+    const objectHash = hashOf("draining source");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 15, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 15 });
+
+    await expect(beginDeviceRemoval(OWNER, source)).resolves.toMatchObject({
+      status: "draining",
+    });
+    const assignment = await pollRepairForDevice(target);
+
+    expect(assignment).toMatchObject({
+      objectHash,
+      source: { deviceId: source },
+    });
+    expect(
+      await db
+        .select()
+        .from(schema.replicas)
+        .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target)))
+    ).toHaveLength(1);
+  });
+
+  it("blocks removal when no online target can restore protection", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    await onlineDevice("full-target", "http://192.168.1.11:7070", 10 * GB, 10 * GB);
+    const objectHash = hashOf("cannot drain");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 14, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 14 });
+
+    await expect(beginDeviceRemoval(OWNER, source)).rejects.toThrow(
+      /Insufficient capacity/
+    );
+    const [device] = await db
+      .select({ status: schema.devices.status })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, source));
+    expect(device?.status).toBe("online");
+  });
+
+  it("blocks removal when individual targets fit but cumulative capacity does not", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    await onlineDevice("small-target", "http://192.168.1.11:7070", 0, 14);
+    const firstHash = hashOf("first object");
+    const secondHash = hashOf("second object");
+    for (const objectHash of [firstHash, secondHash]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 14, deviceIds: [source] });
+      await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 14 });
+    }
+
+    await expect(beginDeviceRemoval(OWNER, source)).rejects.toThrow(
+      /Insufficient capacity/
+    );
+  });
+
+  it("counts existing placing reservations against removal capacity", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070", 0, 14);
+    await onlineDevice("backup", "http://192.168.1.12:7070", 0, 14);
+    const existingHash = hashOf("existing placement");
+    const leavingHash = hashOf("leaving placement");
+    await reservePlacement(OWNER, { objectHash: existingHash, sizeBytes: 14, deviceIds: [target] });
+    await reservePlacement(OWNER, { objectHash: leavingHash, sizeBytes: 14, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash: leavingHash, deviceId: source, sizeBytes: 14 });
+
+    await expect(beginDeviceRemoval(OWNER, source)).rejects.toThrow(
+      /Insufficient capacity/
+    );
+  });
+
+  it("does not assign a second repair while a target has no free space left", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070", 0, 14);
+    const [queuedHash, reservedHash] = [hashOf("repair one"), hashOf("repair two")].sort();
+    for (const objectHash of [queuedHash, reservedHash]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 14, deviceIds: [source] });
+      await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 14 });
+    }
+    // Keep the higher-sorted object in flight so polling the lower one must
+    // account for this active reservation before creating another target row.
+    await reservePlacement(OWNER, { objectHash: reservedHash, sizeBytes: 14, deviceIds: [target] });
+
+    // The poll may retry the existing durable reservation. It must not create
+    // a second reservation for the queued object while the target is full.
+    await expect(pollRepairForDevice(target)).resolves.toMatchObject({
+      objectHash: reservedHash,
+    });
+    const targetRows = await db
+      .select()
+      .from(schema.replicas)
+      .where(eq(schema.replicas.deviceId, target));
+    expect(targetRows).toHaveLength(1);
+    expect(targetRows[0]?.objectHash).toBe(reservedHash);
   });
 
   it("does not assign a corrupt source", async () => {

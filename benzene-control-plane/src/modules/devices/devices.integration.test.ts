@@ -19,6 +19,7 @@ import {
   requestEnrollment,
   setAllocation,
 } from "./devices.service.js";
+import { confirmReplica, reservePlacement, setPolicy } from "../placement/placement.service.js";
 
 const OWNER = "auth|owner-1";
 const OTHER_OWNER = "auth|owner-2";
@@ -394,8 +395,8 @@ describe("vault isolation", () => {
 });
 
 describe("device removal", () => {
-  // Marked draining rather than deleted: replicas must move first, and that
-  // machinery does not exist yet.
+  // Marked draining rather than deleted: repair moves replicas first, while
+  // erase/GC transport is intentionally still outside this bounded slice.
   it("marks a device draining rather than deleting it", async () => {
     const { deviceId } = await enrollDevice(OWNER, "Old PC");
 
@@ -410,5 +411,35 @@ describe("device removal", () => {
     await beginDeviceRemoval(OWNER, deviceId);
 
     expect((await getVaultSummary(OWNER)).rawCapacityBytes).toBe(500 * GB);
+  });
+
+  it("reports when protection is restored and the draining device is ready to disconnect", async () => {
+    const source = await enrollDevice(OWNER, "Old PC");
+    const target = await enrollDevice(OWNER, "Replacement");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    await recordHeartbeat(source.deviceId, { advertisedUrl: "http://127.0.0.1:7071" });
+    await recordHeartbeat(target.deviceId, { advertisedUrl: "http://127.0.0.1:7072" });
+    const objectHash = "a".repeat(64);
+
+    await reservePlacement(OWNER, {
+      objectHash,
+      sizeBytes: 10,
+      deviceIds: [source.deviceId],
+    });
+    await confirmReplica(OWNER, { objectHash, deviceId: source.deviceId, sizeBytes: 10 });
+
+    await beginDeviceRemoval(OWNER, source.deviceId);
+    expect((await listDevices(OWNER)).find((device) => device.id === source.deviceId))
+      .toMatchObject({ status: "draining", removalReady: false });
+
+    await reservePlacement(OWNER, {
+      objectHash,
+      sizeBytes: 10,
+      deviceIds: [target.deviceId],
+    });
+    await confirmReplica(OWNER, { objectHash, deviceId: target.deviceId, sizeBytes: 10 });
+
+    expect((await listDevices(OWNER)).find((device) => device.id === source.deviceId))
+      .toMatchObject({ status: "draining", removalReady: true });
   });
 });

@@ -271,6 +271,72 @@ describe("reserving and confirming", () => {
     ).toHaveLength(1);
   });
 
+  it("reopens a failed replica row instead of issuing a reservation that conflicts away", async () => {
+    const a = await onlineDevice(OWNER, "a", 10);
+    const hash = hashOf("retry failed replica");
+
+    await reservePlacement(OWNER, { objectHash: hash, sizeBytes: 10, deviceIds: [a] });
+    await db
+      .update(schema.replicas)
+      .set({ status: "corrupt", verifiedAt: new Date() })
+      .where(eq(schema.replicas.objectHash, hash));
+
+    // A failed row is not an idempotent reservation: rewriting it must still
+    // fit within the allocation reported by the device.
+    await recordHeartbeat(a, { usedBytes: 10 });
+    await expect(
+      reservePlacement(OWNER, { objectHash: hash, sizeBytes: 10, deviceIds: [a] })
+    ).rejects.toThrow(/Insufficient capacity/);
+    const [blocked] = await db
+      .select()
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, hash));
+    expect(blocked).toMatchObject({ status: "corrupt", sizeBytes: 10 });
+
+    await recordHeartbeat(a, { usedBytes: 0 });
+
+    const retried = await reservePlacement(OWNER, {
+      objectHash: hash,
+      sizeBytes: 10,
+      deviceIds: [a],
+    });
+
+    expect(retried).toHaveLength(1);
+    expect(retried[0]).toMatchObject({ objectHash: hash, deviceId: a, status: "placing" });
+    const [row] = await db
+      .select()
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, hash));
+    expect(row).toMatchObject({ status: "placing", sizeBytes: 10, verifiedAt: null });
+  });
+
+  it("does not overbook one device across concurrent object reservations", async () => {
+    const a = await onlineDevice(OWNER, "a", 14);
+    const first = hashOf("first reservation");
+    const second = hashOf("second reservation");
+
+    const results = await Promise.allSettled([
+      reservePlacement(OWNER, { objectHash: first, sizeBytes: 14, deviceIds: [a] }),
+      reservePlacement(OWNER, { objectHash: second, sizeBytes: 14, deviceIds: [a] }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(await db.select().from(schema.replicas)).toHaveLength(1);
+  });
+
+  it("counts an active placement against later placement capacity", async () => {
+    const a = await onlineDevice(OWNER, "a", 14);
+    const first = hashOf("active reservation");
+    const second = hashOf("later reservation");
+
+    await reservePlacement(OWNER, { objectHash: first, sizeBytes: 14, deviceIds: [a] });
+    const decision = await decidePlacement(OWNER, { objectHash: second, sizeBytes: 14 });
+
+    expect(decision.deviceIds).toEqual([]);
+    expect(decision.reason).toBe("insufficient_capacity");
+  });
+
   it("refuses to reserve a device from another vault", async () => {
     const foreign = await onlineDevice(OTHER_OWNER, "theirs");
 
@@ -281,6 +347,33 @@ describe("reserving and confirming", () => {
         deviceIds: [foreign],
       })
     ).rejects.toThrow(/not part of this vault/);
+  });
+
+  it("does not reserve a device after it starts draining", async () => {
+    const draining = await onlineDevice(OWNER, "retiring");
+    await beginDeviceRemoval(OWNER, draining);
+
+    await expect(
+      reservePlacement(OWNER, {
+        objectHash: hashOf("stale plan"),
+        sizeBytes: 10,
+        deviceIds: [draining],
+      })
+    ).rejects.toThrow(/no longer accepting placements/);
+    expect(await db.select().from(schema.replicas)).toEqual([]);
+  });
+
+  it("requires an online reachable device when a transfer reservation is requested", async () => {
+    const device = await onlineDevice(OWNER, "unreachable");
+
+    await expect(
+      reservePlacement(
+        OWNER,
+        { objectHash: hashOf("unreachable reservation"), sizeBytes: 10, deviceIds: [device] },
+        { requireReachable: true }
+      )
+    ).rejects.toThrow(/cannot receive transfers/);
+    expect(await db.select().from(schema.replicas)).toEqual([]);
   });
 
   it("refuses to confirm a replica that was never reserved", async () => {

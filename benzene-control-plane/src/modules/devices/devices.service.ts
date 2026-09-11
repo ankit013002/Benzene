@@ -1,13 +1,16 @@
 import { randomBytes } from "node:crypto";
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, lt, sql } from "drizzle-orm";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
 import {
+  REPLICAS_FOR_MODE,
   deviceEnrollments,
   deviceStorageAllocations,
   devices,
+  replicas,
+  storagePolicies,
   vaults,
   type Device,
   type DeviceEnrollment,
@@ -260,6 +263,8 @@ export interface DeviceView {
   usedBytes: number;
   lastSeenAt: Date | null;
   appVersion: string | null;
+  /** True when required healthy copies no longer depend on this draining node. */
+  removalReady: boolean;
 }
 
 /**
@@ -276,6 +281,7 @@ export async function listDevices(ownerId: string): Promise<DeviceView[]> {
   const rows = await db()
     .select({
       id: devices.id,
+      vaultId: devices.vaultId,
       name: devices.name,
       platform: devices.platform,
       status: devices.status,
@@ -291,6 +297,16 @@ export async function listDevices(ownerId: string): Promise<DeviceView[]> {
     )
     .where(and(eq(devices.vaultId, vault.id), sql`${devices.status} <> 'removed'`));
 
+  const readyToDisconnect = new Set(
+    await Promise.all(
+      rows
+        .filter((row) => row.status === "draining")
+        .map(async (row) =>
+          (await isReadyToDisconnect(row.vaultId, row.id)) ? row.id : null
+        )
+    )
+  );
+
   return rows.map((row) => ({
     id: row.id,
     name: row.name,
@@ -300,7 +316,58 @@ export async function listDevices(ownerId: string): Promise<DeviceView[]> {
     usedBytes: Number(row.usedBytes ?? 0),
     lastSeenAt: row.lastSeenAt,
     appVersion: row.appVersion,
+    removalReady: readyToDisconnect.has(row.id),
   }));
+}
+
+/**
+ * A draining device is only ready to disconnect once every object it held has
+ * the policy's healthy copies elsewhere. There is no erase/GC transport yet,
+ * so this is deliberately a readiness signal rather than a destructive state
+ * transition.
+ */
+async function isReadyToDisconnect(vaultId: string, deviceId: string): Promise<boolean> {
+  const [policy] = await db()
+    .select({ mode: storagePolicies.mode })
+    .from(storagePolicies)
+    .where(eq(storagePolicies.vaultId, vaultId))
+    .limit(1);
+  const desiredReplicas = REPLICAS_FOR_MODE[policy?.mode as keyof typeof REPLICAS_FOR_MODE] ?? 2;
+
+  const rows = await db()
+    .select({
+      objectHash: replicas.objectHash,
+      deviceId: replicas.deviceId,
+      status: replicas.status,
+      deviceStatus: devices.status,
+    })
+    .from(replicas)
+    .innerJoin(devices, eq(devices.id, replicas.deviceId))
+    .where(eq(replicas.vaultId, vaultId));
+
+  const objectHashes = new Set(
+    rows
+      .filter(
+        (row) =>
+          row.deviceId === deviceId &&
+          row.status !== "corrupt" &&
+          row.status !== "lost"
+      )
+      .map((row) => row.objectHash)
+  );
+
+  for (const objectHash of objectHashes) {
+    const healthyElsewhere = rows.filter(
+      (row) =>
+        row.objectHash === objectHash &&
+        row.deviceId !== deviceId &&
+        row.status === "healthy" &&
+        row.deviceStatus !== "draining" &&
+        row.deviceStatus !== "removed"
+    ).length;
+    if (healthyElsewhere < desiredReplicas) return false;
+  }
+  return true;
 }
 
 /** Terminal and in-progress states are authoritative; only liveness is derived. */
@@ -414,15 +481,17 @@ export async function setAllocation(
 /**
  * Begins retiring a device.
  *
- * Marked `draining` rather than deleted: its replicas must be recreated
- * elsewhere before the device can safely leave, and that work does not exist
- * yet. Removing the row outright would silently drop data.
+ * Marked `draining` rather than deleted: repair agents recreate its replicas
+ * elsewhere before the device can safely disconnect. Removing the row outright
+ * would silently drop metadata, and no erase/GC transport exists yet.
  */
 export async function beginDeviceRemoval(
   ownerId: string,
   deviceId: string
 ): Promise<DeviceView> {
   const vault = await ensureVaultForOwner(ownerId);
+
+  await ensureRemovalCapacity(vault.id, deviceId);
 
   const [updated] = await db()
     .update(devices)
@@ -436,6 +505,172 @@ export async function beginDeviceRemoval(
   const view = all.find((d) => d.id === deviceId);
   if (!view) throw AppError.notFound("Device not found");
   return view;
+}
+
+/**
+ * Refuses to start draining when the remaining online devices cannot take the
+ * copies that would leave with this device. This is intentionally a
+ * conservative whole-file check; repair agents will do the actual movement.
+ */
+async function ensureRemovalCapacity(vaultId: string, deviceId: string): Promise<void> {
+  const [device] = await db()
+    .select({ status: devices.status })
+    .from(devices)
+    .where(and(eq(devices.id, deviceId), eq(devices.vaultId, vaultId)))
+    .limit(1);
+  if (!device || device.status === "draining") return;
+
+  const [policy] = await db()
+    .select({ mode: storagePolicies.mode })
+    .from(storagePolicies)
+    .where(eq(storagePolicies.vaultId, vaultId))
+    .limit(1);
+  const desiredReplicas = REPLICAS_FOR_MODE[policy?.mode as keyof typeof REPLICAS_FOR_MODE] ?? 2;
+
+  // A grant has expired by this point, so an abandoned placement must not
+  // reserve capacity forever or prevent a safe drain from starting.
+  await db()
+    .delete(replicas)
+    .where(
+      and(
+        eq(replicas.vaultId, vaultId),
+        eq(replicas.status, "placing"),
+        lt(
+          replicas.updatedAt,
+          new Date(Date.now() - config().transferGrantTtlSeconds * 1000)
+        )
+      )
+    );
+
+  const replicaRows = await db()
+    .select({
+      objectHash: replicas.objectHash,
+      deviceId: replicas.deviceId,
+      sizeBytes: replicas.sizeBytes,
+      replicaStatus: replicas.status,
+      deviceStatus: devices.status,
+    })
+    .from(replicas)
+    .innerJoin(devices, eq(devices.id, replicas.deviceId))
+    .where(eq(replicas.vaultId, vaultId));
+
+  const leavingReplicas = replicaRows.filter(
+    (row) => row.deviceId === deviceId && row.replicaStatus === "healthy"
+  );
+  if (leavingReplicas.length === 0) return;
+
+  const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
+  const candidateRows = await db()
+    .select({
+      id: devices.id,
+      status: devices.status,
+      lastSeenAt: devices.lastSeenAt,
+      allocatedBytes: deviceStorageAllocations.allocatedBytes,
+      usedBytes: deviceStorageAllocations.usedBytes,
+    })
+    .from(devices)
+    .leftJoin(deviceStorageAllocations, eq(deviceStorageAllocations.deviceId, devices.id))
+    .where(and(eq(devices.vaultId, vaultId), sql`${devices.id} <> ${deviceId}`));
+
+  const remainingBytes = new Map(
+    candidateRows.map((candidate) => [
+      candidate.id,
+      Math.max(
+        0,
+        Number(candidate.allocatedBytes ?? 0) -
+          Number(candidate.usedBytes ?? 0) -
+          replicaRows
+            .filter(
+              (row) => row.deviceId === candidate.id && row.replicaStatus === "placing"
+            )
+            .reduce((total, row) => total + Number(row.sizeBytes), 0)
+      ),
+    ])
+  );
+
+  // Place the most constrained objects first, consuming a candidate's
+  // remaining bytes as we go. This is conservative but prevents two separate
+  // objects from each believing they can consume the same last free gigabyte.
+  const requirements = leavingReplicas
+    .map((leaving) => {
+      const activeElsewhere = replicaRows.filter(
+        (row) =>
+          row.objectHash === leaving.objectHash &&
+          row.deviceId !== deviceId &&
+          row.replicaStatus === "healthy" &&
+          row.deviceStatus !== "draining" &&
+          row.deviceStatus !== "removed"
+      ).length;
+      const required = Math.max(0, desiredReplicas - activeElsewhere);
+      const occupiedDeviceIds = new Set(
+        replicaRows
+          .filter(
+            (row) =>
+              row.objectHash === leaving.objectHash &&
+              row.replicaStatus !== "corrupt" &&
+              row.replicaStatus !== "lost"
+          )
+          .map((row) => row.deviceId)
+      );
+      const eligible = candidateRows.filter(
+        (candidate) =>
+          !occupiedDeviceIds.has(candidate.id) &&
+          deriveStatus(candidate.status, candidate.lastSeenAt, offlineAfterMs) === "online" &&
+          (remainingBytes.get(candidate.id) ?? 0) >= Number(leaving.sizeBytes)
+      );
+      return { leaving, required, eligibleCount: eligible.length };
+    })
+    .filter((item) => item.required > 0)
+    .sort((a, b) => a.eligibleCount - b.eligibleCount);
+
+  const blocked = [];
+  for (const requirement of requirements) {
+    const { leaving, required } = requirement;
+    const occupiedDeviceIds = new Set(
+      replicaRows
+        .filter(
+          (row) =>
+            row.objectHash === leaving.objectHash &&
+            row.replicaStatus !== "corrupt" &&
+            row.replicaStatus !== "lost"
+        )
+        .map((row) => row.deviceId)
+    );
+    const targets = candidateRows
+      .filter(
+        (candidate) =>
+          !occupiedDeviceIds.has(candidate.id) &&
+          deriveStatus(candidate.status, candidate.lastSeenAt, offlineAfterMs) === "online" &&
+          (remainingBytes.get(candidate.id) ?? 0) >= Number(leaving.sizeBytes)
+      )
+      .sort(
+        (a, b) =>
+          (remainingBytes.get(b.id) ?? 0) - (remainingBytes.get(a.id) ?? 0)
+      )
+      .slice(0, required);
+
+    if (targets.length < required) {
+      blocked.push({
+        objectHash: leaving.objectHash,
+        required,
+        availableTargets: targets.length,
+      });
+      continue;
+    }
+    for (const target of targets) {
+      remainingBytes.set(
+        target.id,
+        (remainingBytes.get(target.id) ?? 0) - Number(leaving.sizeBytes)
+      );
+    }
+  }
+
+  if (blocked.length > 0) {
+    throw AppError.conflict(
+      "Insufficient capacity to protect all data before removing this device",
+      { reason: "insufficient_capacity", objects: blocked }
+    );
+  }
 }
 
 /** Looks up a device by its public key, for signature-authenticated requests. */

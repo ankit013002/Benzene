@@ -13,6 +13,7 @@ interface Device {
   usedBytes: number;
   lastSeenAt: string | null;
   appVersion: string | null;
+  removalReady: boolean;
 }
 
 interface PendingEnrollment {
@@ -119,7 +120,10 @@ export default function DevicesSection() {
     setNotice(null);
     try {
       const res = await fetch(`/api/devices/${device.id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Could not start removing that device");
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => ({}))) as { message?: string };
+        throw new Error(payload.message ?? "Could not start removing that device");
+      }
       // Deliberately not "removed": data has to move off it first.
       setNotice(`${device.name} is being removed. Its data is moving elsewhere first.`);
       await load();
@@ -217,9 +221,16 @@ export default function DevicesSection() {
                     <span className="text-sm font-medium">{device.name}</span>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {STATUS_LABEL[device.status] ?? device.status} ·{" "}
+                    {device.status === "draining" && device.removalReady
+                      ? "Ready to disconnect"
+                      : STATUS_LABEL[device.status] ?? device.status} ·{" "}
                     {formatLastSeen(device.lastSeenAt)}
                   </p>
+                  {device.status === "draining" && device.removalReady && (
+                    <p className="text-xs text-muted-foreground">
+                      Protection is restored; you can disconnect this computer.
+                    </p>
+                  )}
                 </div>
 
                 <div className="text-xs text-muted-foreground">
@@ -231,7 +242,11 @@ export default function DevicesSection() {
                   disabled={busy || device.status === "draining"}
                   className="rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-40"
                 >
-                  {device.status === "draining" ? "Removing…" : "Remove"}
+                  {device.status === "draining"
+                    ? device.removalReady
+                      ? "Ready to disconnect"
+                      : "Removing…"
+                    : "Remove"}
                 </button>
               </li>
             ))}

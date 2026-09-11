@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
@@ -90,7 +90,13 @@ async function loadCandidates(vaultId: string): Promise<PlacementCandidate[]> {
       lastSeenAt: devices.lastSeenAt,
       advertisedUrl: devices.advertisedUrl,
       allocatedBytes: deviceStorageAllocations.allocatedBytes,
-      usedBytes: deviceStorageAllocations.usedBytes,
+      // Heartbeats lag behind a reservation. Include in-flight whole-file
+      // work so two uploads cannot both spend the same reported free space.
+      usedBytes: sql<number>`${deviceStorageAllocations.usedBytes} + coalesce((
+        select sum(${replicas.sizeBytes}) from ${replicas}
+        where ${replicas.deviceId} = ${devices.id}
+          and ${replicas.status} = 'placing'
+      ), 0)`,
       replicaCount: sql<number>`(
         select count(*)::int from ${replicas}
         where ${replicas.deviceId} = ${devices.id}
@@ -161,13 +167,16 @@ export async function decidePlacement(
   const held = await db()
     .select({ deviceId: replicas.deviceId })
     .from(replicas)
+    .innerJoin(devices, eq(devices.id, replicas.deviceId))
     .where(
       and(
         eq(replicas.vaultId, vault.id),
         eq(replicas.objectHash, input.objectHash),
         // A reservation is not possession. Only a device-confirmed copy may
-        // satisfy the policy or be reported as already held.
-        eq(replicas.status, "healthy")
+        // satisfy the policy or be reported as already held. A draining copy
+        // is deliberately excluded because it is scheduled to leave.
+        eq(replicas.status, "healthy"),
+        sql`${devices.status} not in ('draining', 'removed')`
       )
     );
 
@@ -204,35 +213,137 @@ export async function reservePlacement(
   const vault = await ensureVaultForOwner(ownerId);
   if (input.deviceIds.length === 0) return [];
 
-  const owned = await db()
-    .select({ id: devices.id, advertisedUrl: devices.advertisedUrl })
-    .from(devices)
-    .where(and(eq(devices.vaultId, vault.id), inArray(devices.id, input.deviceIds)));
+  return db().transaction(async (tx) => {
+    // Re-check lifecycle and liveness under row locks. A caller may have
+    // received a plan before the owner started draining a device; ownership
+    // alone must never make that stale plan reservable.
+    const lockedDevices = await tx
+      .select({
+        id: devices.id,
+        status: devices.status,
+        lastSeenAt: devices.lastSeenAt,
+        advertisedUrl: devices.advertisedUrl,
+      })
+      .from(devices)
+      .where(and(eq(devices.vaultId, vault.id), inArray(devices.id, input.deviceIds)))
+      .orderBy(asc(devices.id))
+      .for("update");
+    if (lockedDevices.length !== input.deviceIds.length) {
+      throw AppError.badRequest("One or more devices are not part of this vault");
+    }
+    if (lockedDevices.some((device) => device.status === "draining" || device.status === "removed")) {
+      throw AppError.conflict("One or more devices are no longer accepting placements");
+    }
+    if (options.requireReachable) {
+      const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
+      const unreachable = lockedDevices.some(
+        (device) =>
+          !device.advertisedUrl ||
+          deriveStatus(device.status, device.lastSeenAt, offlineAfterMs) !== "online"
+      );
+      if (unreachable) throw AppError.badRequest("One or more devices cannot receive transfers");
+    }
 
-  if (owned.length !== input.deviceIds.length) {
-    throw AppError.badRequest("One or more devices are not part of this vault");
-  }
-  if (options.requireReachable && owned.some((device) => !device.advertisedUrl)) {
-    throw AppError.badRequest("One or more devices cannot receive transfers");
-  }
+    // Lock allocations in stable order. The row lock serialises capacity
+    // checks for different objects while the unique index makes same-object
+    // retries idempotent.
+    const lockedAllocations = await tx
+      .select()
+      .from(deviceStorageAllocations)
+      .where(inArray(deviceStorageAllocations.deviceId, [...input.deviceIds].sort()))
+      .orderBy(asc(deviceStorageAllocations.deviceId))
+      .for("update");
+    const allocationByDevice = new Map(
+      lockedAllocations.map((allocation) => [allocation.deviceId, allocation])
+    );
+    const placingRows = await tx
+      .select({ deviceId: replicas.deviceId, sizeBytes: replicas.sizeBytes })
+      .from(replicas)
+      .where(
+        and(
+          eq(replicas.vaultId, vault.id),
+          inArray(replicas.deviceId, input.deviceIds),
+          eq(replicas.status, "placing")
+        )
+      );
+    const placingByDevice = new Map<string, number>();
+    for (const row of placingRows) {
+      placingByDevice.set(
+        row.deviceId,
+        (placingByDevice.get(row.deviceId) ?? 0) + Number(row.sizeBytes)
+      );
+    }
+    const existingRows = await tx
+      .select({ id: replicas.id, deviceId: replicas.deviceId, status: replicas.status })
+      .from(replicas)
+      .where(
+        and(
+          eq(replicas.vaultId, vault.id),
+          eq(replicas.objectHash, input.objectHash),
+          inArray(replicas.deviceId, input.deviceIds)
+        )
+      );
+    const existingDevices = new Set(existingRows.map((row) => row.deviceId));
+    const reusableExistingDevices = new Set(
+      existingRows
+        .filter((row) => row.status === "healthy" || row.status === "placing")
+        .map((row) => row.deviceId)
+    );
 
-  return db()
-    .insert(replicas)
-    .values(
-      input.deviceIds.map((deviceId) => ({
-        vaultId: vault.id,
-        objectHash: input.objectHash,
-        deviceId,
-        sizeBytes: input.sizeBytes,
-        status: "placing" as const,
-      }))
-    )
-    // A concurrent placement may already have reserved the same pair; the
-    // unique index is what actually enforces one replica per device.
-    .onConflictDoNothing({
-      target: [replicas.vaultId, replicas.objectHash, replicas.deviceId],
-    })
-    .returning();
+    for (const deviceId of input.deviceIds) {
+      const allocation = allocationByDevice.get(deviceId);
+      if (!allocation) throw AppError.badRequest("Device has no storage allocation");
+      const availableBytes = Math.max(
+        0,
+        Number(allocation.allocatedBytes) -
+          Number(allocation.usedBytes) -
+          (placingByDevice.get(deviceId) ?? 0)
+      );
+      if (!reusableExistingDevices.has(deviceId) && input.sizeBytes > availableBytes) {
+        throw AppError.conflict("Insufficient capacity for the requested placement", {
+          reason: "insufficient_capacity",
+        });
+      }
+    }
+
+    const reopened: Replica[] = [];
+    for (const row of existingRows) {
+      if (row.status === "healthy" || row.status === "placing") continue;
+      const [updated] = await tx
+        .update(replicas)
+        .set({
+          status: "placing",
+          sizeBytes: input.sizeBytes,
+          verifiedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(replicas.id, row.id))
+        .returning();
+      if (updated) reopened.push(updated);
+    }
+
+    const newDeviceIds = input.deviceIds.filter((deviceId) => !existingDevices.has(deviceId));
+    if (newDeviceIds.length === 0) return reopened;
+
+    const inserted = await tx
+      .insert(replicas)
+      .values(
+        newDeviceIds.map((deviceId) => ({
+          vaultId: vault.id,
+          objectHash: input.objectHash,
+          deviceId,
+          sizeBytes: input.sizeBytes,
+          status: "placing" as const,
+        }))
+      )
+      // A concurrent placement may already have reserved the same pair; the
+      // unique index is what actually enforces one replica per device.
+      .onConflictDoNothing({
+        target: [replicas.vaultId, replicas.objectHash, replicas.deviceId],
+      })
+      .returning();
+    return [...reopened, ...inserted];
+  });
 }
 
 /** Marks a replica healthy once the device confirms it holds the bytes. */
@@ -363,8 +474,12 @@ export async function getObjectProtection(
   // A replica on an offline device still counts as healthy: architecture §41
   // is explicit that offline is not the same as lost, and treating it as lost
   // would trigger pointless repairs every time a laptop closes.
-  const healthy = rows.filter((row) => row.status === "healthy");
-  const placing = rows.filter((row) => row.status === "placing");
+  const healthy = rows.filter(
+    (row) => row.status === "healthy" && !leavingStatus(row.deviceStatus)
+  );
+  const placing = rows.filter(
+    (row) => row.status === "placing" && !leavingStatus(row.deviceStatus)
+  );
 
   return {
     objectHash,
@@ -376,6 +491,10 @@ export async function getObjectProtection(
       .filter((row) => deriveStatus(row.deviceStatus, row.lastSeenAt, offlineAfterMs) !== "removed")
       .map((row) => row.deviceId),
   };
+}
+
+function leavingStatus(status: string): boolean {
+  return status === "draining" || status === "removed";
 }
 
 export interface VaultProtectionSummary {
@@ -405,9 +524,13 @@ export async function getVaultProtection(
   const rows = await db()
     .select({
       objectHash: replicas.objectHash,
-      healthy: sql<number>`count(*) filter (where ${replicas.status} = 'healthy')::int`,
+      healthy: sql<number>`count(*) filter (
+        where ${replicas.status} = 'healthy'
+          and ${devices.status} not in ('draining', 'removed')
+      )::int`,
     })
     .from(replicas)
+    .innerJoin(devices, eq(devices.id, replicas.deviceId))
     .where(eq(replicas.vaultId, vault.id))
     .groupBy(replicas.objectHash);
 
@@ -462,13 +585,23 @@ export async function listUnderProtectedObjects(
   const rows = await db()
     .select({
       objectHash: replicas.objectHash,
-      healthy: sql<number>`count(*) filter (where ${replicas.status} = 'healthy')::int`,
-      placing: sql<number>`count(*) filter (where ${replicas.status} = 'placing')::int`,
+      healthy: sql<number>`count(*) filter (
+        where ${replicas.status} = 'healthy'
+          and ${devices.status} not in ('draining', 'removed')
+      )::int`,
+      placing: sql<number>`count(*) filter (
+        where ${replicas.status} = 'placing'
+          and ${devices.status} not in ('draining', 'removed')
+      )::int`,
     })
     .from(replicas)
+    .innerJoin(devices, eq(devices.id, replicas.deviceId))
     .where(eq(replicas.vaultId, vault.id))
     .groupBy(replicas.objectHash)
-    .having(sql`count(*) filter (where ${replicas.status} = 'healthy') < ${desiredReplicas}`)
+    .having(sql`count(*) filter (
+      where ${replicas.status} = 'healthy'
+        and ${devices.status} not in ('draining', 'removed')
+    ) < ${desiredReplicas}`)
     .limit(limit);
 
   return rows.map((row) => ({

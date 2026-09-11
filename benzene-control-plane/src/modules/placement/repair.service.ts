@@ -98,16 +98,24 @@ export async function pollRepairForDevice(
         sql`select pg_advisory_xact_lock(hashtext(${`${target.vaultId}:${object.objectHash}`}))`
       );
 
-      const [counts] = await tx
+      const replicaRows = await tx
         .select({
-          healthy: sql<number>`count(*) filter (where ${replicas.status} = 'healthy')::int`,
-          active: sql<number>`count(*) filter (where ${replicas.status} in ('healthy', 'placing'))::int`,
+          status: replicas.status,
+          deviceStatus: devices.status,
         })
         .from(replicas)
+        .innerJoin(devices, eq(devices.id, replicas.deviceId))
         .where(
           and(eq(replicas.vaultId, target.vaultId), eq(replicas.objectHash, object.objectHash))
         );
-      if (!counts || Number(counts.healthy) >= desiredReplicas) return null;
+      const availableReplicas = replicaRows.filter(
+        (row) => row.deviceStatus !== "draining" && row.deviceStatus !== "removed"
+      );
+      const healthyCount = availableReplicas.filter((row) => row.status === "healthy").length;
+      const activeCount = availableReplicas.filter(
+        (row) => row.status === "healthy" || row.status === "placing"
+      ).length;
+      if (healthyCount >= desiredReplicas) return null;
 
       const [targetReplica] = await tx
         .select({ id: replicas.id, status: replicas.status, sizeBytes: replicas.sizeBytes })
@@ -121,7 +129,7 @@ export async function pollRepairForDevice(
         )
         .limit(1);
       if (targetReplica?.status === "healthy") return null;
-      if (Number(counts.active) >= desiredReplicas && !targetReplica) return null;
+      if (activeCount >= desiredReplicas && !targetReplica) return null;
 
       const sourceRows = await tx
         .select({
@@ -147,21 +155,49 @@ export async function pollRepairForDevice(
       const source = sourceRows.find(
         (row) =>
           Boolean(row.advertisedUrl) &&
-          deriveStatus(row.deviceStatus, row.lastSeenAt, offlineAfterMs) === "online"
+          (row.deviceStatus === "draining"
+            ? Boolean(
+                row.lastSeenAt &&
+                  Date.now() - row.lastSeenAt.getTime() <= offlineAfterMs
+              )
+            : deriveStatus(row.deviceStatus, row.lastSeenAt, offlineAfterMs) === "online")
       );
       if (!source || !source.advertisedUrl) return null;
 
       const sizeBytes = Number(targetReplica?.sizeBytes ?? source.sizeBytes);
       const [currentCapacity] = await tx
-        .select({ allocatedBytes: deviceStorageAllocations.allocatedBytes, usedBytes: deviceStorageAllocations.usedBytes })
+        .select({
+          allocatedBytes: deviceStorageAllocations.allocatedBytes,
+          usedBytes: deviceStorageAllocations.usedBytes,
+        })
         .from(deviceStorageAllocations)
         .where(eq(deviceStorageAllocations.deviceId, deviceId))
+        .for("update")
         .limit(1);
+      const [placingCapacity] = await tx
+        .select({
+          reservedBytes: sql<number>`coalesce(sum(${replicas.sizeBytes}), 0)::bigint`,
+        })
+        .from(replicas)
+        .where(
+          and(
+            eq(replicas.deviceId, deviceId),
+            eq(replicas.status, "placing"),
+            sql`${replicas.objectHash} <> ${object.objectHash}`
+          )
+        );
+      const reservedBytes = Number(placingCapacity?.reservedBytes ?? 0);
       if (
         !currentCapacity ||
         !Number.isFinite(sizeBytes) ||
         sizeBytes < 0 ||
-        sizeBytes > Math.max(0, Number(currentCapacity.allocatedBytes) - Number(currentCapacity.usedBytes))
+        sizeBytes >
+          Math.max(
+            0,
+            Number(currentCapacity.allocatedBytes) -
+              Number(currentCapacity.usedBytes) -
+              reservedBytes
+          )
       ) return null;
 
       if (targetReplica?.status === "placing") {
