@@ -1,5 +1,6 @@
 package com.nebulavault.gateway.routes.drive;
 
+import com.nebulavault.gateway.filters.ClientIpHeaderFilter;
 import com.nebulavault.gateway.filters.SessionToHeadersFilter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.route.RouteLocator;
@@ -11,7 +12,12 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class FileRoutes {
     @Bean
-    public RouteLocator customRouteLocator(RouteLocatorBuilder builder, @Value("${routes.files.uri}") String filesUri, SessionToHeadersFilter sessionFilter) {
+    public RouteLocator customRouteLocator(
+            RouteLocatorBuilder builder,
+            @Value("${routes.files.uri}") String filesUri,
+            SessionToHeadersFilter sessionFilter,
+            ClientIpHeaderFilter clientIpFilter
+    ) {
         return builder.routes()
                 .route("drive-write", r -> r
                         .path("/drive-nodes/**")
@@ -54,6 +60,7 @@ public class FileRoutes {
                 .route("node-agent", r -> r
                         .path("/agent/**")
                         .filters(f -> f
+                                .filter(clientIpFilter)
                                 .addResponseHeader("Nebula-Gateway", "Benzene"))
                         .uri(filesUri)
                 )
