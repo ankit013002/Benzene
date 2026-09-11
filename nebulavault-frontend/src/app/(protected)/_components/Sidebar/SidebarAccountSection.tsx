@@ -5,13 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAppSelector } from "@/app/store/hooks";
 import { getNormalizedSize } from "@/utils/file-system/NormalizedSize";
 import { logout } from "@/utils/auth/handlers/LogoutHandler";
-
-interface VaultSummary {
-  rawCapacityBytes: number;
-  usedBytes: number;
-  onlineDeviceCount: number;
-  deviceCount: number;
-}
+import { getVaultSummary, type VaultSummary } from "@/utils/vault";
 
 const SideBarAccountSection = () => {
   const router = useRouter();
@@ -38,10 +32,8 @@ const SideBarAccountSection = () => {
 
     const loadVault = async () => {
       try {
-        const response = await fetch("/api/vault", { cache: "no-store" });
-        if (!response.ok) throw new Error("Could not load Vault storage");
-        const payload = (await response.json()) as { data?: VaultSummary };
-        if (!cancelled) setVault(payload.data ?? null);
+        const summary = await getVaultSummary();
+        if (!cancelled) setVault(summary);
       } catch {
         if (!cancelled) setVaultLoadFailed(true);
       }
@@ -133,7 +125,8 @@ const SideBarAccountSection = () => {
               />
             </div>
             <div className="mt-1">
-              {vault.onlineDeviceCount} of {vault.deviceCount} devices online
+              {vault.onlineDeviceCount} of {vault.deviceCount}{" "}
+              {vault.deviceCount === 1 ? "device" : "devices"} online
             </div>
           </>
         ) : (

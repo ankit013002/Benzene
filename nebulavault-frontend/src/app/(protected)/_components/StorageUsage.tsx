@@ -3,15 +3,7 @@
 import React, { useEffect, useState } from "react";
 
 import { getNormalizedSize } from "@/utils/file-system/NormalizedSize";
-
-interface VaultSummary {
-  name: string;
-  rawCapacityBytes: number;
-  onlineCapacityBytes: number;
-  usedBytes: number;
-  deviceCount: number;
-  onlineDeviceCount: number;
-}
+import { getVaultSummary, type VaultSummary } from "@/utils/vault";
 
 interface ProtectionSummary {
   mode: string;
@@ -57,29 +49,36 @@ const StorageUsage = () => {
   const [vault, setVault] = useState<VaultSummary | null>(null);
   const [protection, setProtection] = useState<ProtectionSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [protectionLoadFailed, setProtectionLoadFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     const load = async (): Promise<void> => {
-      try {
-        const [vaultRes, protectionRes] = await Promise.all([
-          fetch("/api/vault"),
-          fetch("/api/protection"),
-        ]);
-        if (!vaultRes.ok) throw new Error("Could not load your vault");
+      const [vaultResult, protectionResult] = await Promise.allSettled([
+        getVaultSummary(),
+        fetch("/api/protection", { cache: "no-store" }).then(async (response) => {
+          if (!response.ok) throw new Error("Could not load protection status");
+          return (await response.json()) as { data?: ProtectionSummary };
+        }),
+      ]);
 
-        const vaultPayload = (await vaultRes.json()) as { data?: VaultSummary };
-        if (!cancelled) setVault(vaultPayload.data ?? null);
+      if (cancelled) return;
 
-        if (protectionRes.ok) {
-          const payload = (await protectionRes.json()) as { data?: ProtectionSummary };
-          if (!cancelled) setProtection(payload.data ?? null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Could not load your vault");
-        }
+      if (vaultResult.status === "fulfilled") {
+        setVault(vaultResult.value);
+      } else {
+        setError(
+          vaultResult.reason instanceof Error
+            ? vaultResult.reason.message
+            : "Could not load your vault",
+        );
+      }
+
+      if (protectionResult.status === "fulfilled") {
+        setProtection(protectionResult.value.data ?? null);
+      } else {
+        setProtectionLoadFailed(true);
       }
     };
 
@@ -93,6 +92,12 @@ const StorageUsage = () => {
   const used = vault?.usedBytes ?? 0;
   const percentUsed = capacity > 0 ? Math.min(100, (used / capacity) * 100) : 0;
   const state = protection?.state ?? "empty";
+  const protectionLabel = protectionLoadFailed
+    ? "Protection unavailable"
+    : PROTECTION_LABEL[state];
+  const protectionTone = protectionLoadFailed
+    ? "bg-muted-foreground"
+    : PROTECTION_TONE[state];
 
   return (
     <section className="rounded-2xl border border-border bg-card p-5 flex flex-col gap-4">
@@ -106,17 +111,19 @@ const StorageUsage = () => {
               ? `${vault.onlineDeviceCount} of ${vault.deviceCount} device${
                   vault.deviceCount === 1 ? "" : "s"
                 } online`
-              : "Loading…"}
+              : error
+                ? "Vault unavailable"
+                : "Loading…"}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <span
             aria-hidden
-            className={`inline-block h-2 w-2 rounded-full ${PROTECTION_TONE[state]}`}
+            className={`inline-block h-2 w-2 rounded-full ${protectionTone}`}
           />
           <span className="text-xs text-muted-foreground">
-            {PROTECTION_LABEL[state]}
+            {protectionLabel}
           </span>
         </div>
       </header>

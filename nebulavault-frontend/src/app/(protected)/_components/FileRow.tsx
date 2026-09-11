@@ -24,8 +24,8 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
 
   return (
     <>
-      <div className="flex items-center gap-2">
-        <span>{file.name}</span>
+      <div className="min-w-0 flex items-center gap-2">
+        <span className="truncate">{file.name}</span>
         {!canDownload && (
           <span className="badge badge-sm badge-warning">Uploading</span>
         )}
@@ -33,7 +33,7 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
           <span className="badge badge-sm badge-warning">Reduced protection</span>
         )}
       </div>
-      <div>
+      <div className="hidden min-w-0 truncate sm:block">
         {file.lastModified ? new Date(file.lastModified).toLocaleString() : "—"}
       </div>
       <div className="text-center">
@@ -44,7 +44,13 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
           className="dropdown dropdown-end"
           onClick={(e) => e.stopPropagation()}
         >
-          <button tabIndex={0} className="btn btn-ghost btn-sm">
+          <button
+            type="button"
+            tabIndex={0}
+            className="btn btn-ghost btn-sm"
+            aria-label={`Options for ${file.name}`}
+            aria-haspopup="menu"
+          >
             <HiOutlineDotsHorizontal />
           </button>
           <ul

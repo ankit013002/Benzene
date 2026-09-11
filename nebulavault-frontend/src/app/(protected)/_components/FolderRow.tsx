@@ -5,14 +5,22 @@ import { FolderType } from "@/types/Folder";
 
 interface FolderRowProps {
   folder: FolderType;
+  onOpen: () => void;
   onDelete: (nodeId: string) => void;
 }
 
-const FolderRow = ({ folder, onDelete }: FolderRowProps) => {
+const FolderRow = ({ folder, onOpen, onDelete }: FolderRowProps) => {
   return (
     <>
-      <div>{folder.name.replace("/", "")}</div>
-      <div>
+      <button
+        type="button"
+        className="min-w-0 truncate text-left"
+        onClick={onOpen}
+        aria-label={`Open folder ${folder.name.replace("/", "")}`}
+      >
+        {folder.name.replace("/", "")}
+      </button>
+      <div className="hidden min-w-0 truncate sm:block">
         {folder.lastModified
           ? new Date(folder.lastModified).toLocaleString()
           : "—"}
@@ -25,7 +33,13 @@ const FolderRow = ({ folder, onDelete }: FolderRowProps) => {
           className="dropdown dropdown-end"
           onClick={(e) => e.stopPropagation()}
         >
-          <button tabIndex={0} className="btn btn-ghost btn-sm ">
+          <button
+            type="button"
+            tabIndex={0}
+            className="btn btn-ghost btn-sm"
+            aria-label={`Options for ${folder.name}`}
+            aria-haspopup="menu"
+          >
             <HiOutlineDotsHorizontal />
           </button>
           <ul
