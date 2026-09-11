@@ -266,6 +266,20 @@ authorise a write. The signature is verified **before** the payload is parsed.
 
 Deliberately not a JWT — a fixed format has no `alg` field to negotiate down.
 
+### Storage accounting and repair safety
+
+Capacity admission treats the latest heartbeat's `usedBytes` as a baseline,
+then adds active `placing` reservations and replicas confirmed after the
+allocation's `usageReportedAt` watermark. Placement, repair, drain preflight
+and allocation changes use that same accounting while locking the allocation
+row, so an exact-fit reservation cannot be over-issued between heartbeats.
+
+Repair assignments bind a target reservation to one healthy source and a
+persisted one-shot assignment id. A signed source-failure report must name
+both values and arrive before the same Unix-second grant boundary; consuming
+the report clears the binding so replayed or unrelated reports cannot
+quarantine another replica.
+
 ### The `/agent` prefix
 
 Agent endpoints live under `/agent/**` and the gateway routes that prefix
@@ -323,7 +337,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **274**, agent **81**, auth **71**, gateway **14**,
+Current counts: control plane **287**, agent **86**, auth **72**, gateway **15**,
 smoke **34 checks**.
 
 ### Testing conventions

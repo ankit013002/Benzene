@@ -1,4 +1,5 @@
 /node_modules
+/dist
 
 .env*
 # Templates are committed; real .env files are not.

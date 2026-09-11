@@ -118,6 +118,19 @@ internet. `AUTH_SECRET` must be at least 32 characters and must be identical in
 the auth service, gateway and frontend. The auth service issues 15-minute
 access tokens and seven-day opaque refresh tokens.
 
+## Storage accounting and repair safety
+
+Capacity uses the latest device heartbeat as a `usedBytes` baseline, then adds
+active placement reservations and possession-confirmed replicas newer than the
+allocation's usage watermark. The same calculation is used by placement,
+repair, drain preflight and allocation changes under an allocation-row lock,
+so exact-fit reservations cannot over-issue between heartbeats.
+
+Repair work is bound to one healthy source and a persisted one-shot assignment
+id. A signed source-failure report must name that source and assignment before
+the same Unix-second grant boundary; consuming it clears the binding and makes
+replays or unrelated reports ineffective.
+
 ## Local development
 
 ### Prerequisites
@@ -226,11 +239,12 @@ cd nebula-gateway && ./mvnw -B -ntp test
 Control-plane tests use real PostgreSQL and create throwaway databases per test
 file. The agent smoke test (`node scripts/smoke-agent.mjs`) exercises enrollment,
 heartbeat, upload, download and rejected unauthorized requests against running
-services. It requires PostgreSQL, MongoDB, built packages and a reachable
-gateway/control plane; it is not a mocked unit test.
+services. It starts the real control plane and node agent itself and talks
+directly to the control plane; it requires a reachable PostgreSQL instance,
+built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **274** tests, agent **81**, auth **71**, gateway
-**14**, and **34 smoke checks**.
+Verified counts: control plane **287** tests, agent **86**, auth **72**, gateway
+**15**, and **34 smoke checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. Frontend lint errors

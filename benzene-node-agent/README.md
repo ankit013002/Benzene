@@ -72,6 +72,12 @@ pass an existence check and fail verification later.
 **Usage is recomputed from disk at startup.** An in-memory counter cannot be
 trusted across a restart the agent did not choose.
 
+**Repair assignments are source-bound and one-shot.** The agent fetches only
+the healthy peer and object named by the short-lived grant, verifies the whole
+file before reporting possession, and reports an integrity failure with the
+persisted assignment id. Network failures remain retryable; a consumed
+failure report cannot be replayed against another source.
+
 **The object format is versioned.** Client-side encryption is not implemented
 yet, but each object records `v` and an explicit `encryption: "none"`. When
 encryption lands, encrypted and plaintext-era objects coexist and no migration
@@ -103,3 +109,8 @@ control.
 packages assert against it. The agent signs and the control plane verifies, so
 these vectors are what stop two separate deployables drifting apart on the wire
 format. CI diffs the two files.
+
+## Verification
+
+The current node-agent suite has **86 tests**. The broader verified counts are
+control plane **287**, auth **72**, gateway **15**, and **34 smoke checks**.
