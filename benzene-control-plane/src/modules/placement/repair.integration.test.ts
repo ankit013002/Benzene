@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -15,7 +15,12 @@ import {
 } from "../devices/devices.service.js";
 import { generateDeviceKeyPair } from "../devices/deviceIdentity.js";
 import { GRANT_TEST_PRIVATE_KEY } from "./grantVectors.js";
-import { confirmReplica, reservePlacement, setPolicy } from "./placement.service.js";
+import {
+  confirmReplica,
+  confirmReplicaForDevice,
+  reservePlacement,
+  setPolicy,
+} from "./placement.service.js";
 import {
   pollRepairForDevice,
   reportRepairSourceFailure,
@@ -28,6 +33,23 @@ let db: NodePgDatabase<typeof schema>;
 
 function hashOf(content: string): string {
   return createHash("sha256").update(content).digest("hex");
+}
+
+/** Observe PostgreSQL's lock queue instead of guessing with a timer. */
+async function waitForLockWaiters(count: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const result = await db.execute(sql`
+      select count(*)::int as waiting
+      from pg_stat_activity
+      where datname = current_database()
+        and state = 'active'
+        and wait_event_type = 'Lock'
+    `);
+    const row = result.rows[0];
+    if (Number(row?.waiting ?? 0) >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} PostgreSQL lock waiter(s)`);
 }
 
 async function onlineDevice(
@@ -205,6 +227,73 @@ describe("whole-file repair assignments", () => {
 
     const second = await pollRepairForDevice(target);
     expect(second?.source.deviceId).toBe(goodSource);
+  });
+
+  it("does not let a stale possession report resurrect a failed repair reservation", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070");
+    const objectHash = hashOf("stale possession");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 16, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 16 });
+
+    const assignment = await pollRepairForDevice(target);
+    if (!assignment) throw new Error("Expected a repair assignment");
+
+    // Hold the replica row while the failure report queues first. The old
+    // read-then-update possession path could read `placing`, then wait behind
+    // the failure report and promote its newly `missing` row to `healthy`.
+    let releaseHolder: (() => void) | undefined;
+    let signalLocked: (() => void) | undefined;
+    const locked = new Promise<void>((resolve) => {
+      signalLocked = resolve;
+    });
+    const holder = db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.replicas.id })
+        .from(schema.replicas)
+        .where(
+          and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+        )
+        .for("update");
+      signalLocked?.();
+      await new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+    });
+    await locked;
+
+    const failure = reportRepairSourceFailure(target, {
+      objectHash,
+      sourceDeviceId: source,
+      repairAssignmentId: assignment.repairAssignmentId,
+    });
+    let possession: Promise<Awaited<ReturnType<typeof confirmReplicaForDevice>>> | undefined;
+    try {
+      await waitForLockWaiters(1);
+      possession = confirmReplicaForDevice(target, { objectHash, sizeBytes: 16 });
+      // Observe the possession request itself waiting on the same held row.
+      // This proves its read happened before the holder is released, which is
+      // what distinguishes the fixed locking path from the old stale read.
+      await waitForLockWaiters(2);
+    } finally {
+      // Never leave the transaction holding the row lock if a barrier fails;
+      // otherwise afterEach cannot truncate the test database.
+      releaseHolder?.();
+      await holder;
+      await Promise.allSettled([failure, ...(possession ? [possession] : [])]);
+    }
+
+    await expect(failure).resolves.toMatchObject({ status: "corrupt" });
+    if (!possession) throw new Error("Possession request was not started");
+    await expect(possession).rejects.toThrow(/No placement reserved/);
+
+    const [targetRow] = await db
+      .select({ status: schema.replicas.status, repairAssignmentId: schema.replicas.repairAssignmentId })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+    expect(targetRow).toEqual({ status: "missing", repairAssignmentId: null });
   });
 
   it("does not reopen a failed target when active copies already satisfy policy", async () => {

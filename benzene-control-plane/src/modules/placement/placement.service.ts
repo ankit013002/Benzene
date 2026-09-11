@@ -391,59 +391,52 @@ export async function confirmReplicaForDevice(
   deviceId: string,
   input: { objectHash: string; sizeBytes: number }
 ): Promise<Replica> {
-  const [placing] = await db()
-    .select()
-    .from(replicas)
-    .where(
-      and(
-        eq(replicas.objectHash, input.objectHash),
-        eq(replicas.deviceId, deviceId),
-        eq(replicas.status, "placing")
+  return db().transaction(async (tx) => {
+    // The failure report and possession report race on the same durable row.
+    // Lock it before deciding which state may be acknowledged: otherwise a
+    // stale possession can select `placing`, wait behind a failure report that
+    // changes it to `missing`, and then promote that no-longer-valid row to
+    // `healthy` with an update keyed only by id.
+    const [replica] = await tx
+      .select()
+      .from(replicas)
+      .where(
+        and(
+          eq(replicas.objectHash, input.objectHash),
+          eq(replicas.deviceId, deviceId)
+        )
       )
-    )
-    .limit(1);
+      .limit(1)
+      .for("update");
 
-  if (placing && Number(placing.sizeBytes) !== input.sizeBytes) {
-    throw AppError.badRequest("Possession size does not match the reservation");
-  }
+    if (!replica) throw AppError.notFound("No placement reserved for that device");
+    if (Number(replica.sizeBytes) !== input.sizeBytes) {
+      throw AppError.badRequest("Possession size does not match the reservation");
+    }
 
-  if (placing) {
-    const [updated] = await db()
+    if (replica.status === "healthy") return replica;
+    if (replica.status !== "placing") {
+      throw AppError.notFound("No placement reserved for that device");
+    }
+
+    const now = new Date();
+    const [updated] = await tx
       .update(replicas)
       .set({
         status: "healthy",
-        verifiedAt: new Date(),
-        updatedAt: new Date(),
+        verifiedAt: now,
+        updatedAt: now,
         repairSourceDeviceId: null,
         repairAssignmentId: null,
       })
-      .where(eq(replicas.id, placing.id))
+      .where(and(eq(replicas.id, replica.id), eq(replicas.status, "placing")))
       .returning();
     if (updated) return updated;
-  }
 
-  // Retries are expected: the device may have committed the bytes but lost
-  // the response to its first possession report. Keep the operation idempotent
-  // while still refusing a device that never had a reservation.
-  const [healthy] = await db()
-    .select()
-    .from(replicas)
-    .where(
-      and(
-        eq(replicas.objectHash, input.objectHash),
-        eq(replicas.deviceId, deviceId),
-        eq(replicas.status, "healthy")
-      )
-    )
-    .limit(1);
-  if (healthy) {
-    if (Number(healthy.sizeBytes) !== input.sizeBytes) {
-      throw AppError.badRequest("Possession size does not match the reservation");
-    }
-    return healthy;
-  }
-
-  throw AppError.notFound("No placement reserved for that device");
+    // The row lock should make this unreachable, but retain a typed failure if
+    // the database reports that another state transition won unexpectedly.
+    throw AppError.conflict("Replica reservation changed before possession could be confirmed");
+  });
 }
 
 export interface ObjectProtection {
