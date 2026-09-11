@@ -130,6 +130,9 @@ internet. `AUTH_SECRET` must be at least 32 characters and must be identical in
 the auth service, gateway and frontend. The auth service issues 15-minute
 access tokens and seven-day opaque refresh tokens.
 
+Pending device names and platforms are not globally listed; a user must enter
+the short-lived code shown on that device to approve or reject it.
+
 ## Storage accounting and repair safety
 
 Capacity uses the latest device heartbeat as a `usedBytes` baseline, then adds
@@ -262,7 +265,7 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **291** tests, agent **106**, auth **77**, gateway
+Verified counts: control plane **293** tests, agent **106**, auth **77**, gateway
 **15**, and **50 smoke checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,

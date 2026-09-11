@@ -266,6 +266,9 @@ authorise a write. The signature is verified **before** the payload is parsed.
 
 Deliberately not a JWT — a fixed format has no `alg` field to negotiate down.
 
+Pending device names and platforms are not globally listed; a user must enter
+the short-lived code shown on that device to approve or reject it.
+
 ### Storage accounting and repair safety
 
 Capacity admission treats the latest heartbeat's `usedBytes` as a baseline,
@@ -341,7 +344,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **291**, agent **106**,
+Current counts: control plane **293**, agent **106**,
 auth **77**, gateway **15**, smoke **50 checks**.
 
 The auth-service and gateway production runtime images run as dedicated
