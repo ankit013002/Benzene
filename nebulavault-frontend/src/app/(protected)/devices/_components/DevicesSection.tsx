@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { getNormalizedSize } from "@/utils/file-system/NormalizedSize";
 
@@ -24,6 +24,11 @@ interface PendingEnrollment {
 }
 
 const GB = 1024 * 1024 * 1024;
+const REMOVAL_POLL_INTERVAL_MS = 5_000;
+
+interface LoadOptions {
+  silent?: boolean;
+}
 
 /** Consumer wording, not the internal state name (product §42). */
 const STATUS_LABEL: Record<string, string> = {
@@ -60,31 +65,76 @@ export default function DevicesSection() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const mountedRef = useRef(false);
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const load = useCallback(async ({ silent = false }: LoadOptions = {}): Promise<Device[] | null> => {
     try {
-      setError(null);
+      if (!silent && mountedRef.current) setError(null);
       const [devicesRes, pendingRes] = await Promise.all([
         fetch("/api/devices"),
         fetch("/api/devices/enrollments"),
       ]);
       if (!devicesRes.ok) throw new Error("Could not load your devices");
 
-      setDevices(((await devicesRes.json()) as { data?: Device[] }).data ?? []);
-      if (pendingRes.ok) {
-        setPending(
-          ((await pendingRes.json()) as { data?: PendingEnrollment[] }).data ?? []
-        );
+      const nextDevices = ((await devicesRes.json()) as { data?: Device[] }).data ?? [];
+      const nextPending = pendingRes.ok
+        ? ((await pendingRes.json()) as { data?: PendingEnrollment[] }).data ?? []
+        : null;
+
+      if (mountedRef.current) {
+        setDevices(nextDevices);
+        if (nextPending) {
+          setPending(nextPending);
+        }
       }
+      return nextDevices;
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
-      setDevices([]);
+      if (mountedRef.current && !silent) {
+        setError(e instanceof Error ? e.message : "Something went wrong");
+        setDevices([]);
+      }
+      return null;
     }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const drainingDeviceKey =
+    devices?.filter((device) => device.status === "draining").map((device) => device.id).join(",") ?? "";
+
+  useEffect(() => {
+    if (!drainingDeviceKey) return;
+
+    let cancelled = false;
+    let timeoutId: number | undefined;
+
+    const poll = async () => {
+      const nextDevices = await load({ silent: true });
+      if (cancelled) return;
+
+      const shouldContinue = nextDevices
+        ? nextDevices.some((device) => device.status === "draining")
+        : true;
+      if (shouldContinue) {
+        timeoutId = window.setTimeout(() => void poll(), REMOVAL_POLL_INTERVAL_MS);
+      }
+    };
+
+    timeoutId = window.setTimeout(() => void poll(), REMOVAL_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, [drainingDeviceKey, load]);
 
   const approve = async (action: "approve" | "reject"): Promise<void> => {
     setBusy(true);
@@ -100,6 +150,7 @@ export default function DevicesSection() {
           allocatedBytes: Math.round(Number(allocationGb) * GB),
         }),
       });
+      if (!mountedRef.current) return;
       if (!res.ok) {
         const payload = (await res.json().catch(() => ({}))) as { message?: string };
         throw new Error(payload.message ?? "That code was not accepted");
@@ -108,13 +159,20 @@ export default function DevicesSection() {
       setCode("");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : "Something went wrong");
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
   const retire = async (device: Device): Promise<void> => {
+    const confirmed = window.confirm(
+      `Remove “${device.name}” from your Vault? Benzene will move protected data to other devices, then remove this computer from the Vault and delete only Benzene-managed files on it. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -124,13 +182,17 @@ export default function DevicesSection() {
         const payload = (await res.json().catch(() => ({}))) as { message?: string };
         throw new Error(payload.message ?? "Could not start removing that device");
       }
-      // Deliberately not "removed": data has to move off it first.
-      setNotice(`${device.name} is being removed. Its data is moving elsewhere first.`);
+      if (!mountedRef.current) return;
+      setNotice(
+        `${device.name} is being removed. Benzene will move its protected data, then finish cleanup when the computer is online.`,
+      );
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Something went wrong");
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : "Something went wrong");
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 
@@ -166,6 +228,7 @@ export default function DevicesSection() {
           </label>
 
           <button
+            type="button"
             onClick={() => void approve("approve")}
             disabled={busy || code.trim() === ""}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-40"
@@ -174,6 +237,7 @@ export default function DevicesSection() {
           </button>
 
           <button
+            type="button"
             onClick={() => void approve("reject")}
             disabled={busy || code.trim() === ""}
             className="rounded-lg border border-border px-4 py-2 text-sm disabled:opacity-40"
@@ -222,13 +286,18 @@ export default function DevicesSection() {
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {device.status === "draining" && device.removalReady
-                      ? "Ready to disconnect"
+                      ? "Finishing removal"
                       : STATUS_LABEL[device.status] ?? device.status} ·{" "}
                     {formatLastSeen(device.lastSeenAt)}
                   </p>
+                  {device.status === "draining" && !device.removalReady && (
+                    <p className="text-xs text-muted-foreground">
+                      Benzene is moving this computer’s data to protected copies elsewhere.
+                    </p>
+                  )}
                   {device.status === "draining" && device.removalReady && (
                     <p className="text-xs text-muted-foreground">
-                      Protection is restored; you can disconnect this computer.
+                      Protection is restored. Benzene is waiting for this computer to come online and finish removing its Benzene data.
                     </p>
                   )}
                 </div>
@@ -238,13 +307,14 @@ export default function DevicesSection() {
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => void retire(device)}
                   disabled={busy || device.status === "draining"}
                   className="rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-40"
                 >
                   {device.status === "draining"
                     ? device.removalReady
-                      ? "Ready to disconnect"
+                      ? "Finishing removal…"
                       : "Removing…"
                     : "Remove"}
                 </button>
