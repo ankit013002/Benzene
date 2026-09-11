@@ -8,7 +8,9 @@ RUN npm run build
 FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+RUN addgroup -S benzene && adduser -S -G benzene benzene
 COPY --from=build /app/package*.json ./
 RUN npm ci --omit=dev
-COPY --from=build /app/dist ./dist
+COPY --from=build --chown=benzene:benzene /app/dist ./dist
+USER benzene
 CMD ["node","dist/server.js"]

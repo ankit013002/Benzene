@@ -108,6 +108,8 @@ jobs:
           cache-dependency-path: benzene-auth-service/package-lock.json
       - name: Install
         run: npm ci --include=dev
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
       - name: Build (with fallback)
         run: |
           if npm run -s | grep -qE '(^| )build( |$)'; then

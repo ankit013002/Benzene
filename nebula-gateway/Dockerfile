@@ -6,6 +6,8 @@ RUN mvn -B -ntp -DskipTests package
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-COPY --from=build /src/target/*.jar /app/app.jar
+RUN groupadd --system benzene && useradd --system --gid benzene --no-create-home benzene
+COPY --from=build --chown=benzene:benzene /src/target/*.jar /app/app.jar
+USER benzene
 EXPOSE 8080
 CMD ["java","-jar","/app/app.jar"]

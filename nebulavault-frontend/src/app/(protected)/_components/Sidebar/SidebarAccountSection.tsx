@@ -48,8 +48,11 @@ const SideBarAccountSection = () => {
   const onSignOut = async () => {
     setIsSigningOut(true);
     setSignOutError(null);
-    const didSignOut = await logout();
-    if (didSignOut) {
+    const logoutResult = await logout();
+    if (logoutResult.localCookiesCleared) {
+      if (!logoutResult.serverRevoked) {
+        console.warn("Logout cleared local cookies, but server revocation failed");
+      }
       router.replace("/");
       router.refresh();
     } else {
