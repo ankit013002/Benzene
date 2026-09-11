@@ -16,6 +16,11 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
   // A reserved-but-unfinished upload has no bytes to fetch yet.
   const canDownload = file.hasContent !== false;
   const protection = file.protection;
+  const confirmDelete = () => {
+    if (window.confirm(`Remove “${file.name}” from your Vault?`)) {
+      onDelete(file.id);
+    }
+  };
   const isReducedProtection =
     protection?.state === "at_risk" ||
     (typeof protection?.healthyReplicas === "number" &&
@@ -59,6 +64,7 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
           >
             <li className="tooltip" data-tip="Download">
               <button
+                type="button"
                 onClick={() => onDownload(file)}
                 disabled={!canDownload}
                 aria-label={`Download ${file.name}`}
@@ -68,7 +74,8 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
             </li>
             <li className="tooltip" data-tip="Delete">
               <button
-                onClick={() => onDelete(file.id)}
+                type="button"
+                onClick={confirmDelete}
                 aria-label={`Delete ${file.name}`}
               >
                 <FaRegTrashAlt />

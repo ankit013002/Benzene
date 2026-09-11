@@ -10,15 +10,26 @@ interface FolderRowProps {
 }
 
 const FolderRow = ({ folder, onOpen, onDelete }: FolderRowProps) => {
+  const folderName = folder.name.replace("/", "");
+  const confirmDelete = () => {
+    if (
+      window.confirm(
+        `Remove “${folderName}” and everything inside it from your Vault?`,
+      )
+    ) {
+      onDelete(folder.id);
+    }
+  };
+
   return (
     <>
       <button
         type="button"
         className="min-w-0 truncate text-left"
         onClick={onOpen}
-        aria-label={`Open folder ${folder.name.replace("/", "")}`}
+        aria-label={`Open folder ${folderName}`}
       >
-        {folder.name.replace("/", "")}
+        {folderName}
       </button>
       <div className="hidden min-w-0 truncate sm:block">
         {folder.lastModified
@@ -50,8 +61,9 @@ const FolderRow = ({ folder, onOpen, onDelete }: FolderRowProps) => {
                 which the file service does not do yet. */}
             <li className="tooltip" data-tip="Delete">
               <button
-                onClick={() => onDelete(folder.id)}
-                aria-label={`Delete ${folder.name}`}
+                type="button"
+                onClick={confirmDelete}
+                aria-label={`Delete ${folderName} and everything inside it`}
               >
                 <FaRegTrashAlt />
               </button>
