@@ -43,6 +43,13 @@
       "when": 1789095664998,
       "tag": "0005_usage_reported_watermark",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789158181799,
+      "tag": "0006_wide_wendell_rand",
+      "breakpoints": true
     }
   ]
 }

@@ -249,6 +249,7 @@ describe("device signature authentication", () => {
           method: "GET",
           path: "/agent/removal",
           body: undefined,
+          timestamp: Math.floor(Date.now() / 1000) + 1,
         })
       )
       .expect(200)
@@ -305,6 +306,76 @@ describe("device signature authentication", () => {
       .expect(200);
 
     expect(res.body.data.status).toBe("online");
+  });
+
+  it("accepts one signed request and rejects an identical replay", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    const body = { usedBytes: 1024, appVersion: "1.0.0" };
+    const headers = signedHeaders({
+      keys,
+      deviceId,
+      method: "POST",
+      path: "/agent/heartbeat",
+      body,
+    });
+
+    await request(app)
+      .post("/agent/heartbeat")
+      .set(headers)
+      .send(body)
+      .expect(200);
+    await request(app)
+      .post("/agent/heartbeat")
+      .set(headers)
+      .send(body)
+      .expect(401);
+  });
+
+  it("rejects an equivalent base64 signature spelling as a replay", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    const body = { usedBytes: 1536 };
+    const headers = signedHeaders({
+      keys,
+      deviceId,
+      method: "POST",
+      path: "/agent/heartbeat",
+      body,
+    });
+    const signature = headers["X-Device-Signature"];
+    const equivalentHeaders = {
+      ...headers,
+      "X-Device-Signature": signature.replace(/=+$/, ""),
+    };
+    expect(equivalentHeaders["X-Device-Signature"]).not.toBe(signature);
+
+    await request(app)
+      .post("/agent/heartbeat")
+      .set(headers)
+      .send(body)
+      .expect(200);
+    await request(app)
+      .post("/agent/heartbeat")
+      .set(equivalentHeaders)
+      .send(body)
+      .expect(401);
+  });
+
+  it("atomically accepts only one concurrent identical signed request", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    const body = { usedBytes: 2048 };
+    const headers = signedHeaders({
+      keys,
+      deviceId,
+      method: "POST",
+      path: "/agent/heartbeat",
+      body,
+    });
+
+    const responses = await Promise.all([
+      request(app).post("/agent/heartbeat").set({ ...headers }).send(body),
+      request(app).post("/agent/heartbeat").set({ ...headers }).send(body),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
   });
 
   it("accepts a signed possession report and promotes only its own reservation", async () => {

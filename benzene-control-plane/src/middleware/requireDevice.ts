@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
+
+import { sql } from "drizzle-orm";
 import type { NextFunction, Request, Response } from "express";
 
 import { config } from "../config/env.js";
+import { db } from "../db/client.js";
+import { deviceRequestReplays } from "../db/schema.js";
 import {
   canonicalRequest,
   verifyRequestSignature,
@@ -16,9 +21,9 @@ import { AppError } from "../utils/AppError.js";
  * method, path, timestamp and body hash, so a captured signature cannot be
  * replayed against a different endpoint or with altered content.
  *
- * The timestamp window bounds replay of an identical request. Closing that gap
- * completely needs a nonce store, which is worth adding before devices are
- * reachable from the public internet.
+ * The timestamp window remains authoritative for freshness; PostgreSQL's
+ * one-shot claim below closes replay of an otherwise valid deterministic
+ * signature inside that window.
  */
 export function requireDevice(
   req: Request,
@@ -83,6 +88,80 @@ async function authenticateDevice(
     throw AppError.unauthorized("Invalid device signature");
   }
 
+  await claimRequestReplay({
+    deviceId: device.id,
+    method: req.method,
+    path: req.originalUrl,
+    timestamp,
+    body: req.rawBody ?? "",
+    sentAt,
+  });
+
   req.deviceId = device.id;
   req.vaultId = device.vaultId;
+}
+
+/**
+ * Claims a verified request before the route handler can mutate state. The
+ * unique index is the concurrency boundary: two identical requests may race,
+ * but exactly one can commit the claim. Cleanup is deliberately bounded so an
+ * attacker cannot turn authentication into an unbounded delete operation.
+ */
+async function claimRequestReplay(input: {
+  deviceId: string;
+  method: string;
+  path: string;
+  timestamp: string;
+  body: string;
+  sentAt: number;
+}): Promise<void> {
+  // The signature has already verified. Claim canonical request bytes rather
+  // than base64 spelling so stripped padding or ignored whitespace cannot
+  // create a second claim for the same authenticated request.
+  const digest = createHash("sha256")
+    .update(
+      canonicalRequest({
+        method: input.method,
+        path: input.path,
+        timestamp: input.timestamp,
+        body: input.body,
+      }),
+      "utf8"
+    )
+    .digest("hex");
+  const now = new Date();
+  const expiresAt = new Date(
+    (input.sentAt + config().deviceClockSkewSeconds) * 1000
+  );
+
+  await db().transaction(async (tx) => {
+    // PostgreSQL has no portable DELETE ... LIMIT. This CTE bounds opportunistic
+    // cleanup while keeping the claim and cleanup in the same transaction.
+    await tx.execute(sql`
+      WITH expired AS (
+        SELECT id
+        FROM ${deviceRequestReplays}
+        WHERE device_id = ${input.deviceId}
+          AND expires_at <= ${now}
+        ORDER BY expires_at ASC
+        LIMIT 32
+      )
+      DELETE FROM ${deviceRequestReplays}
+      WHERE id IN (SELECT id FROM expired)
+    `);
+
+    const [claim] = await tx
+      .insert(deviceRequestReplays)
+      .values({
+        deviceId: input.deviceId,
+        requestDigest: digest,
+        expiresAt,
+      })
+      .onConflictDoNothing({
+        target: [deviceRequestReplays.deviceId, deviceRequestReplays.requestDigest],
+      })
+      .returning({ id: deviceRequestReplays.id });
+
+    if (!claim) throw AppError.unauthorized("Device request has already been used");
+  });
 }

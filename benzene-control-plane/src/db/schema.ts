@@ -113,6 +113,33 @@ export const devices = pgTable(
 );
 
 /**
+ * One-shot claims for device-signed requests. The signature timestamp remains
+ * authoritative; this table only closes the replay window for an otherwise
+ * valid request before its handler runs.
+ */
+export const deviceRequestReplays = pgTable(
+  "device_request_replays",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    deviceId: uuid("device_id")
+      .notNull()
+      .references(() => devices.id, { onDelete: "cascade" }),
+    requestDigest: text("request_digest").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (table) => [
+    uniqueIndex("device_request_replays_claim_idx").on(
+      table.deviceId,
+      table.requestDigest
+    ),
+    index("device_request_replays_expiry_idx").on(table.expiresAt),
+  ]
+);
+
+/**
  * How much disk a device contributes.
  *
  * Kept in its own table rather than as columns on `devices` because a single
