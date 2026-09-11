@@ -133,6 +133,11 @@ access tokens and seven-day opaque refresh tokens.
 Pending device names and platforms are not globally listed; a user must enter
 the short-lived code shown on that device to approve or reject it.
 
+Device signatures receive one-shot PostgreSQL replay claims for the exact
+method, path, timestamp and body request; an otherwise valid replay inside the
+timestamp window is rejected. Refresh-token rotation is atomically single-use
+in PostgreSQL, so concurrent uses of one token cannot both succeed.
+
 ## Storage accounting and repair safety
 
 Capacity uses the latest device heartbeat as a `usedBytes` baseline, then adds
@@ -265,7 +270,8 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **293** tests, agent **106**, auth **77**, gateway
+Verified counts: control plane **296** tests, agent **106**, auth **78** when its
+real-Postgres concurrency test is enabled, gateway
 **15**, and **50 smoke checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
