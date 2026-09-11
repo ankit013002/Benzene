@@ -75,7 +75,8 @@ export async function downloadFromDevices(
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(url);
+      // Let the browser start the download before releasing the Blob URL.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
       return;
     } catch {
       // Unreachable device; fall through to the next holder.
