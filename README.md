@@ -56,6 +56,11 @@ production Dockerfiles and are published by the release workflow. The node
 agent intentionally remains a host/LAN process; it is not containerized because
 it contributes storage from the user's own computer.
 
+The auth-service and gateway production runtime images run as dedicated
+non-root `benzene` users. The verified auth-service production-only dependency
+audit (`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
+repository-wide audit.
+
 ## What works today
 
 - Email/password signup, login, logout, refresh, email verification and
@@ -130,6 +135,13 @@ Repair work is bound to one healthy source and a persisted one-shot assignment
 id. A signed source-failure report must name that source and assignment before
 the same Unix-second grant boundary; consuming it clears the binding and makes
 replays or unrelated reports ineffective.
+
+Possession confirmation and repair/source-failure transitions serialize on the
+replica row, so stale device possession cannot resurrect a failed repair
+reservation. Logout clears browser credentials even when upstream revocation is
+unavailable; the protected client leaves the session UI and keeps that
+revocation failure observable. File and folder removal asks for confirmation,
+and folder removal explicitly warns that descendants are included.
 
 ## Local development
 
@@ -243,7 +255,7 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **287** tests, agent **86**, auth **72**, gateway
+Verified counts: control plane **288** tests, agent **88**, auth **74**, gateway
 **15**, and **34 smoke checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,

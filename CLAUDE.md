@@ -280,6 +280,10 @@ both values and arrive before the same Unix-second grant boundary; consuming
 the report clears the binding so replayed or unrelated reports cannot
 quarantine another replica.
 
+Possession confirmation and repair/source-failure transitions serialize on the
+replica row, so stale device possession cannot resurrect a failed repair
+reservation.
+
 ### The `/agent` prefix
 
 Agent endpoints live under `/agent/**` and the gateway routes that prefix
@@ -337,8 +341,17 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **287**, agent **86**, auth **72**, gateway **15**,
-smoke **34 checks**.
+Current counts: control plane **288**, agent **88**,
+auth **74**, gateway **15**, smoke **34 checks**.
+
+The auth-service and gateway production runtime images run as dedicated
+non-root `benzene` users. The verified auth-service production-only dependency
+audit (`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
+repository-wide audit. Logout clears browser credentials even when upstream
+revocation is unavailable; the protected client leaves the session UI and keeps
+that revocation failure observable. File and folder removal asks for
+confirmation, and folder removal explicitly warns that descendants are
+included.
 
 ### Testing conventions
 
@@ -404,6 +417,8 @@ the standard to match.
 - Placement engine with protection policies (1/2/3 copies) and health reporting
 - Automatic whole-file LAN repair fills recorded replica shortfalls via direct
   healthy-peer transfer, with hash verification before recording the new replica
+  and serialized possession-versus-repair transitions that reject stale device
+  confirmations
 - Coordinated whole-file drain preparation: capacity is preflighted, draining
   replicas leave protection counts, repair may copy from the draining source,
   and the UI reports `Ready to disconnect` once healthy copies exist elsewhere
@@ -411,6 +426,8 @@ the standard to match.
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
 - Devices screen and vault summary in the web app
+- File and folder removal confirmation, including an explicit recursive-folder
+  warning
 - Terraform for the S3 bucket (validated, never applied)
 - Production Dockerfiles for the frontend, auth service, gateway, control plane
   and user service; the node agent remains a host/LAN process
