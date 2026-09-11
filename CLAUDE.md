@@ -274,6 +274,17 @@ method, path, timestamp and body request; an otherwise valid replay inside the
 timestamp window is rejected. Refresh-token rotation is atomically single-use
 in PostgreSQL, so concurrent uses of one token cannot both succeed.
 
+Unauthenticated enrollment creation is database-throttled per gateway-observed
+client IP, defaulting to 10 attempts per 60 seconds. The gateway strips any
+caller-supplied `X-Benzene-Client-Ip` and rewrites it from its observed peer;
+direct development access falls back to the socket peer. The gateway currently
+uses that direct socket peer and has no trusted-forwarded-header configuration,
+so clients behind another proxy or load balancer may share that upstream peer's
+bucket; trusted proxy resolution must be implemented and configured before
+relying on per-origin buckets. Expired pending enrollments are cleaned in
+bounded batches, and approval or rejection locks only the exact normalized code
+row so competing decisions serialize.
+
 ### Storage accounting and repair safety
 
 Capacity admission treats the latest heartbeat's `usedBytes` as a baseline,
@@ -291,6 +302,10 @@ quarantine another replica.
 Possession confirmation and repair/source-failure transitions serialize on the
 replica row, so stale device possession cannot resurrect a failed repair
 reservation.
+
+Vault online-device counts and online capacity use the same last-heartbeat
+liveness cutoff as device views. Raw capacity remains owned capacity, even when
+a device is stale or offline.
 
 ### The `/agent` prefix
 
@@ -349,8 +364,8 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **296**, agent **106**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway **15**, smoke **50 checks**.
+Current counts: control plane **304**, agent **107**, auth **78** when its
+real-Postgres concurrency test is enabled, gateway **18**, smoke **50 checks**.
 
 The auth-service and gateway production runtime images run as dedicated
 non-root `benzene` users. The verified auth-service production-only dependency

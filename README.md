@@ -138,6 +138,17 @@ method, path, timestamp and body request; an otherwise valid replay inside the
 timestamp window is rejected. Refresh-token rotation is atomically single-use
 in PostgreSQL, so concurrent uses of one token cannot both succeed.
 
+Unauthenticated enrollment creation is database-throttled per gateway-observed
+client IP, defaulting to 10 attempts per 60 seconds. The gateway strips any
+caller-supplied `X-Benzene-Client-Ip` and rewrites it from its observed peer;
+direct development access falls back to the socket peer. The gateway currently
+uses that direct socket peer and has no trusted-forwarded-header configuration,
+so clients behind another proxy or load balancer may share that upstream peer's
+bucket; trusted proxy resolution must be implemented and configured before
+relying on per-origin buckets. Expired pending enrollments are cleaned in
+bounded batches, and approval or rejection locks only the exact normalized code
+row so competing decisions serialize.
+
 ## Storage accounting and repair safety
 
 Capacity uses the latest device heartbeat as a `usedBytes` baseline, then adds
@@ -157,6 +168,10 @@ reservation. Logout clears browser credentials even when upstream revocation is
 unavailable; the protected client leaves the session UI and keeps that
 revocation failure observable. File and folder removal asks for confirmation,
 and folder removal explicitly warns that descendants are included.
+
+Vault online-device counts and online capacity use the same last-heartbeat
+liveness cutoff as device views. Raw capacity remains owned capacity, even when
+a device is stale or offline.
 
 ## Local development
 
@@ -270,9 +285,9 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **296** tests, agent **106**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway
-**15**, and **50 smoke checks**.
+Verified counts: control plane **304** tests, agent **107**, auth **78** when its
+real-Postgres concurrency test is enabled, gateway **18**, and **50 smoke
+checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. Frontend lint errors
