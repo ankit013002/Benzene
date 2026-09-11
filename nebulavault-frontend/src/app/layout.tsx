@@ -11,7 +11,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Benzene",
-  description: "Secure file storage, reimagined.",
+  description: "One Vault built from the devices you already own.",
 };
 
 export default function RootLayout({

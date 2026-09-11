@@ -17,6 +17,10 @@ import {
   downloadLegacyFile,
   uploadFiles,
 } from "@/utils/file-system/uploadFiles";
+import {
+  dashboardHref,
+  normalizeDashboardSegments,
+} from "@/utils/dashboardPath";
 
 interface ListedFile {
   id: string;
@@ -49,7 +53,8 @@ export default function DashboardContentSection() {
 
   const router = useRouter();
   const params = useParams() as { path?: string[] };
-  const currPath = (params?.path ?? []).join("/");
+  const pathSegments = normalizeDashboardSegments(params?.path ?? []);
+  const currPath = pathSegments.join("/");
 
   const fetchDir = useCallback(async () => {
     try {
@@ -167,8 +172,7 @@ export default function DashboardContentSection() {
   };
 
   const updatePath = (child: string) => {
-    const next = [currPath, child].filter(Boolean).join("/");
-    router.push(`/dashboard/${next}`);
+    router.push(dashboardHref([...pathSegments, child]));
   };
 
   return (
