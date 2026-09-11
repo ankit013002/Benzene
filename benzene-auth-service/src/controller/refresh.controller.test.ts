@@ -4,8 +4,7 @@ import refreshRefreshToken from "./refresh.controller";
 // --- Mocks ---
 
 vi.mock("../services/refresh.service", () => ({
-  retrieveRefreshToken: vi.fn(),
-  deleteRefreshTokenWithId: vi.fn(),
+  consumeRefreshToken: vi.fn(),
   createRefreshToken: vi.fn(),
 }));
 
@@ -22,8 +21,7 @@ vi.mock("../lib/tokens", () => ({
 // --- Imports after mocks ---
 
 import {
-  retrieveRefreshToken,
-  deleteRefreshTokenWithId,
+  consumeRefreshToken,
   createRefreshToken,
 } from "../services/refresh.service";
 import { retrieveCredentialsByCredentialId } from "../services/credentials.service";
@@ -63,7 +61,7 @@ describe("refreshRefreshToken", () => {
 
   it("throws InvalidTokenError when the token is not found in the database", async () => {
     vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(retrieveRefreshToken).mockResolvedValue(null);
+    vi.mocked(consumeRefreshToken).mockResolvedValue(null);
 
     await expect(
       refreshRefreshToken({ refreshToken: "raw-token" }),
@@ -72,7 +70,7 @@ describe("refreshRefreshToken", () => {
 
   it("throws InvalidTokenError when the associated credential is not found", async () => {
     vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(retrieveRefreshToken).mockResolvedValue(mockRefreshTokenEntry);
+    vi.mocked(consumeRefreshToken).mockResolvedValue(mockRefreshTokenEntry);
     vi.mocked(retrieveCredentialsByCredentialId).mockResolvedValue(null);
 
     await expect(
@@ -82,11 +80,10 @@ describe("refreshRefreshToken", () => {
 
   it("returns a new access token and refresh token on success", async () => {
     vi.mocked(hashToken).mockReturnValueOnce("hashed-old-token");
-    vi.mocked(retrieveRefreshToken).mockResolvedValue(mockRefreshTokenEntry);
+    vi.mocked(consumeRefreshToken).mockResolvedValue(mockRefreshTokenEntry);
     vi.mocked(retrieveCredentialsByCredentialId).mockResolvedValue(
       mockCredential,
     );
-    vi.mocked(deleteRefreshTokenWithId).mockResolvedValue(undefined);
     vi.mocked(signAccessToken).mockReturnValue("new-access-token");
     vi.mocked(makeOpaqueToken).mockReturnValue("new-raw-refresh-token");
     vi.mocked(hashToken).mockReturnValueOnce("new-hashed-refresh-token");
@@ -100,21 +97,21 @@ describe("refreshRefreshToken", () => {
     });
   });
 
-  it("deletes the old refresh token before issuing a new one (rotation)", async () => {
+  it("consumes the old refresh token before issuing a new one (rotation)", async () => {
     vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(retrieveRefreshToken).mockResolvedValue(mockRefreshTokenEntry);
+    vi.mocked(consumeRefreshToken).mockResolvedValue(mockRefreshTokenEntry);
     vi.mocked(retrieveCredentialsByCredentialId).mockResolvedValue(
       mockCredential,
     );
-    vi.mocked(deleteRefreshTokenWithId).mockResolvedValue(undefined);
     vi.mocked(signAccessToken).mockReturnValue("new-access-token");
     vi.mocked(makeOpaqueToken).mockReturnValue("new-raw-refresh-token");
     vi.mocked(createRefreshToken).mockResolvedValue(null);
 
     await refreshRefreshToken({ refreshToken: "old-raw-token" });
 
-    expect(deleteRefreshTokenWithId).toHaveBeenCalledWith(
-      mockRefreshTokenEntry.id,
+    expect(consumeRefreshToken).toHaveBeenCalledWith(
+      "hashed-token",
+      expect.any(Date),
     );
   });
 });

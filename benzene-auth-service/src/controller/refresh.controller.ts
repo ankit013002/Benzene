@@ -1,17 +1,16 @@
 import { hashToken, makeOpaqueToken, signAccessToken } from "../lib/tokens";
 import { retrieveCredentialsByCredentialId } from "../services/credentials.service";
 import {
+  consumeRefreshToken,
   createRefreshToken,
-  deleteRefreshTokenWithId,
-  retrieveRefreshToken,
 } from "../services/refresh.service";
 
 /**
  * Handles the refresh token flow by validating the provided refresh token,
  * generating a new access token and refresh token for the httpOnly cookies.
  * If the refresh token is missing or invalid, it throws an appropriate error.
- * The function also ensures that the old refresh token is invalidated by deleting it
- * from the database before creating a new one.
+ * The function atomically consumes the old refresh token before creating a new
+ * one, so concurrent uses of the same token cannot both succeed.
  *
  * @param data - An object that may contain the refresh token to be used for generating new tokens.
  * @returns An object containing the new access token and refresh token for the route.
@@ -27,7 +26,7 @@ async function refreshRefreshToken(data: { refreshToken?: string }) {
 
   const hashedRefreshToken = hashToken(data.refreshToken);
 
-  const refresh_token_entry = await retrieveRefreshToken(
+  const refresh_token_entry = await consumeRefreshToken(
     hashedRefreshToken,
     new Date(),
   );
@@ -47,8 +46,6 @@ async function refreshRefreshToken(data: { refreshToken?: string }) {
     error.name = "InvalidTokenError";
     throw error;
   }
-
-  await deleteRefreshTokenWithId(refresh_token_entry.id);
 
   const accessToken = signAccessToken(credentials.id, credentials.email);
 

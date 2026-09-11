@@ -48,6 +48,26 @@ export async function retrieveRefreshToken(
 }
 
 /**
+ * Atomically consumes a still-valid refresh token. PostgreSQL's DELETE lock
+ * means concurrent refresh requests cannot both observe and consume it.
+ */
+export async function consumeRefreshToken(
+  tokenHash: string,
+  now: Date,
+): Promise<RefreshToken | null> {
+  const result = await pool.query(
+    `
+      DELETE FROM refresh_tokens
+      WHERE token_hash = $1 AND expires_at > $2
+      RETURNING *
+    `,
+    [tokenHash, now],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+/**
  * Deletes a refresh token from the database based on the provided token ID.
  *
  * @param tokenId - The unique identifier of the refresh token to be deleted from the database.
