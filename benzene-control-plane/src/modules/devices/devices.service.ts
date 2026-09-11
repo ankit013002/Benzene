@@ -141,12 +141,20 @@ export async function getEnrollmentStatus(
 export async function listPendingEnrollments(
   ownerId: string
 ): Promise<EnrollmentView[]> {
-  await ensureVaultForOwner(ownerId);
+  const vault = await ensureVaultForOwner(ownerId);
 
   const rows = await db()
     .select()
     .from(deviceEnrollments)
-    .where(eq(deviceEnrollments.status, "pending"));
+    .where(
+      and(
+        eq(deviceEnrollments.status, "pending"),
+        // Pending requests are intentionally unowned until the user presents
+        // the pairing code. Never let one vault enumerate another vault's
+        // unowned requests through this convenience endpoint.
+        eq(deviceEnrollments.vaultId, vault.id)
+      )
+    );
 
   return rows
     .map(withExpiry)

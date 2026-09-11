@@ -183,6 +183,21 @@ describe("enrollment", () => {
     await expect(approveEnrollment(OWNER, enrollment.code, GB)).rejects.toThrow();
   });
 
+  it("does not enumerate unowned enrollments but still accepts an explicit code", async () => {
+    const keys = generateDeviceKeyPair();
+    const enrollment = await requestEnrollment({
+      publicKey: keys.publicKey,
+      deviceName: "Private Laptop",
+      platform: "macos",
+    });
+
+    expect(await listPendingEnrollments(OWNER)).toEqual([]);
+    expect(await listPendingEnrollments(OTHER_OWNER)).toEqual([]);
+
+    const device = await approveEnrollment(OWNER, enrollment.code, GB);
+    expect(device.name).toBe("Private Laptop");
+  });
+
   it("lets the requesting device poll its own status", async () => {
     const keys = generateDeviceKeyPair();
     const enrollment = await requestEnrollment({

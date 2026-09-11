@@ -139,6 +139,22 @@ describe("enrollment over HTTP", () => {
       .send({ code: enrollment.code, allocatedBytes: GB })
       .expect(201);
   });
+
+  it("does not expose an unowned enrollment through the pending list", async () => {
+    const keys = generateDeviceKeyPair();
+    await requestEnrollment({
+      publicKey: keys.publicKey,
+      deviceName: "Another User's Laptop",
+      platform: "macos",
+    });
+
+    const res = await request(app)
+      .get("/devices/enrollments/pending/list")
+      .set("X-User-Id", "auth|another-owner")
+      .expect(200);
+
+    expect(res.body).toEqual({ data: [] });
+  });
 });
 
 describe("user endpoints", () => {

@@ -16,13 +16,6 @@ interface Device {
   removalReady: boolean;
 }
 
-interface PendingEnrollment {
-  id: string;
-  deviceName: string;
-  platform: string;
-  expiresAt: string;
-}
-
 const GB = 1024 * 1024 * 1024;
 const REMOVAL_POLL_INTERVAL_MS = 5_000;
 
@@ -59,7 +52,6 @@ function formatLastSeen(lastSeenAt: string | null): string {
 
 export default function DevicesSection() {
   const [devices, setDevices] = useState<Device[] | null>(null);
-  const [pending, setPending] = useState<PendingEnrollment[]>([]);
   const [code, setCode] = useState("");
   const [allocationGb, setAllocationGb] = useState("100");
   const [busy, setBusy] = useState(false);
@@ -77,22 +69,13 @@ export default function DevicesSection() {
   const load = useCallback(async ({ silent = false }: LoadOptions = {}): Promise<Device[] | null> => {
     try {
       if (!silent && mountedRef.current) setError(null);
-      const [devicesRes, pendingRes] = await Promise.all([
-        fetch("/api/devices"),
-        fetch("/api/devices/enrollments"),
-      ]);
+      const devicesRes = await fetch("/api/devices");
       if (!devicesRes.ok) throw new Error("Could not load your devices");
 
       const nextDevices = ((await devicesRes.json()) as { data?: Device[] }).data ?? [];
-      const nextPending = pendingRes.ok
-        ? ((await pendingRes.json()) as { data?: PendingEnrollment[] }).data ?? []
-        : null;
 
       if (mountedRef.current) {
         setDevices(nextDevices);
-        if (nextPending) {
-          setPending(nextPending);
-        }
       }
       return nextDevices;
     } catch (e) {
@@ -245,13 +228,6 @@ export default function DevicesSection() {
             Decline
           </button>
         </div>
-
-        {pending.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {pending.length} device{pending.length === 1 ? "" : "s"} waiting:{" "}
-            {pending.map((p) => p.deviceName).join(", ")}
-          </p>
-        )}
 
         {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
         {error && <p className="text-xs text-destructive">{error}</p>}
