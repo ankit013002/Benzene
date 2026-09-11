@@ -17,14 +17,14 @@ public class FileRoutes {
                         .path("/drive-nodes/**")
                         .filters(f -> f
                                 .filter(sessionFilter)
-                                .addResponseHeader("Nebula-Gateway", "Nebula Vault"))
+                                .addResponseHeader("Nebula-Gateway", "Benzene"))
                         .uri(filesUri)
                 )
                 .route("files-read", r -> r
                         .path("/files/**", "/folders/**")
                         .filters(f -> f
                                 .filter(sessionFilter)
-                                .addResponseHeader("Nebula-Gateway", "Nebula Vault"))
+                                .addResponseHeader("Nebula-Gateway", "Benzene"))
                         .uri(filesUri)
                 )
                 // Vault and device management are user-facing, so they carry

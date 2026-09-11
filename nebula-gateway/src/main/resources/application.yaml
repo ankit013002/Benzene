@@ -12,14 +12,12 @@ routes:
     uri: ${AUTH_SERVICE_URI:http://localhost:4000}
   user:
     uri: ${USER_SERVICE_URI:http://localhost:8082}
-  billing:
-    uri: ${BILLING_SERVICE_URI:http://localhost:8083}
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,gateway
+        include: health,info
 
 auth:
   hmacSecret: ${AUTH_SECRET}

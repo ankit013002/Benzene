@@ -2,16 +2,19 @@ package com.nebulavault.gateway;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.route.Route;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.reactive.result.method.annotation.RequestMappingHandlerMapping;
 import reactor.core.publisher.Mono;
 
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,6 +23,9 @@ class NebulaGatewayApplicationTests {
 
 	@Autowired
 	private List<RouteLocator> routeLocators;
+
+	@Autowired
+	private ApplicationContext applicationContext;
 
 	@Test
 	void contextLoads() {
@@ -50,6 +56,19 @@ class NebulaGatewayApplicationTests {
 			assertThat(Mono.from(auth.getPredicate().apply(exchange("/auth/" + endpoint))).block())
 					.as("/auth/%s is routed to the auth service", endpoint).isTrue();
 		}
+	}
+
+	@Test
+	void doesNotExposeLegacyExpressProbeEndpoints() {
+		String mappings = applicationContext
+				.getBeansOfType(RequestMappingHandlerMapping.class)
+				.values()
+				.stream()
+				.flatMap(mapping -> mapping.getHandlerMethods().keySet().stream())
+				.map(Object::toString)
+				.collect(Collectors.joining("\n"));
+
+		assertThat(mappings).doesNotContain("/ping-express-login", "/ping-express-registration");
 	}
 
 	private static MockServerWebExchange exchange(String path) {

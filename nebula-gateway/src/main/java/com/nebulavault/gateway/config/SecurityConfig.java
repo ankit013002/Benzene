@@ -7,7 +7,7 @@ import org.springframework.security.config.annotation.web.reactive.EnableWebFlux
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 
-// Temporary while testing without any auth and JWT
+// Route-specific filters enforce user and device authentication at the gateway.
 @Configuration
 @EnableWebFluxSecurity
 public class SecurityConfig {

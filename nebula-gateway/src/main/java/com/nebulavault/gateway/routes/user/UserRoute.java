@@ -20,17 +20,16 @@ public class UserRoute {
                         .path("/user/bootstrap")
                         .filters(f -> f
                                 .filter(sessionFilter)
-                                .addResponseHeader("Nebula-Gateway", "Nebula Vault"))
+                                .addResponseHeader("Nebula-Gateway", "Benzene"))
                         .uri(userUri)
                 )
                 .route("user-me", r -> r
                         .path("/user/me")
                         .filters(f -> f
                                 .filter(sessionFilter)
-                                .addResponseHeader("Nebula-Gateway", "Nebula Vault"))
+                                .addResponseHeader("Nebula-Gateway", "Benzene"))
                         .uri(userUri)
                 )
                 .build();
     }
 }
-
