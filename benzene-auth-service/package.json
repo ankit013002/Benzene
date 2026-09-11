@@ -1,10 +1,12 @@
 {
   "name": "benzene-auth-service",
   "version": "1.0.0",
-  "main": "src/server.ts",
+  "main": "dist/server.js",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"

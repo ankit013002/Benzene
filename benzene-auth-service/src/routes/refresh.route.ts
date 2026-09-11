@@ -10,7 +10,7 @@ router.post("/refresh", async (req: Request, res: Response) => {
       { refreshToken: req.cookies.refresh_token },
     );
     setAuthCookies(res, accessToken, refreshToken);
-    return res.json({ accessToken });
+    return res.status(204).end();
   } catch (err) {
     if (err instanceof Error && err.name === "InvalidTokenError") {
       return res.status(401).json({ error: "Invalid refresh token" });

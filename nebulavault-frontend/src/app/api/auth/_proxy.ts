@@ -69,7 +69,12 @@ export async function proxyAuthRequest(
     }
   }
 
-  return new NextResponse(await upstream.text(), {
+  // Refresh rotates httpOnly cookies only. Do not copy an upstream response
+  // body here, even if the auth service regresses to returning a token JSON
+  // payload; access tokens must never be exposed to browser JavaScript.
+  const responseBody = path === "/auth/refresh" ? null : await upstream.text();
+
+  return new NextResponse(responseBody, {
     status: upstream.status,
     headers: responseHeaders,
   });

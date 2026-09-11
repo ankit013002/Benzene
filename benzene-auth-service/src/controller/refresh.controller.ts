@@ -8,13 +8,13 @@ import {
 
 /**
  * Handles the refresh token flow by validating the provided refresh token,
- * generating a new access token and refresh token, and returning them to the client.
+ * generating a new access token and refresh token for the httpOnly cookies.
  * If the refresh token is missing or invalid, it throws an appropriate error.
  * The function also ensures that the old refresh token is invalidated by deleting it
  * from the database before creating a new one.
  *
  * @param data - An object that may contain the refresh token to be used for generating new tokens.
- * @returns An object containing the new access token and refresh token.
+ * @returns An object containing the new access token and refresh token for the route.
  * @throws {RefreshTokenMissingError} If the refresh token is not provided in the request.
  * @throws {InvalidTokenError} If the provided refresh token is invalid or does not exist in the database.
  */
