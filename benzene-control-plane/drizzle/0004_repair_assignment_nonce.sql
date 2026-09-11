@@ -1,0 +1,1 @@
+ALTER TABLE "replicas" ADD COLUMN "repair_assignment_id" uuid;

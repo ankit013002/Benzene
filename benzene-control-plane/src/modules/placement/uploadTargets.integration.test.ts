@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -273,6 +274,20 @@ describe("planning a download", () => {
 
   it("returns nothing for an object nobody holds", async () => {
     expect(await planDownload(OWNER, hashOf("absent"))).toEqual([]);
+  });
+
+  it("does not issue a download grant for a removed device", async () => {
+    const deviceId = await reachableDevice("retired", "http://192.168.1.10:7070");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    const hash = hashOf("retired bytes");
+    const plan = await planUpload(OWNER, { objectHash: hash, sizeBytes: 13 });
+    await confirmReplica(OWNER, { objectHash: hash, deviceId: plan.targets[0]!.deviceId });
+    await db
+      .update(schema.devices)
+      .set({ status: "removed" })
+      .where(eq(schema.devices.id, deviceId));
+
+    expect(await planDownload(OWNER, hash)).toEqual([]);
   });
 });
 

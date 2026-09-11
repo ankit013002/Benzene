@@ -33,9 +33,14 @@ export interface PossessionResult {
   status: string;
 }
 
+export interface RepairFailureResult {
+  status: "corrupt";
+}
+
 export interface RepairAssignment {
   objectHash: string;
   sizeBytes: number;
+  repairAssignmentId: string;
   source: {
     deviceId: string;
     deviceName: string;
@@ -227,6 +232,47 @@ export class ControlPlaneClient {
     }
 
     const payload = (await res.json()) as { data: RepairAssignment | null };
+    return payload.data;
+  }
+
+  /** Reports a source whose transfer bytes failed the expected hash check. */
+  async reportRepairFailure(input: {
+    deviceId: string;
+    privateKey: string;
+    objectHash: string;
+    sourceDeviceId: string;
+    repairAssignmentId: string;
+  }): Promise<RepairFailureResult> {
+    const path = "/agent/repair-failure";
+    const body = JSON.stringify({
+      objectHash: input.objectHash,
+      sourceDeviceId: input.sourceDeviceId,
+      repairAssignmentId: input.repairAssignmentId,
+      reason: "integrity",
+    });
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "POST",
+          path,
+          body,
+        }),
+      },
+      body,
+    });
+
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Repair failure report rejected")
+      );
+    }
+
+    const payload = (await res.json()) as { data: RepairFailureResult };
     return payload.data;
   }
 }

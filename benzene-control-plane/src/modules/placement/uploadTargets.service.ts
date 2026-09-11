@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
@@ -180,7 +180,8 @@ export async function planDownload(
       and(
         eq(replicas.vaultId, vault.id),
         eq(replicas.objectHash, objectHash),
-        eq(replicas.status, "healthy")
+        eq(replicas.status, "healthy"),
+        sql`${devices.status} <> 'removed'`
       )
     );
 

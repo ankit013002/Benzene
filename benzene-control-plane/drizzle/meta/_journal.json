@@ -22,6 +22,27 @@
       "when": 1789005643516,
       "tag": "0002_device_advertised_url",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789094876592,
+      "tag": "0003_repair_source_assignment",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789095341409,
+      "tag": "0004_repair_assignment_nonce",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789095664998,
+      "tag": "0005_usage_reported_watermark",
+      "breakpoints": true
     }
   ]
 }

@@ -11,6 +11,7 @@ import {
   IntegrityError,
   ObjectStore,
   OBJECT_FORMAT_VERSION,
+  SizeMismatchError,
 } from "./store.js";
 
 const MB = 1024 * 1024;
@@ -97,6 +98,31 @@ describe("storing objects", () => {
     expect(await store.list()).toEqual([first.hash]);
   });
 
+  it("replaces an existing object when its on-disk bytes are corrupt", async () => {
+    const store = await makeStore();
+    const first = await store.put(bytes("original"));
+    await writeFile(path.join(root, "objects", first.hash.slice(0, 2), first.hash), "tampered");
+
+    await expect(
+      store.put(bytes("original"), { expectedHash: first.hash })
+    ).resolves.toMatchObject({ hash: first.hash, size: "original".length });
+
+    expect(await store.verify(first.hash)).toBe(true);
+    expect(store.usedBytes()).toBe("original".length);
+  });
+
+  it("replaces corrupt bytes at the exact allocation ceiling", async () => {
+    const store = await makeStore(8);
+    const first = await store.put(bytes("12345678"));
+    await writeFile(path.join(root, "objects", first.hash.slice(0, 2), first.hash), "87654321");
+
+    await expect(
+      store.put(bytes("12345678"), { expectedHash: first.hash, expectedSize: 8 })
+    ).resolves.toMatchObject({ hash: first.hash, size: 8 });
+    expect(store.usedBytes()).toBe(8);
+    expect(await store.verify(first.hash)).toBe(true);
+  });
+
   it("rejects bytes that do not match the hash the caller promised", async () => {
     const store = await makeStore();
 
@@ -106,9 +132,32 @@ describe("storing objects", () => {
 
     expect(await store.list()).toEqual([]);
   });
+
+  it("rejects bytes that do not match the promised size", async () => {
+    const store = await makeStore();
+
+    await expect(store.put(bytes("actual"), { expectedSize: 5 })).rejects.toBeInstanceOf(
+      SizeMismatchError
+    );
+    expect(await store.list()).toEqual([]);
+    expect(store.usedBytes()).toBe(0);
+  });
 });
 
 describe("allocation limits", () => {
+  it("serializes concurrent writes against one allocation ceiling", async () => {
+    const store = await makeStore(10);
+
+    const results = await Promise.allSettled([
+      store.put(bytes("123456")),
+      store.put(bytes("abcdef")),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(store.usedBytes()).toBe(6);
+  });
+
   it("refuses an object larger than the remaining allocation", async () => {
     const store = await makeStore(10);
 

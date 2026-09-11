@@ -133,6 +133,8 @@ export const deviceStorageAllocations = pgTable(
       .default(0),
     /** Reported by the node agent; the control plane does not compute it. */
     usedBytes: bigint("used_bytes", { mode: "number" }).notNull().default(0),
+    /** Watermark for the last heartbeat that included usedBytes. */
+    usageReportedAt: timestamp("usage_reported_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -254,6 +256,12 @@ export const replicas = pgTable(
     deviceId: uuid("device_id")
       .notNull()
       .references(() => devices.id, { onDelete: "cascade" }),
+    /** Source selected for the current repair attempt; cleared on report/possession. */
+    repairSourceDeviceId: uuid("repair_source_device_id").references(() => devices.id, {
+      onDelete: "set null",
+    }),
+    /** Opaque per-attempt nonce preventing replay of an old source report. */
+    repairAssignmentId: uuid("repair_assignment_id"),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull().default(0),
     status: text("status").notNull().default("placing"),
     /** Last time the device confirmed the bytes still hash correctly (§48). */

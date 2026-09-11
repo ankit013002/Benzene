@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, asc, eq, lt, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
@@ -17,11 +18,14 @@ import {
 } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
 import { ensureVaultForOwner } from "../vaults/vaults.service.js";
+import { occupiedBytesSql } from "../placement/capacity.js";
 import {
   codesMatch,
   generatePairingCode,
   isValidPublicKey,
 } from "./deviceIdentity.js";
+
+type DbExecutor = Pick<ReturnType<typeof db>, "select" | "update" | "delete">;
 
 export interface EnrollmentRequest {
   publicKey: string;
@@ -425,7 +429,7 @@ export async function recordHeartbeat(
   if (typeof input.usedBytes === "number") {
     await db()
       .update(deviceStorageAllocations)
-      .set({ usedBytes: input.usedBytes, updatedAt: now })
+      .set({ usedBytes: input.usedBytes, usageReportedAt: now, updatedAt: now })
       .where(eq(deviceStorageAllocations.deviceId, deviceId));
   }
 
@@ -446,31 +450,45 @@ export async function setAllocation(
 ): Promise<DeviceView> {
   const vault = await ensureVaultForOwner(ownerId);
 
-  const [device] = await db()
-    .select()
-    .from(devices)
-    .where(and(eq(devices.id, deviceId), eq(devices.vaultId, vault.id)))
-    .limit(1);
+  const updated = await db().transaction(async (tx) => {
+    // Match placement, repair, and drain lock ordering: device first, then
+    // allocation. The occupied-byte calculation is therefore stable while
+    // this resize decision is made.
+    const [device] = await tx
+      .select({ id: devices.id })
+      .from(devices)
+      .where(and(eq(devices.id, deviceId), eq(devices.vaultId, vault.id)))
+      .for("update")
+      .limit(1);
+    if (!device) throw AppError.notFound("Device not found");
 
-  if (!device) throw AppError.notFound("Device not found");
+    const allocationTable = alias(deviceStorageAllocations, "set_allocation");
+    const [allocation] = await tx
+      .select({
+        allocatedBytes: allocationTable.allocatedBytes,
+        occupiedBytes: occupiedBytesSql("set_allocation"),
+      })
+      .from(allocationTable)
+      .where(eq(allocationTable.deviceId, deviceId))
+      .for("update")
+      .limit(1);
+    if (!allocation) throw AppError.notFound("Storage allocation not found");
 
-  const [allocation] = await db()
-    .select()
-    .from(deviceStorageAllocations)
-    .where(eq(deviceStorageAllocations.deviceId, deviceId))
-    .limit(1);
+    if (allocatedBytes < Number(allocation.occupiedBytes)) {
+      throw AppError.conflict(
+        `Cannot reduce the allocation to ${allocatedBytes} bytes: the device is ` +
+          `already storing ${Number(allocation.occupiedBytes)} bytes`
+      );
+    }
 
-  if (allocation && allocatedBytes < allocation.usedBytes) {
-    throw AppError.conflict(
-      `Cannot reduce the allocation to ${allocatedBytes} bytes: the device is ` +
-        `already storing ${allocation.usedBytes} bytes`
-    );
-  }
-
-  await db()
-    .update(deviceStorageAllocations)
-    .set({ allocatedBytes, updatedAt: new Date() })
-    .where(eq(deviceStorageAllocations.deviceId, deviceId));
+    const [changed] = await tx
+      .update(deviceStorageAllocations)
+      .set({ allocatedBytes, updatedAt: new Date() })
+      .where(eq(deviceStorageAllocations.deviceId, deviceId))
+      .returning();
+    return changed;
+  });
+  if (!updated) throw AppError.notFound("Storage allocation not found");
 
   const all = await listDevices(ownerId);
   const view = all.find((d) => d.id === deviceId);
@@ -491,13 +509,39 @@ export async function beginDeviceRemoval(
 ): Promise<DeviceView> {
   const vault = await ensureVaultForOwner(ownerId);
 
-  await ensureRemovalCapacity(vault.id, deviceId);
+  const updated = await db().transaction(async (tx) => {
+    // Lock every device and allocation in the vault in the same order used by
+    // reservations. This makes the capacity preflight and drain transition one
+    // indivisible decision against concurrent uploads or another drain.
+    const lockedDevices = await tx
+      .select({ id: devices.id, status: devices.status })
+      .from(devices)
+      .where(eq(devices.vaultId, vault.id))
+      .orderBy(asc(devices.id))
+      .for("update");
+    if (!lockedDevices.some((device) => device.id === deviceId)) {
+      throw AppError.notFound("Device not found");
+    }
+    if (lockedDevices.some((device) => device.id === deviceId && device.status === "removed")) {
+      throw AppError.conflict("Device has already been removed");
+    }
+    await tx
+      .select({ deviceId: deviceStorageAllocations.deviceId })
+      .from(deviceStorageAllocations)
+      .innerJoin(devices, eq(devices.id, deviceStorageAllocations.deviceId))
+      .where(eq(devices.vaultId, vault.id))
+      .orderBy(asc(deviceStorageAllocations.deviceId))
+      .for("update");
 
-  const [updated] = await db()
-    .update(devices)
-    .set({ status: "draining", updatedAt: new Date() })
-    .where(and(eq(devices.id, deviceId), eq(devices.vaultId, vault.id)))
-    .returning();
+    await ensureRemovalCapacity(vault.id, deviceId, tx);
+
+    const [row] = await tx
+      .update(devices)
+      .set({ status: "draining", updatedAt: new Date() })
+      .where(and(eq(devices.id, deviceId), eq(devices.vaultId, vault.id)))
+      .returning();
+    return row;
+  });
 
   if (!updated) throw AppError.notFound("Device not found");
 
@@ -512,15 +556,19 @@ export async function beginDeviceRemoval(
  * copies that would leave with this device. This is intentionally a
  * conservative whole-file check; repair agents will do the actual movement.
  */
-async function ensureRemovalCapacity(vaultId: string, deviceId: string): Promise<void> {
-  const [device] = await db()
+async function ensureRemovalCapacity(
+  vaultId: string,
+  deviceId: string,
+  executor: DbExecutor = db()
+): Promise<void> {
+  const [device] = await executor
     .select({ status: devices.status })
     .from(devices)
     .where(and(eq(devices.id, deviceId), eq(devices.vaultId, vaultId)))
     .limit(1);
   if (!device || device.status === "draining") return;
 
-  const [policy] = await db()
+  const [policy] = await executor
     .select({ mode: storagePolicies.mode })
     .from(storagePolicies)
     .where(eq(storagePolicies.vaultId, vaultId))
@@ -529,7 +577,7 @@ async function ensureRemovalCapacity(vaultId: string, deviceId: string): Promise
 
   // A grant has expired by this point, so an abandoned placement must not
   // reserve capacity forever or prevent a safe drain from starting.
-  await db()
+  await executor
     .delete(replicas)
     .where(
       and(
@@ -542,7 +590,7 @@ async function ensureRemovalCapacity(vaultId: string, deviceId: string): Promise
       )
     );
 
-  const replicaRows = await db()
+  const replicaRows = await executor
     .select({
       objectHash: replicas.objectHash,
       deviceId: replicas.deviceId,
@@ -560,16 +608,17 @@ async function ensureRemovalCapacity(vaultId: string, deviceId: string): Promise
   if (leavingReplicas.length === 0) return;
 
   const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
-  const candidateRows = await db()
+  const allocationTable = alias(deviceStorageAllocations, "drain_allocation");
+  const candidateRows = await executor
     .select({
       id: devices.id,
       status: devices.status,
       lastSeenAt: devices.lastSeenAt,
-      allocatedBytes: deviceStorageAllocations.allocatedBytes,
-      usedBytes: deviceStorageAllocations.usedBytes,
+      allocatedBytes: allocationTable.allocatedBytes,
+      occupiedBytes: occupiedBytesSql("drain_allocation"),
     })
     .from(devices)
-    .leftJoin(deviceStorageAllocations, eq(deviceStorageAllocations.deviceId, devices.id))
+    .leftJoin(allocationTable, eq(allocationTable.deviceId, devices.id))
     .where(and(eq(devices.vaultId, vaultId), sql`${devices.id} <> ${deviceId}`));
 
   const remainingBytes = new Map(
@@ -578,12 +627,7 @@ async function ensureRemovalCapacity(vaultId: string, deviceId: string): Promise
       Math.max(
         0,
         Number(candidate.allocatedBytes ?? 0) -
-          Number(candidate.usedBytes ?? 0) -
-          replicaRows
-            .filter(
-              (row) => row.deviceId === candidate.id && row.replicaStatus === "placing"
-            )
-            .reduce((total, row) => total + Number(row.sizeBytes), 0)
+          Number(candidate.occupiedBytes ?? 0)
       ),
     ])
   );

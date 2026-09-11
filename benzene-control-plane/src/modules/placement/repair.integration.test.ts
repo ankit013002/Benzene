@@ -4,7 +4,7 @@ import { and, eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { resetConfigCache } from "../../config/env.js";
+import { config, resetConfigCache } from "../../config/env.js";
 import * as schema from "../../db/schema.js";
 import { setupTestDb, teardownTestDb, truncateAll } from "../../test/postgres.js";
 import {
@@ -16,7 +16,10 @@ import {
 import { generateDeviceKeyPair } from "../devices/deviceIdentity.js";
 import { GRANT_TEST_PRIVATE_KEY } from "./grantVectors.js";
 import { confirmReplica, reservePlacement, setPolicy } from "./placement.service.js";
-import { pollRepairForDevice } from "./repair.service.js";
+import {
+  pollRepairForDevice,
+  reportRepairSourceFailure,
+} from "./repair.service.js";
 
 const OWNER = "repair-owner";
 const GB = 1024 * 1024 * 1024;
@@ -83,7 +86,7 @@ describe("whole-file repair assignments", () => {
       .from(schema.replicas)
       .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target)));
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.status).toBe("placing");
+    expect(rows[0]).toMatchObject({ status: "placing", repairSourceDeviceId: source });
   });
 
   it("returns the same durable work on a retry and does not duplicate rows", async () => {
@@ -103,6 +106,213 @@ describe("whole-file repair assignments", () => {
         .from(schema.replicas)
         .where(eq(schema.replicas.objectHash, objectHash))
     ).toHaveLength(2);
+  });
+
+  it("refreshes a near-expiry retry before accepting its failure report", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070");
+    const objectHash = hashOf("near expiry repair");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 17, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 17 });
+
+    const first = await pollRepairForDevice(target);
+    if (!first) throw new Error("Expected a repair assignment");
+    await db
+      .update(schema.replicas)
+      .set({
+        updatedAt: new Date(
+          Date.now() - config().transferGrantTtlSeconds * 1000 + 1
+        ),
+      })
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+
+    const retried = await pollRepairForDevice(target);
+    expect(retried?.repairAssignmentId).toBe(first.repairAssignmentId);
+    if (!retried) throw new Error("Expected the retry assignment");
+    const [refreshed] = await db
+      .select({ updatedAt: schema.replicas.updatedAt })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+    expect(refreshed).toBeDefined();
+    expect(
+      Math.floor((refreshed?.updatedAt.getTime() ?? 0) / 1000) +
+        config().transferGrantTtlSeconds
+    ).toBe(Math.floor(Date.parse(retried.source.expiresAt) / 1000));
+    await expect(
+      reportRepairSourceFailure(target, {
+        objectHash,
+        sourceDeviceId: source,
+        repairAssignmentId: first.repairAssignmentId,
+      })
+    ).resolves.toMatchObject({ status: "corrupt" });
+  });
+
+  it("quarantines a corrupt source so the next repair poll tries another healthy device", async () => {
+    const badSource = await onlineDevice("bad-source", "http://192.168.1.10:7070");
+    const goodSource = await onlineDevice("good-source", "http://192.168.1.11:7070");
+    const target = await onlineDevice("target", "http://192.168.1.12:7070");
+    await setPolicy(OWNER, { mode: "highly_protected" });
+    const objectHash = hashOf("source quarantine");
+    for (const deviceId of [badSource, goodSource]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 19, deviceIds: [deviceId] });
+      await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 19 });
+    }
+
+    const first = await pollRepairForDevice(target);
+    expect(first?.source.deviceId).toBe(badSource);
+    if (!first) throw new Error("Expected a repair assignment");
+    await expect(
+      reportRepairSourceFailure(target, {
+        objectHash,
+        sourceDeviceId: goodSource,
+        repairAssignmentId: first.repairAssignmentId,
+      })
+    ).rejects.toThrow(/does not match the active assignment/);
+    await reportRepairSourceFailure(target, {
+      objectHash,
+      sourceDeviceId: badSource,
+      repairAssignmentId: first.repairAssignmentId,
+    });
+    await expect(
+      reportRepairSourceFailure(target, {
+        objectHash,
+        sourceDeviceId: badSource,
+        repairAssignmentId: first.repairAssignmentId,
+      })
+    ).rejects.toThrow(/No active repair reservation|does not match/);
+
+    const [badRow] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(
+        and(
+          eq(schema.replicas.objectHash, objectHash),
+          eq(schema.replicas.deviceId, badSource)
+        )
+      );
+    expect(badRow?.status).toBe("corrupt");
+    const [targetRow] = await db
+      .select({ status: schema.replicas.status, repairSourceDeviceId: schema.replicas.repairSourceDeviceId })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+    expect(targetRow).toMatchObject({ status: "missing", repairSourceDeviceId: null });
+
+    const second = await pollRepairForDevice(target);
+    expect(second?.source.deviceId).toBe(goodSource);
+  });
+
+  it("does not reopen a failed target when active copies already satisfy policy", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const secondSource = await onlineDevice("second-source", "http://192.168.1.11:7070");
+    const target = await onlineDevice("target", "http://192.168.1.12:7070");
+    const objectHash = hashOf("failed target already protected");
+    for (const deviceId of [source, secondSource]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 31, deviceIds: [deviceId] });
+      await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 31 });
+    }
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 31, deviceIds: [target] });
+    await db
+      .update(schema.replicas)
+      .set({ status: "corrupt" })
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+
+    expect(await pollRepairForDevice(target)).toBeNull();
+    const [stored] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+    expect(stored?.status).toBe("corrupt");
+  });
+
+  it("rejects an old failure report after the same source is reassigned", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070");
+    const objectHash = hashOf("assignment nonce");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 16, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 16 });
+
+    const first = await pollRepairForDevice(target);
+    if (!first) throw new Error("Expected the first repair assignment");
+    await reportRepairSourceFailure(target, {
+      objectHash,
+      sourceDeviceId: source,
+      repairAssignmentId: first.repairAssignmentId,
+    });
+
+    // Model a later integrity scrub restoring the source. The target is then
+    // assigned the same source again, but with a fresh opaque assignment id.
+    await db
+      .update(schema.replicas)
+      .set({ status: "healthy", verifiedAt: new Date() })
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, source))
+      );
+    const second = await pollRepairForDevice(target);
+    if (!second) throw new Error("Expected the replacement repair assignment");
+    expect(second.source.deviceId).toBe(source);
+    expect(second.repairAssignmentId).not.toBe(first.repairAssignmentId);
+
+    await expect(
+      reportRepairSourceFailure(target, {
+        objectHash,
+        sourceDeviceId: source,
+        repairAssignmentId: first.repairAssignmentId,
+      })
+    ).rejects.toThrow(/does not match the active assignment/);
+    const [sourceRow] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, source))
+      );
+    expect(sourceRow?.status).toBe("healthy");
+  });
+
+  it("serializes a concurrent drain and repair poll on the target device", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070");
+    const objectHash = hashOf("drain versus repair");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 18, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 18 });
+
+    const [removal, assignment] = await Promise.all([
+      beginDeviceRemoval(OWNER, target),
+      pollRepairForDevice(target),
+    ]);
+    expect(removal.status).toBe("draining");
+
+    const [storedTarget] = await db
+      .select({ status: schema.devices.status, updatedAt: schema.devices.updatedAt })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, target));
+    const [repairRow] = await db
+      .select({ status: schema.replicas.status, createdAt: schema.replicas.createdAt })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+
+    // If the poll won the lock first, its reservation is ordered before the
+    // drain transition. It must never be created after the target is draining.
+    if (assignment) {
+      expect(repairRow?.status).toBe("placing");
+      expect(repairRow?.createdAt.getTime()).toBeLessThanOrEqual(
+        storedTarget?.updatedAt.getTime() ?? 0
+      );
+    } else {
+      expect(repairRow).toBeUndefined();
+    }
+    expect(storedTarget?.status).toBe("draining");
   });
 
   it("counts another target's active reservation toward protection", async () => {
@@ -305,5 +515,31 @@ describe("whole-file repair assignments", () => {
     expect(
       await db.select().from(schema.replicas).where(eq(schema.replicas.deviceId, target))
     ).toEqual([]);
+  });
+
+  it("reopens an exact-size corrupt target even when the allocation is full", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.10:7070");
+    const target = await onlineDevice("target", "http://192.168.1.11:7070", 0, 14);
+    const objectHash = hashOf("full corrupt target");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 14, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 14 });
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 14, deviceIds: [target] });
+    await db
+      .update(schema.replicas)
+      .set({ status: "corrupt", verifiedAt: new Date(Date.now() - 2000) })
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+    await recordHeartbeat(target, { usedBytes: 14 });
+
+    const assignment = await pollRepairForDevice(target);
+    expect(assignment).toMatchObject({ objectHash, sizeBytes: 14, source: { deviceId: source } });
+    const [row] = await db
+      .select({ status: schema.replicas.status, sizeBytes: schema.replicas.sizeBytes })
+      .from(schema.replicas)
+      .where(
+        and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target))
+      );
+    expect(row).toMatchObject({ status: "placing", sizeBytes: 14 });
   });
 });

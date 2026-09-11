@@ -1,7 +1,12 @@
 import express, { type Express } from "express";
 import helmet from "helmet";
 
-import { AllocationExceededError, IntegrityError, ObjectStore } from "./store.js";
+import {
+  AllocationExceededError,
+  IntegrityError,
+  ObjectStore,
+  SizeMismatchError,
+} from "./store.js";
 import { verifyTransferGrant, type TransferOperation } from "./transferGrant.js";
 
 /**
@@ -181,6 +186,10 @@ export function createTransferServer(options: TransferServerOptions): Express {
         }
         if (err instanceof IntegrityError) {
           res.status(422).json({ message: err.message, code: "INTEGRITY" });
+          return;
+        }
+        if (err instanceof SizeMismatchError) {
+          res.status(422).json({ message: err.message, code: "SIZE_MISMATCH" });
           return;
         }
         res.status(500).json({ message: "Could not store object", code: "SERVER" });

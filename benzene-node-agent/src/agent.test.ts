@@ -35,6 +35,11 @@ class FakeControlPlane extends ControlPlaneClient {
   repairPolls = 0;
   repairAssignment: RepairAssignment | null = null;
   possessionReports: Array<{ objectHash: string; sizeBytes: number }> = [];
+  repairFailures: Array<{
+    objectHash: string;
+    sourceDeviceId: string;
+    repairAssignmentId: string;
+  }> = [];
 
   constructor() {
     super("http://control-plane.invalid");
@@ -83,6 +88,21 @@ class FakeControlPlane extends ControlPlaneClient {
       sizeBytes: input.sizeBytes,
     });
     return { status: "healthy" };
+  }
+
+  override async reportRepairFailure(input: {
+    deviceId: string;
+    privateKey: string;
+    objectHash: string;
+    sourceDeviceId: string;
+    repairAssignmentId: string;
+  }): Promise<{ status: "corrupt" }> {
+    this.repairFailures.push({
+      objectHash: input.objectHash,
+      sourceDeviceId: input.sourceDeviceId,
+      repairAssignmentId: input.repairAssignmentId,
+    });
+    return { status: "corrupt" };
   }
 }
 
@@ -346,6 +366,40 @@ describe("repair", () => {
     await expect(agent.attemptRepair()).resolves.toBe(true);
     expect(await agent.store.verify(objectHash)).toBe(true);
     expect(plane.possessionReports).toEqual([{ objectHash, sizeBytes: body.length }]);
+    vi.unstubAllGlobals();
+  });
+
+  it("quarantines a source after its transfer fails integrity", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const objectHash = createHash("sha256").update("repair bytes").digest("hex");
+    plane.repairAssignment = {
+      objectHash,
+      sizeBytes: 12,
+      repairAssignmentId: "11111111-1111-4111-8111-111111111111",
+      source: {
+        deviceId: "source-device",
+        deviceName: "Source",
+        url: `http://source.invalid/objects/${objectHash}`,
+        grant: "grant",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ code: "INTEGRITY" }), { status: 422 })
+    ));
+
+    await expect(agent.attemptRepair()).rejects.toThrow(/refused the object/);
+    expect(plane.repairFailures).toEqual([
+      {
+        objectHash,
+        sourceDeviceId: "source-device",
+        repairAssignmentId: "11111111-1111-4111-8111-111111111111",
+      },
+    ]);
     vi.unstubAllGlobals();
   });
 });

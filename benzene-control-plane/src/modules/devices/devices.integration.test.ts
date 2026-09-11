@@ -322,6 +322,34 @@ describe("allocation", () => {
       allocatedBytes: 80 * GB,
     });
   });
+
+  it("refuses to shrink below an active placement reservation", async () => {
+    const { deviceId } = await enrollDevice(OWNER, "Desktop", 100);
+    const objectHash = "a".repeat(64);
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 80, deviceIds: [deviceId] });
+
+    await expect(setAllocation(OWNER, deviceId, 79)).rejects.toThrow(/already storing 80/);
+    const [allocation] = await db
+      .select({ allocatedBytes: schema.deviceStorageAllocations.allocatedBytes })
+      .from(schema.deviceStorageAllocations)
+      .where(eq(schema.deviceStorageAllocations.deviceId, deviceId));
+    expect(allocation?.allocatedBytes).toBe(100);
+  });
+
+  it("refuses to shrink below a replica confirmed after the last heartbeat", async () => {
+    const { deviceId } = await enrollDevice(OWNER, "Desktop", 100);
+    await recordHeartbeat(deviceId, { usedBytes: 0 });
+    const objectHash = "b".repeat(64);
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 80, deviceIds: [deviceId] });
+    await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 80 });
+
+    await expect(setAllocation(OWNER, deviceId, 79)).rejects.toThrow(/already storing 80/);
+    const [allocation] = await db
+      .select({ allocatedBytes: schema.deviceStorageAllocations.allocatedBytes })
+      .from(schema.deviceStorageAllocations)
+      .where(eq(schema.deviceStorageAllocations.deviceId, deviceId));
+    expect(allocation?.allocatedBytes).toBe(100);
+  });
 });
 
 describe("vault summary", () => {
@@ -411,6 +439,21 @@ describe("device removal", () => {
     await beginDeviceRemoval(OWNER, deviceId);
 
     expect((await getVaultSummary(OWNER)).rawCapacityBytes).toBe(500 * GB);
+  });
+
+  it("does not reopen a device that has already been removed", async () => {
+    const { deviceId } = await enrollDevice(OWNER, "Gone PC");
+    await db
+      .update(schema.devices)
+      .set({ status: "removed" })
+      .where(eq(schema.devices.id, deviceId));
+
+    await expect(beginDeviceRemoval(OWNER, deviceId)).rejects.toThrow(/already been removed/);
+    const [stored] = await db
+      .select({ status: schema.devices.status })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, deviceId));
+    expect(stored?.status).toBe("removed");
   });
 
   it("reports when protection is restored and the draining device is ready to disconnect", async () => {

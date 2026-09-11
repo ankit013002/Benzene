@@ -1,0 +1,1 @@
+ALTER TABLE "device_storage_allocations" ADD COLUMN "usage_reported_at" timestamp with time zone;

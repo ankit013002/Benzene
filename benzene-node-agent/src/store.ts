@@ -55,6 +55,13 @@ export class IntegrityError extends Error {
   }
 }
 
+export class SizeMismatchError extends Error {
+  constructor(readonly expected: number, readonly actual: number) {
+    super(`Object has size ${actual} bytes, expected ${expected} bytes`);
+    this.name = "SizeMismatchError";
+  }
+}
+
 export interface ObjectStoreOptions {
   rootDir: string;
   /** Hard ceiling. The agent must never write outside what the user granted. */
@@ -66,6 +73,8 @@ export class ObjectStore {
   private allocatedBytes: number;
   private used = 0;
   private loaded = false;
+  /** Serialises mutations so concurrent PUTs cannot spend the same free bytes. */
+  private mutationTail: Promise<void> = Promise.resolve();
 
   constructor(options: ObjectStoreOptions) {
     this.rootDir = path.resolve(options.rootDir);
@@ -166,13 +175,41 @@ export class ObjectStore {
     source: Readable,
     options: { expectedSize?: number; expectedHash?: string } = {}
   ): Promise<StoredObject> {
+    return this.withMutationLock(() => this.putUnlocked(source, options));
+  }
+
+  private async putUnlocked(
+    source: Readable,
+    options: { expectedSize?: number; expectedHash?: string }
+  ): Promise<StoredObject> {
     this.assertLoaded();
 
+    // A device may already hold the expected object. Verify that path before
+    // accepting more bytes: retaining a valid copy needs no allocation, while
+    // retaining known-corrupt bytes during a replacement could exceed the
+    // physical ceiling even if logical accounting subtracts them.
+    if (options.expectedHash && (await this.has(options.expectedHash))) {
+      const existingSize = await this.existingObjectSize(options.expectedHash);
+      if (await this.verify(options.expectedHash)) {
+        const incoming = await this.hashSource(source, existingSize);
+        if (typeof options.expectedSize === "number" && options.expectedSize !== incoming.size) {
+          throw new SizeMismatchError(options.expectedSize, incoming.size);
+        }
+        if (incoming.hash !== options.expectedHash) {
+          throw new IntegrityError(options.expectedHash, incoming.hash);
+        }
+        return incoming;
+      }
+
+      await this.removeCorruptObject(options.expectedHash, existingSize);
+    }
+
+    const availableForWrite = this.availableBytes();
     if (
       typeof options.expectedSize === "number" &&
-      options.expectedSize > this.availableBytes()
+      options.expectedSize > availableForWrite
     ) {
-      throw new AllocationExceededError(options.expectedSize, this.availableBytes());
+      throw new AllocationExceededError(options.expectedSize, availableForWrite);
     }
 
     const tmpPath = path.join(this.tmpDir, randomUUID());
@@ -201,15 +238,50 @@ export class ObjectStore {
 
       const hash = hasher.digest("hex");
 
+      if (typeof options.expectedSize === "number" && options.expectedSize !== size) {
+        throw new SizeMismatchError(options.expectedSize, size);
+      }
+
       if (options.expectedHash && options.expectedHash !== hash) {
         throw new IntegrityError(options.expectedHash, hash);
       }
 
-      // Already held: the transfer was redundant, so drop the duplicate rather
-      // than counting it twice. Content addressing makes this safe.
+      // Already held and still valid: the transfer was redundant, so drop the
+      // duplicate rather than counting it twice. A path alone is not evidence
+      // of possession because a disk can corrupt bytes in place.
       if (await this.has(hash)) {
-        await rm(tmpPath, { force: true });
-        return { hash, size };
+        if (await this.verify(hash)) {
+          await rm(tmpPath, { force: true });
+          return { hash, size };
+        }
+
+        const corruptSize = (await stat(this.pathFor(this.objectsDir, hash))).size;
+        // The old bytes are already known to be unusable. Remove them before
+        // installing the replacement so temp + old + replacement never exceed
+        // the allocation ceiling. A failed replacement leaves the object
+        // absent and retryable rather than restoring corrupt content.
+        await this.removeCorruptObject(hash, corruptSize);
+        try {
+          await mkdir(path.dirname(this.pathFor(this.objectsDir, hash)), { recursive: true });
+          await rename(tmpPath, this.pathFor(this.objectsDir, hash));
+          await writeFile(
+            this.pathFor(this.metaDir, hash, ".json"),
+            JSON.stringify({
+              v: OBJECT_FORMAT_VERSION,
+              hash,
+              size,
+              encryption: "none",
+              receivedAt: new Date().toISOString(),
+            } satisfies ObjectMetadata),
+            "utf8"
+          );
+          this.used += size;
+          return { hash, size };
+        } catch (err) {
+          await rm(this.pathFor(this.objectsDir, hash), { force: true });
+          await rm(this.pathFor(this.metaDir, hash, ".json"), { force: true });
+          throw err;
+        }
       }
 
       await mkdir(path.dirname(this.pathFor(this.objectsDir, hash)), { recursive: true });
@@ -239,6 +311,48 @@ export class ObjectStore {
     }
   }
 
+  private async existingObjectSize(hash: string): Promise<number> {
+    try {
+      return (await stat(this.pathFor(this.objectsDir, hash))).size;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async hashSource(source: Readable, remaining: number): Promise<StoredObject> {
+    const hasher = createHash("sha256");
+    let size = 0;
+    for await (const chunk of source) {
+      const buf = chunk as Buffer;
+      size += buf.length;
+      if (size > remaining) throw new AllocationExceededError(size, remaining);
+      hasher.update(buf);
+    }
+    return { hash: hasher.digest("hex"), size };
+  }
+
+  private async removeCorruptObject(hash: string, size: number): Promise<void> {
+    // Remove metadata first. If permissions prevent that, leave the corrupt
+    // object in place and fail without silently deleting its valid metadata.
+    await rm(this.pathFor(this.metaDir, hash, ".json"), { force: true });
+    await rm(this.pathFor(this.objectsDir, hash), { force: true });
+    this.used = Math.max(0, this.used - size);
+  }
+
+  private async withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const predecessor = this.mutationTail;
+    let release: (() => void) | undefined;
+    this.mutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await predecessor;
+    try {
+      return await operation();
+    } finally {
+      release?.();
+    }
+  }
+
   /** Opens an object for reading. Callers that need integrity should verify. */
   read(hash: string): NodeJS.ReadableStream {
     return createReadStream(this.pathFor(this.objectsDir, hash));
@@ -263,6 +377,10 @@ export class ObjectStore {
   }
 
   async delete(hash: string): Promise<void> {
+    await this.withMutationLock(() => this.deleteUnlocked(hash));
+  }
+
+  private async deleteUnlocked(hash: string): Promise<void> {
     this.assertLoaded();
 
     let size = 0;

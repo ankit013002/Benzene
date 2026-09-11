@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
@@ -15,6 +16,7 @@ import {
 import { AppError } from "../../utils/AppError.js";
 import { deriveStatus } from "../devices/devices.service.js";
 import { ensureVaultForOwner } from "../vaults/vaults.service.js";
+import { occupiedBytesSql } from "./capacity.js";
 import {
   isSingleCopyPolicy,
   planPlacement,
@@ -82,6 +84,7 @@ export function replicasForMode(mode: string): number {
  */
 async function loadCandidates(vaultId: string): Promise<PlacementCandidate[]> {
   const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
+  const allocation = alias(deviceStorageAllocations, "placement_allocation");
 
   const rows = await db()
     .select({
@@ -89,14 +92,10 @@ async function loadCandidates(vaultId: string): Promise<PlacementCandidate[]> {
       status: devices.status,
       lastSeenAt: devices.lastSeenAt,
       advertisedUrl: devices.advertisedUrl,
-      allocatedBytes: deviceStorageAllocations.allocatedBytes,
-      // Heartbeats lag behind a reservation. Include in-flight whole-file
-      // work so two uploads cannot both spend the same reported free space.
-      usedBytes: sql<number>`${deviceStorageAllocations.usedBytes} + coalesce((
-        select sum(${replicas.sizeBytes}) from ${replicas}
-        where ${replicas.deviceId} = ${devices.id}
-          and ${replicas.status} = 'placing'
-      ), 0)`,
+      allocatedBytes: allocation.allocatedBytes,
+      // Heartbeats are a watermark: reservations and possessions confirmed
+      // after the report are added without double-counting older healthy rows.
+      usedBytes: occupiedBytesSql("placement_allocation"),
       replicaCount: sql<number>`(
         select count(*)::int from ${replicas}
         where ${replicas.deviceId} = ${devices.id}
@@ -105,8 +104,8 @@ async function loadCandidates(vaultId: string): Promise<PlacementCandidate[]> {
     })
     .from(devices)
     .leftJoin(
-      deviceStorageAllocations,
-      eq(deviceStorageAllocations.deviceId, devices.id)
+      allocation,
+      eq(allocation.deviceId, devices.id)
     )
     .where(and(eq(devices.vaultId, vaultId), sql`${devices.status} <> 'removed'`));
 
@@ -214,6 +213,7 @@ export async function reservePlacement(
   if (input.deviceIds.length === 0) return [];
 
   return db().transaction(async (tx) => {
+    const allocation = alias(deviceStorageAllocations, "reserve_allocation");
     // Re-check lifecycle and liveness under row locks. A caller may have
     // received a plan before the owner started draining a device; ownership
     // alone must never make that stale plan reservable.
@@ -248,33 +248,28 @@ export async function reservePlacement(
     // checks for different objects while the unique index makes same-object
     // retries idempotent.
     const lockedAllocations = await tx
-      .select()
-      .from(deviceStorageAllocations)
-      .where(inArray(deviceStorageAllocations.deviceId, [...input.deviceIds].sort()))
-      .orderBy(asc(deviceStorageAllocations.deviceId))
+      .select({
+        id: allocation.id,
+        deviceId: allocation.deviceId,
+        allocatedBytes: allocation.allocatedBytes,
+        usedBytes: allocation.usedBytes,
+        usageReportedAt: allocation.usageReportedAt,
+        occupiedBytes: occupiedBytesSql("reserve_allocation"),
+      })
+      .from(allocation)
+      .where(inArray(allocation.deviceId, [...input.deviceIds].sort()))
+      .orderBy(asc(allocation.deviceId))
       .for("update");
     const allocationByDevice = new Map(
       lockedAllocations.map((allocation) => [allocation.deviceId, allocation])
     );
-    const placingRows = await tx
-      .select({ deviceId: replicas.deviceId, sizeBytes: replicas.sizeBytes })
-      .from(replicas)
-      .where(
-        and(
-          eq(replicas.vaultId, vault.id),
-          inArray(replicas.deviceId, input.deviceIds),
-          eq(replicas.status, "placing")
-        )
-      );
-    const placingByDevice = new Map<string, number>();
-    for (const row of placingRows) {
-      placingByDevice.set(
-        row.deviceId,
-        (placingByDevice.get(row.deviceId) ?? 0) + Number(row.sizeBytes)
-      );
-    }
     const existingRows = await tx
-      .select({ id: replicas.id, deviceId: replicas.deviceId, status: replicas.status })
+      .select({
+        id: replicas.id,
+        deviceId: replicas.deviceId,
+        status: replicas.status,
+        sizeBytes: replicas.sizeBytes,
+      })
       .from(replicas)
       .where(
         and(
@@ -289,6 +284,12 @@ export async function reservePlacement(
         .filter((row) => row.status === "healthy" || row.status === "placing")
         .map((row) => row.deviceId)
     );
+    const replacementCreditByDevice = new Map<string, number>();
+    for (const row of existingRows) {
+      if (row.status === "corrupt" && Number(row.sizeBytes) === input.sizeBytes) {
+        replacementCreditByDevice.set(row.deviceId, Number(row.sizeBytes));
+      }
+    }
 
     for (const deviceId of input.deviceIds) {
       const allocation = allocationByDevice.get(deviceId);
@@ -296,8 +297,8 @@ export async function reservePlacement(
       const availableBytes = Math.max(
         0,
         Number(allocation.allocatedBytes) -
-          Number(allocation.usedBytes) -
-          (placingByDevice.get(deviceId) ?? 0)
+          Number(allocation.occupiedBytes) +
+          (replacementCreditByDevice.get(deviceId) ?? 0)
       );
       if (!reusableExistingDevices.has(deviceId) && input.sizeBytes > availableBytes) {
         throw AppError.conflict("Insufficient capacity for the requested placement", {
@@ -315,6 +316,8 @@ export async function reservePlacement(
           status: "placing",
           sizeBytes: input.sizeBytes,
           verifiedAt: null,
+          repairSourceDeviceId: null,
+          repairAssignmentId: null,
           updatedAt: new Date(),
         })
         .where(eq(replicas.id, row.id))
@@ -360,6 +363,8 @@ export async function confirmReplica(
       status: "healthy",
       verifiedAt: now,
       updatedAt: now,
+      repairSourceDeviceId: null,
+      repairAssignmentId: null,
       ...(typeof input.sizeBytes === "number" ? { sizeBytes: input.sizeBytes } : {}),
     })
     .where(
@@ -409,6 +414,8 @@ export async function confirmReplicaForDevice(
         status: "healthy",
         verifiedAt: new Date(),
         updatedAt: new Date(),
+        repairSourceDeviceId: null,
+        repairAssignmentId: null,
       })
       .where(eq(replicas.id, placing.id))
       .returning();

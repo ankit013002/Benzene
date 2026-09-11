@@ -6,7 +6,10 @@ import { requireDevice } from "../../middleware/requireDevice.js";
 import { AppError } from "../../utils/AppError.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { confirmReplicaForDevice } from "../placement/placement.service.js";
-import { pollRepairForDevice } from "../placement/repair.service.js";
+import {
+  pollRepairForDevice,
+  reportRepairSourceFailure,
+} from "../placement/repair.service.js";
 import { transferPublicKey } from "../placement/uploadTargets.service.js";
 import {
   getEnrollmentStatus,
@@ -42,6 +45,13 @@ const heartbeatSchema = z.object({
 const possessionSchema = z.object({
   objectHash: z.string().regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest"),
   sizeBytes: z.number().int().nonnegative(),
+});
+
+const repairFailureSchema = z.object({
+  objectHash: z.string().regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest"),
+  sourceDeviceId: z.string().uuid(),
+  repairAssignmentId: z.string().uuid(),
+  reason: z.literal("integrity"),
 });
 
 function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
@@ -116,6 +126,19 @@ router.get(
   asyncHandler(async (req, res) => {
     if (!req.deviceId) throw AppError.unauthorized();
     res.status(200).json({ data: await pollRepairForDevice(req.deviceId) });
+  })
+);
+
+/** Lets a target quarantine a source whose signed transfer failed hash validation. */
+router.post(
+  "/repair-failure",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    const body = parse(repairFailureSchema, req.body);
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({
+      data: await reportRepairSourceFailure(req.deviceId, body),
+    });
   })
 );
 

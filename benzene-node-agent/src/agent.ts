@@ -182,7 +182,9 @@ export class Agent {
    *
    * The source streams directly into this agent; neither the browser nor the
    * control plane sees object bytes. A failed transfer leaves the durable
-   * `placing` reservation intact so a later bounded poll can retry it.
+   * An integrity failure consumes the `placing` reservation into a missing
+   * state so a later bounded poll can assign a fresh source and nonce;
+   * transport failures remain retryable against the existing assignment.
    */
   async attemptRepair(): Promise<boolean> {
     const identity = this.requireIdentity();
@@ -206,6 +208,15 @@ export class Agent {
         signal: AbortSignal.timeout(REPAIR_FETCH_TIMEOUT_MS),
       });
       if (!response.ok) {
+        if (response.status === 422) {
+          await this.client.reportRepairFailure({
+            deviceId: identity.deviceId,
+            privateKey: identity.privateKey,
+            objectHash: assignment.objectHash,
+            sourceDeviceId: assignment.source.deviceId,
+            repairAssignmentId: assignment.repairAssignmentId,
+          });
+        }
         throw new Error(
           `Repair source ${assignment.source.deviceName} refused the object (${response.status})`
         );

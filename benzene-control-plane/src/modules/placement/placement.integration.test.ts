@@ -253,6 +253,26 @@ describe("reserving and confirming", () => {
     expect(protection.placingReplicas).toBe(0);
   });
 
+  it("accepts an exact-fit first reservation but rejects the next byte", async () => {
+    const device = await onlineDevice(OWNER, "exact-fit", 14);
+
+    await expect(
+      reservePlacement(OWNER, {
+        objectHash: hashOf("exact-fit first object"),
+        sizeBytes: 14,
+        deviceIds: [device],
+      })
+    ).resolves.toHaveLength(1);
+
+    await expect(
+      reservePlacement(OWNER, {
+        objectHash: hashOf("exact-fit second object"),
+        sizeBytes: 1,
+        deviceIds: [device],
+      })
+    ).rejects.toThrow(/Insufficient capacity/);
+  });
+
   // The unique index is what actually enforces §22, whatever the engine thinks.
   it("cannot reserve the same device twice for one object", async () => {
     const a = await onlineDevice(OWNER, "a");
@@ -281,20 +301,9 @@ describe("reserving and confirming", () => {
       .set({ status: "corrupt", verifiedAt: new Date() })
       .where(eq(schema.replicas.objectHash, hash));
 
-    // A failed row is not an idempotent reservation: rewriting it must still
-    // fit within the allocation reported by the device.
+    // An exact-size rewrite may reclaim the recorded corrupt bytes, even when
+    // the last heartbeat reports the allocation as full.
     await recordHeartbeat(a, { usedBytes: 10 });
-    await expect(
-      reservePlacement(OWNER, { objectHash: hash, sizeBytes: 10, deviceIds: [a] })
-    ).rejects.toThrow(/Insufficient capacity/);
-    const [blocked] = await db
-      .select()
-      .from(schema.replicas)
-      .where(eq(schema.replicas.objectHash, hash));
-    expect(blocked).toMatchObject({ status: "corrupt", sizeBytes: 10 });
-
-    await recordHeartbeat(a, { usedBytes: 0 });
-
     const retried = await reservePlacement(OWNER, {
       objectHash: hash,
       sizeBytes: 10,
@@ -308,6 +317,34 @@ describe("reserving and confirming", () => {
       .from(schema.replicas)
       .where(eq(schema.replicas.objectHash, hash));
     expect(row).toMatchObject({ status: "placing", sizeBytes: 10, verifiedAt: null });
+  });
+
+  it("counts post-heartbeat possession without double-counting reported bytes", async () => {
+    const a = await onlineDevice(OWNER, "a", 200);
+    const first = hashOf("reported copy");
+    const second = hashOf("post-heartbeat copy");
+
+    await reservePlacement(OWNER, { objectHash: first, sizeBytes: 100, deviceIds: [a] });
+    await confirmReplica(OWNER, { objectHash: first, deviceId: a, sizeBytes: 100 });
+    await db
+      .update(schema.replicas)
+      .set({ verifiedAt: new Date(Date.now() - 2000) })
+      .where(eq(schema.replicas.objectHash, first));
+    await recordHeartbeat(a, { usedBytes: 100 });
+
+    await reservePlacement(OWNER, { objectHash: second, sizeBytes: 100, deviceIds: [a] });
+    await confirmReplica(OWNER, { objectHash: second, deviceId: a, sizeBytes: 100 });
+    await db
+      .update(schema.replicas)
+      .set({ verifiedAt: new Date(Date.now() + 2000) })
+      .where(eq(schema.replicas.objectHash, second));
+
+    const decision = await decidePlacement(OWNER, {
+      objectHash: hashOf("third copy"),
+      sizeBytes: 1,
+    });
+    expect(decision.deviceIds).toEqual([]);
+    expect(decision.reason).toBe("insufficient_capacity");
   });
 
   it("does not overbook one device across concurrent object reservations", async () => {
@@ -335,6 +372,25 @@ describe("reserving and confirming", () => {
 
     expect(decision.deviceIds).toEqual([]);
     expect(decision.reason).toBe("insufficient_capacity");
+  });
+
+  it("counts a confirmed replica before the device sends another heartbeat", async () => {
+    const a = await onlineDevice(OWNER, "a", 14);
+    const first = hashOf("confirmed object");
+    const second = hashOf("later object");
+
+    await reservePlacement(OWNER, { objectHash: first, sizeBytes: 14, deviceIds: [a] });
+    await confirmReplica(OWNER, { objectHash: first, deviceId: a, sizeBytes: 14 });
+
+    const decision = await decidePlacement(OWNER, { objectHash: second, sizeBytes: 14 });
+
+    expect(decision.deviceIds).toEqual([]);
+    expect(decision.reason).toBe("insufficient_capacity");
+    const [stored] = await db
+      .select()
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, first));
+    expect(stored).toMatchObject({ status: "healthy", sizeBytes: 14, deviceId: a });
   });
 
   it("refuses to reserve a device from another vault", async () => {
