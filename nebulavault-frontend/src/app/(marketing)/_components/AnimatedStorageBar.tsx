@@ -24,15 +24,7 @@ export default function AnimatedStorageBar({
   const isInView = useInView(ref, { once: true, margin: "-100px" });
   const prefersReduced = useReducedMotion();
   const [pct, setPct] = useState(0);
-  const [usedGB, setUsedGB] = useState(initalIsedGB);
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setUsedGB(Math.random() * 150);
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, []);
+  const usedGB = initalIsedGB;
 
   const computedPct = useMemo(() => {
     const raw = (usedGB / quotaGB) * 100;
@@ -68,8 +60,8 @@ export default function AnimatedStorageBar({
           marginBottom: 8,
         }}
       >
-        <span>Storage Usage</span>
-        <span>{quotaGB} GB</span>
+        <span>Illustrative storage view</span>
+        <span>{quotaGB} GB example capacity</span>
       </div>
 
       <div
@@ -139,7 +131,7 @@ export default function AnimatedStorageBar({
         animate={isInView ? { opacity: 1 } : {}}
         transition={{ duration: 0.4, delay: 1.1 }}
       >
-        {usedGB.toFixed(2)} GB used
+        Example: {usedGB.toFixed(2)} GB used
       </motion.div>
     </motion.div>
   );

@@ -33,7 +33,6 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
           <span className="badge badge-sm badge-warning">Reduced protection</span>
         )}
       </div>
-      <div>Owner</div>
       <div>
         {file.lastModified ? new Date(file.lastModified).toLocaleString() : "—"}
       </div>

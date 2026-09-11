@@ -201,9 +201,8 @@ const RecentFiles = ({
             Add files above, or drop files and folders anywhere in this area.
           </p>
           <div className="bg-card border border-border rounded-2xl flex flex-col p-0">
-            <div className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] border-b border-border rounded-t-2xl p-2 text-lg font-medium">
+            <div className="grid grid-cols-[1fr_1fr_1fr_auto] border-b border-border rounded-t-2xl p-2 text-lg font-medium">
               <div>Name</div>
-              <div>Owner</div>
               <div>Last Modified</div>
               <div className="text-center">File Size</div>
               <div className="min-w-20 text-center">Options</div>
@@ -214,7 +213,7 @@ const RecentFiles = ({
                   <div
                     onClick={() => updatePath(dirItem.name.replace("/", ""))}
                     key={dirItem.id}
-                    className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] border-b border-border p-2 items-center hover:cursor-pointer hover:bg-muted"
+                    className="grid grid-cols-[1fr_1fr_1fr_auto] border-b border-border p-2 items-center hover:cursor-pointer hover:bg-muted"
                   >
                     <FolderRow folder={dirItem} onDelete={onDelete} />
                   </div>
@@ -225,7 +224,7 @@ const RecentFiles = ({
                 return (
                   <div
                     key={dirItem.id}
-                    className="grid grid-cols-[1fr_1fr_1fr_1fr_auto] border-b border-border p-2 items-center"
+                    className="grid grid-cols-[1fr_1fr_1fr_auto] border-b border-border p-2 items-center"
                   >
                     <FileRow
                       file={dirItem}

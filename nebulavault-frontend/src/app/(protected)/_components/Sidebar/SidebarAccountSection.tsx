@@ -1,28 +1,57 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppSelector } from "@/app/store/hooks";
 import { getNormalizedSize } from "@/utils/file-system/NormalizedSize";
 import { logout } from "@/utils/auth/handlers/LogoutHandler";
+
+interface VaultSummary {
+  rawCapacityBytes: number;
+  usedBytes: number;
+  onlineDeviceCount: number;
+  deviceCount: number;
+}
 
 const SideBarAccountSection = () => {
   const router = useRouter();
   const user = useAppSelector((state) => state.user);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [vault, setVault] = useState<VaultSummary | null>(null);
+  const [vaultLoadFailed, setVaultLoadFailed] = useState(false);
 
   const displayName = user.name?.trim() || user.email || "Benzene user";
   const displayEmail = user.email || "Email unavailable";
   const avatarInitial = (user.name?.trim() || user.email || "B")
     .charAt(0)
     .toUpperCase();
-  const usedSize = getNormalizedSize(user.usedBytes);
-  const quotaSize = getNormalizedSize(user.quotaBytes);
+  const usedSize = getNormalizedSize(vault?.usedBytes ?? 0);
+  const capacitySize = getNormalizedSize(vault?.rawCapacityBytes ?? 0);
   const pct =
-    user.quotaBytes > 0
-      ? Math.min(100, Math.round((user.usedBytes / user.quotaBytes) * 100))
+    vault && vault.rawCapacityBytes > 0
+      ? Math.min(100, Math.round((vault.usedBytes / vault.rawCapacityBytes) * 100))
       : 0;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadVault = async () => {
+      try {
+        const response = await fetch("/api/vault", { cache: "no-store" });
+        if (!response.ok) throw new Error("Could not load Vault storage");
+        const payload = (await response.json()) as { data?: VaultSummary };
+        if (!cancelled) setVault(payload.data ?? null);
+      } catch {
+        if (!cancelled) setVaultLoadFailed(true);
+      }
+    };
+
+    void loadVault();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const onSignOut = async () => {
     setIsSigningOut(true);
@@ -75,32 +104,41 @@ const SideBarAccountSection = () => {
         </p>
       )}
 
-      <div className="mt-3">
-        <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
-          <span>
-            {usedSize.value} {usedSize.unit} / {quotaSize.value} {quotaSize.unit}
-          </span>
-          <span>{pct}%</span>
-        </div>
-
-        <div
-          className="relative h-2 w-full overflow-hidden rounded-full bg-bz-surface/60 border border-bz-border"
-          role="progressbar"
-          aria-label="Vault storage used"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={pct}
-        >
-          <div className="absolute inset-0 bg-primary/10" />
-          <div
-            className="relative h-full rounded-full shadow-glow-sm bg-primary"
-            style={{ width: `${pct}%` }}
-          />
-          <div
-            className="pointer-events-none absolute inset-0 rounded-full bg-primary-foreground/30 animate-shimmer w-full"
-            style={{ transform: "translateX(-100%)" }}
-          />
-        </div>
+      <div className="mt-3 text-[11px] text-muted-foreground">
+        {vault ? (
+          <>
+            <div className="mb-1 flex justify-between gap-2">
+              <span>
+                {usedSize.value} {usedSize.unit} used / {capacitySize.value}{" "}
+                {capacitySize.unit} contributed
+              </span>
+              <span>{pct}%</span>
+            </div>
+            <div
+              className="relative h-2 w-full overflow-hidden rounded-full bg-bz-surface/60 border border-bz-border"
+              role="progressbar"
+              aria-label="Vault storage used"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+            >
+              <div className="absolute inset-0 bg-primary/10" />
+              <div
+                className="relative h-full rounded-full shadow-glow-sm bg-primary"
+                style={{ width: `${pct}%` }}
+              />
+              <div
+                className="pointer-events-none absolute inset-0 rounded-full bg-primary-foreground/30 animate-shimmer w-full"
+                style={{ transform: "translateX(-100%)" }}
+              />
+            </div>
+            <div className="mt-1">
+              {vault.onlineDeviceCount} of {vault.deviceCount} devices online
+            </div>
+          </>
+        ) : (
+          <span>{vaultLoadFailed ? "Storage details unavailable" : "Storage from your devices"}</span>
+        )}
       </div>
     </div>
   );

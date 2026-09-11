@@ -2,20 +2,18 @@
 
 import { motion, useInView } from "framer-motion";
 import { useRef } from "react";
-import { MoreHorizontal, Folder, FileText } from "lucide-react";
+import { Folder, FileText } from "lucide-react";
 
 const rows = [
   {
     icon: Folder,
     name: "Folder1",
-    owner: "Owner",
     modified: "9/24/2025, 5:54:28 PM",
     size: "9.69 KB",
   },
   {
     icon: FileText,
     name: "example3.pdf",
-    owner: "Owner",
     modified: "9/24/2025, 5:54:25 PM",
     size: "2.58 KB",
   },
@@ -40,17 +38,15 @@ export default function Showcase() {
               File preview
             </h3>
             <span className="text-xs px-2 py-1 rounded-full border border-bz-border bg-bz-card/60 text-bz-muted">
-              Matches in-app UI
+              Illustrative preview
             </span>
           </div>
 
           <div className="border-t border-bz-border">
             <div className="grid grid-cols-12 px-5 py-3 text-sm text-bz-muted">
-              <div className="col-span-5">Name</div>
-              <div className="col-span-2">Owner</div>
+              <div className="col-span-7">Name</div>
               <div className="col-span-3">Last Modified</div>
-              <div className="col-span-1">File Size</div>
-              <div className="col-span-1 text-right">Options</div>
+              <div className="col-span-2">File Size</div>
             </div>
 
             <div className="divide-y divide-bz-border">
@@ -62,21 +58,12 @@ export default function Showcase() {
                   animate={inView ? { opacity: 1, y: 0 } : {}}
                   transition={{ duration: 0.4, delay: 0.05 * i }}
                 >
-                  <div className="col-span-5 flex items-center gap-3">
+                  <div className="col-span-7 flex items-center gap-3">
                     <r.icon className="size-4 text-bz-primary" />
                     <span className="text-bz-text">{r.name}</span>
                   </div>
-                  <div className="col-span-2 text-bz-muted">{r.owner}</div>
                   <div className="col-span-3 text-bz-muted">{r.modified}</div>
-                  <div className="col-span-1 text-bz-muted">{r.size}</div>
-                  <div className="col-span-1 flex justify-end">
-                    <button
-                      className="p-1 rounded-md hover:bg-bz-card border border-transparent hover:border-bz-border transition"
-                      aria-label={`Options for ${r.name}`}
-                    >
-                      <MoreHorizontal className="size-5 text-bz-muted" />
-                    </button>
-                  </div>
+                  <div className="col-span-2 text-bz-muted">{r.size}</div>
                 </motion.div>
               ))}
             </div>

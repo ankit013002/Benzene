@@ -12,7 +12,6 @@ const FolderRow = ({ folder, onDelete }: FolderRowProps) => {
   return (
     <>
       <div>{folder.name.replace("/", "")}</div>
-      <div>Owner</div>
       <div>
         {folder.lastModified
           ? new Date(folder.lastModified).toLocaleString()
