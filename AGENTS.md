@@ -323,7 +323,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **263**, agent **81**, auth **71**, gateway **14**,
+Current counts: control plane **274**, agent **81**, auth **71**, gateway **14**,
 smoke **34 checks**.
 
 ### Testing conventions
@@ -390,6 +390,9 @@ the standard to match.
 - Placement engine with protection policies (1/2/3 copies) and health reporting
 - Automatic whole-file LAN repair fills recorded replica shortfalls via direct
   healthy-peer transfer, with hash verification before recording the new replica
+- Coordinated whole-file drain preparation: capacity is preflighted, draining
+  replicas leave protection counts, repair may copy from the draining source,
+  and the UI reports `Ready to disconnect` once healthy copies exist elsewhere
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
@@ -400,9 +403,9 @@ the standard to match.
 
 ### Not built
 
-- **Outage/loss classification, coordinated drain completion and rebalancing**
-  — repair currently acts on recorded replica shortfalls, but failure/loss
-  classification and coordinated data moves remain unfinished
+- **Final drain detach/device-row removal, outage/loss classification and
+  rebalancing** — drain preparation is implemented, but removal after readiness
+  and failure/loss lifecycle handling remain unfinished
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later

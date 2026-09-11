@@ -11,8 +11,8 @@ upload path.
 The repository contains a working local/LAN development slice. Automatic
 whole-file LAN repair fills recorded replica shortfalls via direct healthy-peer
 transfer, but this is not yet a production-ready remote drive: outage/loss
-classification, coordinated drain completion, encryption, remote access,
-chunking, garbage collection and several client surfaces remain unfinished.
+classification, final drain detach, encryption, remote access, chunking,
+garbage collection and several client surfaces remain unfinished.
 
 ## How it fits together
 
@@ -67,6 +67,9 @@ it contributes storage from the user's own computer.
 - Whole-file placement with protection policies and replica health reporting.
 - Automatic whole-file LAN repair that fills recorded replica shortfalls by
   copying from a healthy peer, verifying the hash and recording the new replica.
+- Coordinated whole-file drain preparation: capacity is preflighted, draining
+  replicas leave protection counts, repair may copy from the draining source,
+  and the UI reports `Ready to disconnect` once healthy copies exist elsewhere.
 - Browser-to-device upload and download over a LAN, with SHA-256 content
   addressing and device-side integrity checks.
 - An atomic, allocation-bounded node object store with restart-safe usage
@@ -79,8 +82,9 @@ it contributes storage from the user's own computer.
 
 ## Deliberate limits
 
-- Outage/loss classification, coordinated drain completion and rebalancing are
-  not implemented; repair currently acts on recorded replica shortfalls.
+- Drain preparation is implemented, but final detach/device-row removal,
+  outage/loss classification and rebalancing are not; repair currently acts on
+  recorded replica shortfalls and can use a draining source.
 - Objects are whole files; chunking, manifests and streaming browser hashing are
   future work. The browser currently hashes a complete file in memory.
 - Encryption at rest and key recovery are not implemented. Stored objects are
@@ -225,7 +229,7 @@ heartbeat, upload, download and rejected unauthorized requests against running
 services. It requires PostgreSQL, MongoDB, built packages and a reachable
 gateway/control plane; it is not a mocked unit test.
 
-Verified counts: control plane **263** tests, agent **81**, auth **71**, gateway
+Verified counts: control plane **274** tests, agent **81**, auth **71**, gateway
 **14**, and **34 smoke checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
@@ -256,8 +260,9 @@ scripts/smoke-agent.mjs      Cross-package HTTP smoke test
 
 The next priorities follow the architecture: design encryption and key recovery
 before real user data; then make remote/HTTPS access safe; then complete
-outage/loss classification and the coordinated drain/rebalancing lifecycle.
-Chunking, garbage collection and richer clients follow those foundations.
+outage/loss classification and the drain lifecycle, including final detach and
+device-row removal after `Ready to disconnect`. Rebalancing, chunking, garbage
+collection and richer clients follow those foundations.
 
 ## Contributing
 

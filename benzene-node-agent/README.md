@@ -2,14 +2,15 @@
 
 The process that turns a computer into storage for a Benzene vault.
 
-It does three things: holds this device's identity, reports presence to the
-control plane, and serves objects to peers on the local network.
+It holds this device's Ed25519 identity, reports signed presence to the control
+plane, serves authorized objects to peers on the local network, and performs
+bounded repair work when the control plane assigns it.
 
 ## Running it
 
 ```bash
 cd benzene-node-agent
-npm install
+npm ci
 BENZENE_CONTROL_PLANE_URL=http://localhost:8080 \
 BENZENE_ALLOCATED_BYTES=$((50 * 1024 * 1024 * 1024)) \
 npm run dev
@@ -26,7 +27,21 @@ and the agent starts heartbeating.
 | `BENZENE_ALLOCATED_BYTES` | `0` | Bytes this device contributes |
 | `BENZENE_AGENT_PORT` | `7070` | Transfer server port |
 | `BENZENE_HEARTBEAT_MS` | `30000` | Presence interval |
+| `BENZENE_REPAIR_MS` | `60000` | Minimum interval between repair polls |
 | `BENZENE_DEVICE_NAME` | hostname | Name shown in the Devices list |
+| `BENZENE_ADVERTISED_URL` | first non-internal LAN IPv4 | URL peers use for direct transfers |
+
+The advertised URL matters when a computer has multiple interfaces: it is the
+address the control plane gives to browsers and other agents. Override it when
+the automatic LAN address chooses a VPN or virtual interface.
+
+After enrollment, each heartbeat is signed with the device's private key. The
+agent also polls signed `GET /agent/repair` assignments. When work is available,
+the control plane supplies a healthy peer URL and a short-lived Ed25519 transfer
+grant scoped to one object, device and operation;
+the agent fetches that one whole file directly from the peer, verifies its
+SHA-256 hash while writing, and reports possession back with another signed
+request. File bytes do not pass through the browser or control plane.
 
 ## How storage is laid out
 
@@ -65,16 +80,22 @@ control.
 
 ## Known limits
 
-- **The transfer token is one shared secret per process**, not the per-object,
-  per-peer, short-lived grant of architecture §81. Adequate while the port is
-  LAN-only; it must be tightened before remote transfers.
+- **Transfers are HTTP/LAN oriented.** CORS is enabled for direct browser-to-
+  device requests, but an HTTPS-hosted app cannot directly PUT to an HTTP LAN
+  address; remote access and relay are unfinished.
+- **Objects are plaintext.** Each sidecar records `encryption: "none"`; at-rest
+  encryption and its key-recovery design must precede real user data.
 - **The private key is a `0600` file**, not platform-secure storage. Keychain,
   DPAPI and Keystore are per-platform native work (§34).
-- **No placement, replication or repair yet.** The agent stores what it is given
-  and serves what it holds; deciding *what* it should hold is the control
-  plane's job and does not exist yet.
+- **Repair is whole-file and bounded.** The agent fills recorded replica
+  shortfalls through direct healthy-peer transfer, including assignments that
+  copy from a draining source during drain preparation. Final detach/device-row
+  removal, outage/loss classification, rebalancing and garbage collection are
+  not implemented.
 - **Whole files, not chunks.** Deliberate, per §107 — chunking lands after the
   core loop is proven.
+- **There is no automatic erase policy or GC.** An authorized object-delete
+  operation exists, but lifecycle cleanup of unreferenced data is unfinished.
 
 ## Protocol contract
 

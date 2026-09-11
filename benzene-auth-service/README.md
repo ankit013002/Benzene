@@ -1,6 +1,8 @@
 # benzene-auth-service
 
-Self-contained email/password authentication service for NebulaVault. Replaces Auth0/OIDC with a fully owned auth layer backed by PostgreSQL.
+Self-contained email/password authentication service for Benzene. It issues
+short-lived HS256 access tokens and rotates opaque refresh tokens, backed by
+PostgreSQL; no external OAuth/OIDC provider is required.
 
 ---
 
@@ -11,7 +13,7 @@ Self-contained email/password authentication service for NebulaVault. Replaces A
 - **Database:** PostgreSQL (`pg`)
 - **Auth:** JWT access tokens (HS256, 15 min) + opaque refresh tokens (7 days, SHA-256 hashed in DB)
 - **Session transport:** `httpOnly` cookies (`session` + `refresh_token`)
-- **Email:** nodemailer (verification + password reset)
+- **Email:** nodemailer (optional SMTP for verification + password reset)
 - **Validation:** Zod
 - **Security:** helmet, express-rate-limit, bcrypt (cost 12)
 - **Tests:** Vitest
@@ -20,7 +22,8 @@ Self-contained email/password authentication service for NebulaVault. Replaces A
 
 ## Endpoints
 
-All routes are mounted under `/api/auth`.
+Auth routes are mounted under `/api/auth`; the service health check is
+available at `/api/health`.
 
 | Method | Path                    | Rate limit      | Description                              |
 |--------|-------------------------|-----------------|------------------------------------------|
@@ -38,7 +41,8 @@ All routes are mounted under `/api/auth`.
 
 ## Database Schema
 
-Four tables — run `src/db/migrations/001_initial.sql` against your PostgreSQL instance before starting.
+Four tables — run `src/db/migrations/001_initial.sql` against the Benzene auth
+PostgreSQL database before starting.
 
 ```
 credentials              — email, password_hash, email_verified
@@ -55,21 +59,19 @@ Create a `.env` file in this directory:
 
 ```env
 PORT=4000
-DATABASE_URL=postgresql://postgres:password@localhost:5432/nebulavault_auth
+APP_ORIGIN=http://localhost:3000
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/benzene_auth
 
 # JWT signing secret — 64 hex chars (32 bytes) or any long random string
-AUTH_SECRET=your_secret_here
+AUTH_SECRET=
 
-# Frontend origin — used in email links and cookie security
-APP_ORIGIN=http://localhost:3000
-
-# SMTP — for local testing use Mailhog (see below)
-SMTP_HOST=localhost
-SMTP_PORT=1025
-SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM="NebulaVault <noreply@nebulavault.dev>"
+# Optional SMTP — without these settings email flows cannot deliver messages.
+# SMTP_HOST=
+# SMTP_PORT=587
+# SMTP_SECURE=false
+# SMTP_USER=
+# SMTP_PASS=
+# SMTP_FROM="Benzene <no-reply@benzene.local>"
 ```
 
 To generate a strong `AUTH_SECRET`:
@@ -84,22 +86,20 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ### 1. Install dependencies
 
 ```bash
-npm install
+npm ci
 ```
 
 ### 2. Run the database migration
 
 ```bash
-psql $DATABASE_URL -f src/db/migrations/001_initial.sql
+psql "$DATABASE_URL" -f src/db/migrations/001_initial.sql
 ```
 
-### 3. Start a local email server (optional)
+### 3. Configure email delivery (optional)
 
-```bash
-docker run -p 1025:1025 -p 8025:8025 mailhog/mailhog
-```
-
-Emails are viewable at `http://localhost:8025`.
+Set the `SMTP_*` variables from `.env.example` to a reachable SMTP server. For
+local-only development, a MailHog-compatible server may listen on port 1025;
+the auth service does not start or manage that server.
 
 ### 4. Start the service
 
@@ -120,7 +120,8 @@ npm run test:run       # single run
 npm run test:coverage  # with coverage report
 ```
 
-Tests cover all 8 controllers and the `tokens`, `cookies`, and `schema` lib utilities.
+Tests cover the eight auth flows and the `tokens`, `cookies`, and `schema` lib
+utilities.
 
 ---
 
@@ -151,7 +152,7 @@ src/
 ├── middleware/
 │   ├── error-handler.ts       — Zod (400), rate limit (429), generic (500)
 │   └── not-found.ts           — 404 handler
-├── controllers/               — request/response logic, one file per endpoint
+├── controller/                — request/response logic, one file per endpoint
 ├── routes/                    — applies rate limiter + validates + calls controller
 ├── services/                  — database operations split by domain
 │   ├── credentials.service.ts
