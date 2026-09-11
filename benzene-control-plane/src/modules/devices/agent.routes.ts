@@ -2,7 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { PLATFORMS } from "../../db/schema.js";
-import { requireDevice } from "../../middleware/requireDevice.js";
+import {
+  requireDevice,
+  requireDeviceForRemoval,
+} from "../../middleware/requireDevice.js";
 import { AppError } from "../../utils/AppError.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import { confirmReplicaForDevice } from "../placement/placement.service.js";
@@ -13,6 +16,8 @@ import {
 import { transferPublicKey } from "../placement/uploadTargets.service.js";
 import {
   getEnrollmentStatus,
+  completeDeviceRemoval,
+  pollDeviceRemoval,
   recordHeartbeat,
   requestEnrollment,
 } from "./devices.service.js";
@@ -139,6 +144,26 @@ router.post(
     res.status(200).json({
       data: await reportRepairSourceFailure(req.deviceId, body),
     });
+  })
+);
+
+/** A draining node may poll this signed endpoint after every heartbeat. */
+router.get(
+  "/removal",
+  requireDeviceForRemoval,
+  asyncHandler(async (req, res) => {
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await pollDeviceRemoval(req.deviceId) });
+  })
+);
+
+/** Completes the erase handshake; retries are safe after removal. */
+router.post(
+  "/removal/complete",
+  requireDeviceForRemoval,
+  asyncHandler(async (req, res) => {
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await completeDeviceRemoval(req.deviceId) });
   })
 );
 

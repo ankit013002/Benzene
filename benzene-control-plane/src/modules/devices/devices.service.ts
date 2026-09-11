@@ -326,19 +326,23 @@ export async function listDevices(ownerId: string): Promise<DeviceView[]> {
 
 /**
  * A draining device is only ready to disconnect once every object it held has
- * the policy's healthy copies elsewhere. There is no erase/GC transport yet,
- * so this is deliberately a readiness signal rather than a destructive state
- * transition.
+ * the policy's healthy copies elsewhere. The erase handshake reuses this
+ * invariant immediately before issuing the node directive and again before
+ * marking the device removed.
  */
-async function isReadyToDisconnect(vaultId: string, deviceId: string): Promise<boolean> {
-  const [policy] = await db()
+async function isReadyToDisconnect(
+  vaultId: string,
+  deviceId: string,
+  executor: DbExecutor = db()
+): Promise<boolean> {
+  const [policy] = await executor
     .select({ mode: storagePolicies.mode })
     .from(storagePolicies)
     .where(eq(storagePolicies.vaultId, vaultId))
     .limit(1);
   const desiredReplicas = REPLICAS_FOR_MODE[policy?.mode as keyof typeof REPLICAS_FOR_MODE] ?? 2;
 
-  const rows = await db()
+  const rows = await executor
     .select({
       objectHash: replicas.objectHash,
       deviceId: replicas.deviceId,
@@ -372,6 +376,105 @@ async function isReadyToDisconnect(vaultId: string, deviceId: string): Promise<b
     if (healthyElsewhere < desiredReplicas) return false;
   }
   return true;
+}
+
+export type RemovalDirective = { status: "erase" } | { status: "removed" };
+export type RemovalCompletion = { status: "draining" } | { status: "removed" };
+
+/**
+ * Gives a draining node one bounded erase instruction once protection is safe.
+ * The node may lose this response; polling is deliberately idempotent.
+ */
+export async function pollDeviceRemoval(
+  deviceId: string
+): Promise<RemovalDirective | null> {
+  return db().transaction(async (tx) => {
+    const [device] = await tx
+      .select({ id: devices.id, vaultId: devices.vaultId, status: devices.status })
+      .from(devices)
+      .where(eq(devices.id, deviceId))
+      .for("update")
+      .limit(1);
+    if (!device) throw AppError.notFound("Device not found");
+    if (device.status === "removed") return { status: "removed" };
+    if (device.status !== "draining") return null;
+
+    const [allocation] = await tx
+      .select({ deviceId: deviceStorageAllocations.deviceId })
+      .from(deviceStorageAllocations)
+      .where(eq(deviceStorageAllocations.deviceId, deviceId))
+      .for("update")
+      .limit(1);
+    if (!allocation) throw AppError.notFound("Storage allocation not found");
+
+    return (await isReadyToDisconnect(device.vaultId, device.id, tx))
+      ? { status: "erase" }
+      : null;
+  });
+}
+
+/**
+ * Accepts a signed node report after it erased its Benzene-owned directories.
+ * Replica rows are marked missing even when another object still needs repair;
+ * otherwise the erased node could be selected as a source again. Removal is
+ * committed only after the same transaction rechecks protection.
+ */
+export async function completeDeviceRemoval(
+  deviceId: string
+): Promise<RemovalCompletion> {
+  return db().transaction(async (tx) => {
+    const [device] = await tx
+      .select({ id: devices.id, vaultId: devices.vaultId, status: devices.status })
+      .from(devices)
+      .where(eq(devices.id, deviceId))
+      .for("update")
+      .limit(1);
+    if (!device) throw AppError.notFound("Device not found");
+    if (device.status === "removed") return { status: "removed" };
+    if (device.status !== "draining") {
+      throw AppError.conflict("Device is not draining");
+    }
+
+    const [allocation] = await tx
+      .select({ deviceId: deviceStorageAllocations.deviceId })
+      .from(deviceStorageAllocations)
+      .where(eq(deviceStorageAllocations.deviceId, deviceId))
+      .for("update")
+      .limit(1);
+    if (!allocation) throw AppError.notFound("Storage allocation not found");
+
+    // Lock all rows before changing their state so a concurrent possession or
+    // source-failure report cannot make this device look erased while leaving
+    // a healthy metadata claim behind.
+    await tx
+      .select({ id: replicas.id })
+      .from(replicas)
+      .where(and(eq(replicas.vaultId, device.vaultId), eq(replicas.deviceId, deviceId)))
+      .for("update");
+    const now = new Date();
+    await tx
+      .update(replicas)
+      .set({
+        status: "missing",
+        verifiedAt: null,
+        repairSourceDeviceId: null,
+        repairAssignmentId: null,
+        updatedAt: now,
+      })
+      .where(
+        and(eq(replicas.vaultId, device.vaultId), eq(replicas.deviceId, deviceId))
+      );
+
+    if (!(await isReadyToDisconnect(device.vaultId, device.id, tx))) {
+      return { status: "draining" };
+    }
+
+    await tx
+      .update(devices)
+      .set({ status: "removed", updatedAt: now })
+      .where(and(eq(devices.id, deviceId), eq(devices.status, "draining")));
+    return { status: "removed" };
+  });
 }
 
 /** Terminal and in-progress states are authoritative; only liveness is derived. */

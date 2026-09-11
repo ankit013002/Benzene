@@ -15,8 +15,13 @@ import {
   signRequest,
   type DeviceKeyPair,
 } from "./deviceIdentity.js";
-import { approveEnrollment, requestEnrollment } from "./devices.service.js";
-import { reservePlacement } from "../placement/placement.service.js";
+import {
+  approveEnrollment,
+  beginDeviceRemoval,
+  recordHeartbeat,
+  requestEnrollment,
+} from "./devices.service.js";
+import { confirmReplica, reservePlacement, setPolicy } from "../placement/placement.service.js";
 
 const OWNER = "auth|owner-1";
 const GB = 1024 * 1024 * 1024;
@@ -34,7 +39,7 @@ function signedHeaders(input: {
   timestamp?: number;
 }): Record<string, string> {
   const timestamp = String(input.timestamp ?? Math.floor(Date.now() / 1000));
-  const body = JSON.stringify(input.body);
+  const body = input.body === undefined ? "" : JSON.stringify(input.body);
   const signature = signRequest(
     input.keys.privateKey,
     canonicalRequest({
@@ -164,6 +169,115 @@ describe("user endpoints", () => {
 });
 
 describe("device signature authentication", () => {
+  it("allows signed removal polling/completion but rejects other requests after removal", async () => {
+    const source = await enrolledDevice();
+    const target = await enrolledDevice();
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    await recordHeartbeat(source.deviceId, { advertisedUrl: "http://127.0.0.1:7071" });
+    await recordHeartbeat(target.deviceId, { advertisedUrl: "http://127.0.0.1:7072" });
+    const objectHash = "d".repeat(64);
+    for (const deviceId of [source.deviceId, target.deviceId]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 10, deviceIds: [deviceId] });
+      await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 10 });
+    }
+    await beginDeviceRemoval(OWNER, source.deviceId);
+
+    await request(app).get("/agent/removal").expect(401);
+    await request(app)
+      .get("/agent/removal")
+      .set(
+        signedHeaders({
+          keys: generateDeviceKeyPair(),
+          deviceId: source.deviceId,
+          method: "GET",
+          path: "/agent/removal",
+          body: undefined,
+        })
+      )
+      .expect(401);
+
+    await request(app)
+      .get("/agent/removal")
+      .set(
+        signedHeaders({
+          keys: source.keys,
+          deviceId: source.deviceId,
+          method: "GET",
+          path: "/agent/removal",
+          body: undefined,
+        })
+      )
+      .expect(200)
+      .expect((res) => expect(res.body.data).toEqual({ status: "erase" }));
+
+    await request(app)
+      .post("/agent/removal/complete")
+      .set(
+        signedHeaders({
+          keys: source.keys,
+          deviceId: source.deviceId,
+          method: "POST",
+          path: "/agent/removal/complete",
+          body: undefined,
+        })
+      )
+      .expect(200)
+      .expect((res) => expect(res.body.data).toEqual({ status: "removed" }));
+
+    await request(app)
+      .get("/agent/removal")
+      .set(
+        signedHeaders({
+          keys: source.keys,
+          deviceId: source.deviceId,
+          method: "GET",
+          path: "/agent/removal",
+          body: undefined,
+        })
+      )
+      .expect(200)
+      .expect((res) => expect(res.body.data).toEqual({ status: "removed" }));
+
+    await request(app)
+      .post("/agent/heartbeat")
+      .set(
+        signedHeaders({
+          keys: source.keys,
+          deviceId: source.deviceId,
+          method: "POST",
+          path: "/agent/heartbeat",
+          body: { usedBytes: 0 },
+        })
+      )
+      .send({ usedBytes: 0 })
+      .expect(401);
+    await request(app)
+      .post("/agent/possession")
+      .set(
+        signedHeaders({
+          keys: source.keys,
+          deviceId: source.deviceId,
+          method: "POST",
+          path: "/agent/possession",
+          body: { objectHash, sizeBytes: 10 },
+        })
+      )
+      .send({ objectHash, sizeBytes: 10 })
+      .expect(401);
+    await request(app)
+      .get("/agent/repair")
+      .set(
+        signedHeaders({
+          keys: source.keys,
+          deviceId: source.deviceId,
+          method: "GET",
+          path: "/agent/repair",
+          body: undefined,
+        })
+      )
+      .expect(401);
+  });
+
   it("accepts a correctly signed heartbeat", async () => {
     const { deviceId, keys } = await enrolledDevice();
     const body = { usedBytes: 1024, appVersion: "1.0.0" };

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -261,9 +262,78 @@ describe("deletion", () => {
 
     await expect(store.delete(sha256("absent"))).resolves.toBeUndefined();
   });
+
+  it("erases only Benzene-managed directories", async () => {
+    const store = await makeStore();
+    await store.put(bytes("removable"));
+    await writeFile(path.join(root, "keep.txt"), "not Benzene data");
+
+    await store.erase();
+
+    expect(await store.list()).toEqual([]);
+    expect(store.usedBytes()).toBe(0);
+    await expect(readFile(path.join(root, "keep.txt"), "utf8")).resolves.toBe(
+      "not Benzene data"
+    );
+    await expect(stat(path.join(root, "objects"))).resolves.toBeDefined();
+  });
+
+  it.each(["/", homedir(), "/tmp", "/mnt"])(
+    "refuses to erase a broad configured root (%s)",
+    async (unsafeRoot) => {
+      const unsafe = new ObjectStore({ rootDir: unsafeRoot, allocatedBytes: 100 });
+
+      await expect(unsafe.erase()).rejects.toThrow(/unsafe storage root/);
+    }
+  );
+
+  it.each(["/", homedir(), "/tmp", "/mnt"])(
+    "refuses to load a broad configured root (%s) before touching it",
+    async (unsafeRoot) => {
+      const unsafe = new ObjectStore({ rootDir: unsafeRoot, allocatedBytes: 100 });
+
+      await expect(unsafe.load()).rejects.toThrow(/unsafe storage root/);
+    }
+  );
+
+  it("refuses to erase when its ownership marker is missing", async () => {
+    const store = await makeStore();
+    await store.put(bytes("must remain"));
+    await rm(path.join(root, ".benzene-store"));
+
+    await expect(store.erase()).rejects.toThrow(/ENOENT|no such file/i);
+    expect(await store.list()).toHaveLength(1);
+  });
+
+  it("persists an erase-pending marker across restart", async () => {
+    const first = await makeStore();
+    await first.erase();
+    expect(first.removalPending()).toBe(true);
+
+    const restarted = await makeStore();
+    expect(restarted.removalPending()).toBe(true);
+    await restarted.clearRemovalPending();
+    expect(restarted.removalPending()).toBe(false);
+  });
 });
 
 describe("restarting", () => {
+  it("refuses an unmarked non-empty root without changing its contents", async () => {
+    await writeFile(path.join(root, "keep.txt"), "not Benzene data");
+    await mkdir(path.join(root, "tmp"), { recursive: true });
+    await writeFile(path.join(root, "tmp", "keep.txt"), "still not Benzene data");
+
+    const store = new ObjectStore({ rootDir: root, allocatedBytes: 100 });
+
+    await expect(store.load()).rejects.toThrow(/unmarked non-empty storage root/);
+    await expect(readFile(path.join(root, "keep.txt"), "utf8")).resolves.toBe(
+      "not Benzene data"
+    );
+    await expect(readFile(path.join(root, "tmp", "keep.txt"), "utf8")).resolves.toBe(
+      "still not Benzene data"
+    );
+  });
+
   // The agent cannot trust an in-memory counter across a restart: it may have
   // been killed mid-write.
   it("recomputes usage from what is actually on disk", async () => {

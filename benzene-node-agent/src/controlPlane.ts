@@ -37,6 +37,14 @@ export interface RepairFailureResult {
   status: "corrupt";
 }
 
+export interface RemovalDirective {
+  status: "erase" | "removed";
+}
+
+export interface RemovalCompletion {
+  status: "draining" | "removed";
+}
+
 export interface RepairAssignment {
   objectHash: string;
   sizeBytes: number;
@@ -273,6 +281,62 @@ export class ControlPlaneClient {
     }
 
     const payload = (await res.json()) as { data: RepairFailureResult };
+    return payload.data;
+  }
+
+  /** Polls for a safe device-storage erase instruction. */
+  async pollRemoval(input: {
+    deviceId: string;
+    privateKey: string;
+  }): Promise<RemovalDirective | null> {
+    const path = "/agent/removal";
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: {
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "GET",
+          path,
+          body: "",
+        }),
+      },
+    });
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Device-removal poll rejected")
+      );
+    }
+    const payload = (await res.json()) as { data: RemovalDirective | null };
+    return payload.data;
+  }
+
+  /** Reports that the agent erased only its configured Benzene store. */
+  async completeRemoval(input: {
+    deviceId: string;
+    privateKey: string;
+  }): Promise<RemovalCompletion> {
+    const path = "/agent/removal/complete";
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "POST",
+          path,
+          body: "",
+        }),
+      },
+    });
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Device-removal completion rejected")
+      );
+    }
+    const payload = (await res.json()) as { data: RemovalCompletion };
     return payload.data;
   }
 }

@@ -4,6 +4,7 @@ import type { ReadableStream } from "node:stream/web";
 import type { AgentConfig } from "./config.js";
 import { ControlPlaneClient, ControlPlaneError } from "./controlPlane.js";
 import { IdentityStore, type DeviceIdentity } from "./identity.js";
+import { generateDeviceKeyPair } from "./protocol.js";
 import { IntegrityError, ObjectStore, type StoredObject } from "./store.js";
 
 export const AGENT_VERSION = "0.1.0";
@@ -19,6 +20,10 @@ export interface AgentEvents {
   onEnrollmentPending?: (prompt: EnrollmentPrompt) => void;
   onEnrolled?: (deviceId: string) => void;
   onHeartbeat?: (result: { status: string; usedBytes: number }) => void;
+  /** Stops the transfer listener and drains active requests before erasure. */
+  onRemovalStart?: () => Promise<void> | void;
+  /** Raised after the control plane accepts device removal. */
+  onRemoved?: () => void;
   onError?: (error: unknown) => void;
 }
 
@@ -34,6 +39,8 @@ export class Agent {
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private identity: DeviceIdentity | undefined;
   private repairInFlight = false;
+  private removalInFlight = false;
+  private transferServingAllowed = true;
   private lastRepairAttemptAt = 0;
 
   constructor(
@@ -50,10 +57,16 @@ export class Agent {
     return this.identity;
   }
 
+  /** False after an erase directive until this device is removed. */
+  canServeTransfers(): boolean {
+    return this.transferServingAllowed;
+  }
+
   /** Loads or generates this machine's keypair. */
   async initialise(): Promise<DeviceIdentity> {
     this.identity = await this.identityStore.loadOrCreate();
     await this.store.load();
+    this.transferServingAllowed = !this.store.removalPending();
     return this.identity;
   }
 
@@ -142,6 +155,7 @@ export class Agent {
 
   /** One presence report. Returns null when the device is not yet enrolled. */
   async sendHeartbeat(): Promise<{ status: string; usedBytes: number } | null> {
+    if (this.removalInFlight) return null;
     const identity = this.requireIdentity();
     if (!identity.deviceId) return null;
 
@@ -178,6 +192,48 @@ export class Agent {
   }
 
   /**
+   * Polls and performs the bounded removal handshake. The store is erased
+   * before the signed completion report; identity is replaced only after the
+   * control plane accepts (or confirms) the terminal removed state.
+   */
+  async pollRemoval(): Promise<boolean> {
+    const identity = this.requireIdentity();
+    if (!identity.deviceId || this.removalInFlight) return false;
+    this.removalInFlight = true;
+
+    try {
+      const directive = await this.client.pollRemoval({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+      });
+      if (directive?.status === "removed") {
+        if (this.store.removalPending()) await this.store.clearRemovalPending();
+        await this.relinquishIdentity();
+        return true;
+      }
+      if (!directive && !this.store.removalPending()) return false;
+
+      if (directive?.status === "erase" || this.store.removalPending()) {
+        this.transferServingAllowed = false;
+        await this.events.onRemovalStart?.();
+        await this.store.erase();
+      }
+      const completion = await this.client.completeRemoval({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+      });
+      if (completion.status === "removed") {
+        await this.store.clearRemovalPending();
+        await this.relinquishIdentity();
+        return true;
+      }
+      return false;
+    } finally {
+      this.removalInFlight = false;
+    }
+  }
+
+  /**
    * Performs at most one whole-file LAN repair when work is available.
    *
    * The source streams directly into this agent; neither the browser nor the
@@ -188,7 +244,7 @@ export class Agent {
    */
   async attemptRepair(): Promise<boolean> {
     const identity = this.requireIdentity();
-    if (!identity.deviceId || this.repairInFlight) return false;
+    if (!identity.deviceId || this.repairInFlight || this.removalInFlight) return false;
 
     const now = Date.now();
     if (now - this.lastRepairAttemptAt < this.config.repairIntervalMs) return false;
@@ -262,8 +318,14 @@ export class Agent {
     if (this.heartbeatTimer) return;
 
     const tick = (): void => {
-      void this.sendHeartbeat()
-        .then(() => this.attemptRepair())
+      // Poll removal first so a device whose final completion response was
+      // lost can still learn that it is already removed; late heartbeats are
+      // intentionally rejected after the control-plane transition.
+      void this.pollRemoval()
+        .then((removed) => {
+          if (removed || this.removalInFlight) return false;
+          return this.sendHeartbeat().then(() => this.attemptRepair());
+        })
         .catch((err: unknown) => {
           this.events.onError?.(err);
         });
@@ -287,5 +349,19 @@ export class Agent {
       throw new Error("Agent.initialise() must be awaited before use");
     }
     return this.identity;
+  }
+
+  private async relinquishIdentity(): Promise<void> {
+    this.stopHeartbeat();
+    this.identity = {
+      ...generateDeviceKeyPair(),
+      deviceId: null,
+      enrollmentId: null,
+      controlPlanePublicKey: null,
+      createdAt: new Date().toISOString(),
+    };
+    this.transferServingAllowed = false;
+    await this.identityStore.save(this.identity);
+    this.events.onRemoved?.();
   }
 }

@@ -30,7 +30,21 @@ export function requireDevice(
     .catch(next);
 }
 
-async function authenticateDevice(req: Request): Promise<void> {
+/** Removal polling/completion remains idempotent after the row is removed. */
+export function requireDeviceForRemoval(
+  req: Request,
+  _res: Response,
+  next: NextFunction
+): void {
+  void authenticateDevice(req, true)
+    .then(() => next())
+    .catch(next);
+}
+
+async function authenticateDevice(
+  req: Request,
+  allowRemoved = false
+): Promise<void> {
   const deviceId = req.get("x-device-id")?.trim();
   const timestamp = req.get("x-device-timestamp")?.trim();
   const signature = req.get("x-device-signature")?.trim();
@@ -53,7 +67,7 @@ async function authenticateDevice(req: Request): Promise<void> {
 
   const device = await findDeviceById(deviceId);
   if (!device) throw AppError.unauthorized("Unknown device");
-  if (device.status === "removed") {
+  if (device.status === "removed" && !allowRemoved) {
     throw AppError.unauthorized("This device has been removed from the vault");
   }
 

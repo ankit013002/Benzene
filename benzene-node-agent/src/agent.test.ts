@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -12,6 +12,8 @@ import {
   ControlPlaneClient,
   ControlPlaneError,
   type RepairAssignment,
+  type RemovalCompletion,
+  type RemovalDirective,
   type EnrollmentStatus,
   type EnrollmentTicket,
   type HeartbeatResult,
@@ -40,6 +42,9 @@ class FakeControlPlane extends ControlPlaneClient {
     sourceDeviceId: string;
     repairAssignmentId: string;
   }> = [];
+  removalDirective: RemovalDirective | null = null;
+  removalCompletions = 0;
+  removalCompletion: RemovalCompletion = { status: "removed" };
 
   constructor() {
     super("http://control-plane.invalid");
@@ -103,6 +108,15 @@ class FakeControlPlane extends ControlPlaneClient {
       repairAssignmentId: input.repairAssignmentId,
     });
     return { status: "corrupt" };
+  }
+
+  override async pollRemoval(): Promise<RemovalDirective | null> {
+    return this.removalDirective;
+  }
+
+  override async completeRemoval(): Promise<RemovalCompletion> {
+    this.removalCompletions += 1;
+    return this.removalCompletion;
   }
 }
 
@@ -463,6 +477,141 @@ describe("repair", () => {
     expect(plane.repairFailures).toEqual([]);
     expect(plane.possessionReports).toEqual([]);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("device removal", () => {
+  it("erases only the Benzene store before relinquishing identity", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    await agent.store.put(Readable.from([Buffer.from("device bytes")]));
+    await writeFile(path.join(root, "keep.txt"), "outside the object store");
+    plane.removalDirective = { status: "erase" };
+
+    await expect(agent.pollRemoval()).resolves.toBe(true);
+
+    expect(await agent.store.list()).toEqual([]);
+    expect(agent.store.usedBytes()).toBe(0);
+    await expect(readFile(path.join(root, "keep.txt"), "utf8")).resolves.toBe(
+      "outside the object store"
+    );
+    expect(plane.removalCompletions).toBe(1);
+    expect((await readIdentity()).deviceId).toBeNull();
+    expect((await readIdentity()).controlPlanePublicKey).toBeNull();
+  });
+
+  it("keeps the new identity pending when completion reports protection is still draining", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    await agent.store.put(Readable.from([Buffer.from("device bytes")]));
+    plane.removalDirective = { status: "erase" };
+    plane.removalCompletion = { status: "draining" };
+
+    await expect(agent.pollRemoval()).resolves.toBe(false);
+
+    expect(await agent.store.list()).toEqual([]);
+    expect((await readIdentity()).deviceId).toBe("device-123");
+    expect(plane.removalCompletions).toBe(1);
+  });
+
+  it("relinquishes identity when a lost completion response is followed by removed status", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    plane.removalDirective = { status: "removed" };
+
+    await expect(agent.pollRemoval()).resolves.toBe(true);
+
+    expect((await readIdentity()).deviceId).toBeNull();
+  });
+
+  it("quiesces transfers before erasing and completing removal", async () => {
+    const plane = new FakeControlPlane();
+    const cfg = config();
+    const store = new ObjectStore({ rootDir: cfg.storageDir, allocatedBytes: cfg.allocatedBytes });
+    const order: string[] = [];
+    const agent = new Agent(cfg, store, {
+      onRemovalStart: () => {
+        order.push("quiesce");
+      },
+    }, plane);
+    await agent.initialise();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    plane.removalDirective = { status: "erase" };
+    vi.spyOn(store, "erase").mockImplementation(async () => {
+      order.push("erase");
+    });
+    vi.spyOn(plane, "completeRemoval").mockImplementation(async () => {
+      order.push("complete");
+      return { status: "removed" };
+    });
+
+    await expect(agent.pollRemoval()).resolves.toBe(true);
+    expect(order).toEqual(["quiesce", "erase", "complete"]);
+  });
+
+  it("does not overlap a second removal poll while erasure is in flight", async () => {
+    const plane = new FakeControlPlane();
+    const cfg = config();
+    const store = new ObjectStore({ rootDir: cfg.storageDir, allocatedBytes: cfg.allocatedBytes });
+    let releaseQuiesce: (() => void) | undefined;
+    let quiesceStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      quiesceStarted = resolve;
+    });
+    const agent = new Agent(cfg, store, {
+      onRemovalStart: async () => {
+        quiesceStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseQuiesce = resolve;
+        });
+      },
+    }, plane);
+    await agent.initialise();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    plane.removalDirective = { status: "erase" };
+
+    const first = agent.pollRemoval();
+    await started;
+    await expect(agent.pollRemoval()).resolves.toBe(false);
+    releaseQuiesce?.();
+    await expect(first).resolves.toBe(true);
+    expect(plane.removalCompletions).toBe(1);
+  });
+
+  it("resumes a persisted erase before serving after a restart", async () => {
+    const plane = new FakeControlPlane();
+    const cfg = config();
+    const firstStore = new ObjectStore({ rootDir: cfg.storageDir, allocatedBytes: cfg.allocatedBytes });
+    const first = new Agent(cfg, firstStore, {}, plane);
+    await first.initialise();
+    await first.ensureEnrolled();
+    plane.status = "consumed";
+    await first.pollEnrollment();
+    await firstStore.erase();
+
+    const restartedStore = new ObjectStore({
+      rootDir: cfg.storageDir,
+      allocatedBytes: cfg.allocatedBytes,
+    });
+    const restarted = new Agent(cfg, restartedStore, {}, plane);
+    await restarted.initialise();
+    expect(restarted.canServeTransfers()).toBe(false);
+    plane.removalDirective = null;
+
+    await expect(restarted.pollRemoval()).resolves.toBe(true);
+    expect(restartedStore.removalPending()).toBe(false);
+    expect(restarted.canServeTransfers()).toBe(false);
+    expect(plane.removalCompletions).toBe(1);
   });
 });
 

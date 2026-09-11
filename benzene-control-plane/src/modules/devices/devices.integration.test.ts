@@ -10,10 +10,12 @@ import { generateDeviceKeyPair } from "./deviceIdentity.js";
 import {
   approveEnrollment,
   beginDeviceRemoval,
+  completeDeviceRemoval,
   deriveStatus,
   getEnrollmentStatus,
   listDevices,
   listPendingEnrollments,
+  pollDeviceRemoval,
   recordHeartbeat,
   rejectEnrollment,
   requestEnrollment,
@@ -484,5 +486,97 @@ describe("device removal", () => {
 
     expect((await listDevices(OWNER)).find((device) => device.id === source.deviceId))
       .toMatchObject({ status: "draining", removalReady: true });
+  });
+
+  it("erases and removes a draining device only after protection is restored", async () => {
+    const source = await enrollDevice(OWNER, "Old PC");
+    const target = await enrollDevice(OWNER, "Replacement");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    await recordHeartbeat(source.deviceId, { advertisedUrl: "http://127.0.0.1:7071" });
+    await recordHeartbeat(target.deviceId, { advertisedUrl: "http://127.0.0.1:7072" });
+    const objectHash = "b".repeat(64);
+
+    await reservePlacement(OWNER, {
+      objectHash,
+      sizeBytes: 10,
+      deviceIds: [source.deviceId],
+    });
+    await confirmReplica(OWNER, { objectHash, deviceId: source.deviceId, sizeBytes: 10 });
+    await beginDeviceRemoval(OWNER, source.deviceId);
+
+    await expect(pollDeviceRemoval(source.deviceId)).resolves.toBeNull();
+
+    await reservePlacement(OWNER, {
+      objectHash,
+      sizeBytes: 10,
+      deviceIds: [target.deviceId],
+    });
+    await confirmReplica(OWNER, { objectHash, deviceId: target.deviceId, sizeBytes: 10 });
+    await expect(pollDeviceRemoval(source.deviceId)).resolves.toEqual({ status: "erase" });
+
+    await expect(completeDeviceRemoval(source.deviceId)).resolves.toEqual({
+      status: "removed",
+    });
+    const [removedReplica] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(
+        eq(schema.replicas.deviceId, source.deviceId)
+      );
+    expect(removedReplica?.status).toBe("missing");
+    expect((await listDevices(OWNER).then((rows) => rows.find((row) => row.id === source.deviceId)))
+      ).toBeUndefined();
+
+    // A lost completion response can be retried and a late heartbeat cannot
+    // resurrect a device that has already left the vault.
+    await expect(completeDeviceRemoval(source.deviceId)).resolves.toEqual({
+      status: "removed",
+    });
+    await expect(recordHeartbeat(source.deviceId, { usedBytes: 0 })).resolves.toEqual({
+      status: "removed",
+    });
+    await expect(pollDeviceRemoval(source.deviceId)).resolves.toEqual({
+      status: "removed",
+    });
+  });
+
+  it("records erased replicas as missing if protection changes after the directive", async () => {
+    const source = await enrollDevice(OWNER, "Old PC");
+    const target = await enrollDevice(OWNER, "Replacement");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    await recordHeartbeat(source.deviceId, { advertisedUrl: "http://127.0.0.1:7071" });
+    await recordHeartbeat(target.deviceId, { advertisedUrl: "http://127.0.0.1:7072" });
+    const objectHash = "c".repeat(64);
+
+    for (const deviceId of [source.deviceId, target.deviceId]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 10, deviceIds: [deviceId] });
+      await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 10 });
+    }
+    await beginDeviceRemoval(OWNER, source.deviceId);
+    await expect(pollDeviceRemoval(source.deviceId)).resolves.toEqual({ status: "erase" });
+
+    // The replacement can fail after the directive but before the node's
+    // completion report. The erased device must not retain a healthy claim.
+    await db
+      .update(schema.replicas)
+      .set({ status: "corrupt" })
+      .where(eq(schema.replicas.deviceId, target.deviceId));
+    await expect(completeDeviceRemoval(source.deviceId)).resolves.toEqual({
+      status: "draining",
+    });
+    const [sourceRow] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(eq(schema.replicas.deviceId, source.deviceId));
+    expect(sourceRow?.status).toBe("missing");
+
+    await db
+      .update(schema.replicas)
+      .set({ status: "healthy" })
+      .where(eq(schema.replicas.deviceId, target.deviceId));
+    await expect(pollDeviceRemoval(source.deviceId)).resolves.toEqual({ status: "erase" });
+    await expect(completeDeviceRemoval(source.deviceId)).resolves.toEqual({
+      status: "removed",
+    });
   });
 });

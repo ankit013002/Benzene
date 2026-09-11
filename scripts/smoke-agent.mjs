@@ -14,7 +14,7 @@
  */
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { Readable } from "node:stream";
 import { createHash } from "node:crypto";
@@ -388,6 +388,123 @@ async function main() {
     } else {
       check("forged heartbeat is refused", false, "device was not enrolled");
     }
+
+    console.log("\ndevice removal erases only its Benzene store");
+    const removalConfig = loadAgentConfig({
+      controlPlaneUrl,
+      dataDir: path.join(storageRoot, "removal-agent"),
+      storageDir: path.join(storageRoot, "removal-agent", "storage"),
+      identityFile: path.join(storageRoot, "removal-agent", "identity.json"),
+      allocatedBytes: ALLOCATED,
+      deviceName: "Smoke Removal Desktop",
+      platform: "linux",
+      advertisedUrl: "http://127.0.0.1:0",
+      port: 0,
+    });
+    const removalStore = new ObjectStore({
+      rootDir: removalConfig.storageDir,
+      allocatedBytes: removalConfig.allocatedBytes,
+    });
+    const { ControlPlaneClient } = agentRequire("./built/controlPlane.js");
+    const { Agent: RemovalAgent } = agentRequire("./built/agent.js");
+    const removalAgent = new RemovalAgent(removalConfig, removalStore);
+    await removalAgent.initialise();
+    const removalEnrollment = await removalAgent.ensureEnrolled();
+    check("second agent received a pairing code", Boolean(removalEnrollment.prompt?.code));
+
+    let removalApprovalStatus;
+    if (removalEnrollment.prompt?.code) {
+      const removalApproval = await fetch(`${controlPlaneUrl}/devices/enrollments/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-User-Id": OWNER },
+        body: JSON.stringify({
+          code: removalEnrollment.prompt.code,
+          allocatedBytes: ALLOCATED,
+        }),
+      });
+      removalApprovalStatus = removalApproval.status;
+    }
+    check("control plane accepted the second approval", removalApprovalStatus === 201);
+    check("second agent became enrolled", (await removalAgent.pollEnrollment()) === true);
+    const removalIdentity = removalAgent.currentIdentity();
+    check("second agent has removal credentials", Boolean(removalIdentity?.deviceId));
+
+    const removalPayload = await removalStore.put(
+      Readable.from([Buffer.from("remove me")])
+    );
+    await writeFile(path.join(removalConfig.storageDir, "keep.txt"), "leave me");
+    const removalBeat = await removalAgent.sendHeartbeat();
+    check("second agent is online before removal", removalBeat?.status === "online");
+
+    const removalDeviceId = removalIdentity?.deviceId;
+    let removalResponse;
+    if (removalDeviceId) {
+      removalResponse = await fetch(`${controlPlaneUrl}/devices/${removalDeviceId}/removal`, {
+        method: "POST",
+        headers: { "X-User-Id": OWNER },
+      });
+    }
+    const removalView = await jsonOrNull(removalResponse);
+    check("user removal request entered draining", removalResponse?.status === 202);
+    check(
+      "draining device is reported by the user endpoint",
+      removalView?.data?.status === "draining"
+    );
+
+    const removalDone = removalDeviceId ? await removalAgent.pollRemoval() : false;
+    check("agent accepted the erase directive", removalDone === true);
+    check("managed removal bytes were erased", (await removalStore.list()).length === 0);
+    check("removal store usage is zero", removalStore.usedBytes() === 0);
+    check(
+      "removal store sibling remains",
+      await readFile(path.join(removalConfig.storageDir, "keep.txt"), "utf8") === "leave me"
+    );
+    check(
+      "removal agent relinquished its identity",
+      removalAgent.currentIdentity()?.deviceId === null
+    );
+
+    if (removalDeviceId && removalIdentity) {
+      const removalClient = new ControlPlaneClient(controlPlaneUrl);
+      const retry = await removalClient.completeRemoval({
+        deviceId: removalDeviceId,
+        privateKey: removalIdentity.privateKey,
+      });
+      check("removal completion retry is idempotent", retry.status === "removed");
+      try {
+        await removalClient.heartbeat({
+          deviceId: removalDeviceId,
+          privateKey: removalIdentity.privateKey,
+          usedBytes: 0,
+          availableBytes: ALLOCATED,
+          appVersion: "smoke",
+        });
+        check("removed device rejects normal signed requests", false, "heartbeat was accepted");
+      } catch (error) {
+        check("removed device rejects normal signed requests", error?.status === 401);
+      }
+    } else {
+      check("removal completion retry is idempotent", false, "second agent was not enrolled");
+      check("removed device rejects normal signed requests", false, "second agent was not enrolled");
+    }
+
+    if (removalDeviceId) {
+      const afterRemovalDevices = await fetch(`${controlPlaneUrl}/devices`, {
+        headers: { "X-User-Id": OWNER },
+      });
+      const afterRemovalPayload = await jsonOrNull(afterRemovalDevices);
+      const afterRemovalList = Array.isArray(afterRemovalPayload?.data)
+        ? afterRemovalPayload.data
+        : [];
+      check(
+        "removed device disappears from the vault list",
+        !afterRemovalList.some((device) => device.id === removalDeviceId)
+      );
+    } else {
+      check("removed device disappears from the vault list", false, "second agent was not enrolled");
+    }
+
+    check("removal object was written before erase", removalPayload.size > 0);
 
     agent.stopHeartbeat();
   } finally {

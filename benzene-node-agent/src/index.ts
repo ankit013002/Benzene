@@ -18,6 +18,8 @@ async function main(): Promise<void> {
     allocatedBytes: config.allocatedBytes,
   });
 
+  let server: ReturnType<ReturnType<typeof createTransferServer>["listen"]> | undefined;
+
   const agent = new Agent(config, store, {
     onEnrollmentPending: ({ code, expiresAt }) => {
       console.log("");
@@ -31,6 +33,26 @@ async function main(): Promise<void> {
     },
     onError: (err) => {
       console.error("[agent] background error:", err);
+    },
+    onRemovalStart: () =>
+      new Promise<void>((resolve, reject) => {
+        const activeServer = server;
+        if (!activeServer) {
+          resolve();
+          return;
+        }
+        server = undefined;
+        // close() stops new connections and waits for active HTTP requests to
+        // finish, so no stale write can arrive between quiesce and erase.
+        activeServer.close((err) => (err ? reject(err) : resolve()));
+      }),
+    onRemoved: () => {
+      // No new grants are issued after removal, but closing the listener also
+      // prevents a short-lived stale grant from writing into the emptied store.
+      if (server) {
+        server.close();
+        server = undefined;
+      }
     },
   });
 
@@ -46,12 +68,14 @@ async function main(): Promise<void> {
    * and the control plane's public key to verify grants. Serving before then
    * would mean serving with nothing to check against.
    */
-  let server: ReturnType<ReturnType<typeof createTransferServer>["listen"]> | undefined;
-
   const startTransferServer = (): void => {
     if (server) return;
     const identity = agent.currentIdentity();
-    if (!identity?.deviceId || !identity.controlPlanePublicKey) return;
+    if (
+      !identity?.deviceId ||
+      !identity.controlPlanePublicKey ||
+      !agent.canServeTransfers()
+    ) return;
 
     server = createTransferServer({
       store,
@@ -65,6 +89,14 @@ async function main(): Promise<void> {
   };
 
   const { enrolled } = await agent.ensureEnrolled();
+  const startEnrolledAgent = async (): Promise<void> => {
+    // Resolve a persisted drain/erase state before opening the listener after
+    // a restart; an in-flight erase must never be exposed to stale grants.
+    await agent.pollRemoval();
+    agent.startHeartbeat();
+    startTransferServer();
+  };
+
   if (!enrolled) {
     // Poll until the user approves; the code is already on screen.
     const poll = setInterval(() => {
@@ -73,16 +105,16 @@ async function main(): Promise<void> {
         .then((done) => {
           if (done) {
             clearInterval(poll);
-            agent.startHeartbeat();
-            startTransferServer();
+            void startEnrolledAgent().catch((err: unknown) =>
+              console.error("[agent] removal check failed:", err)
+            );
           }
         })
         .catch((err: unknown) => console.error("[agent] enrollment check failed:", err));
     }, 5_000);
     poll.unref?.();
   } else {
-    agent.startHeartbeat();
-    startTransferServer();
+    await startEnrolledAgent();
   }
 
   const shutdown = (signal: string): void => {

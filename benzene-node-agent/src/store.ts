@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
@@ -24,6 +34,8 @@ import type { Readable } from "node:stream";
  * rewriting every stored byte on machines we do not control.
  */
 export const OBJECT_FORMAT_VERSION = 1;
+const STORE_MARKER = "benzene-object-store-v1\n";
+const REMOVAL_PENDING_MARKER = "benzene-removal-pending-v1\n";
 
 export interface ObjectMetadata {
   v: number;
@@ -73,6 +85,7 @@ export class ObjectStore {
   private allocatedBytes: number;
   private used = 0;
   private loaded = false;
+  private removalPendingState = false;
   /** Serialises mutations so concurrent PUTs cannot spend the same free bytes. */
   private mutationTail: Promise<void> = Promise.resolve();
 
@@ -93,6 +106,14 @@ export class ObjectStore {
     return path.join(this.rootDir, "tmp");
   }
 
+  private get markerPath(): string {
+    return path.join(this.rootDir, ".benzene-store");
+  }
+
+  private get removalPendingPath(): string {
+    return path.join(this.rootDir, ".benzene-removal-pending");
+  }
+
   /** Two-character fan-out keeps directories from growing unboundedly wide. */
   private pathFor(dir: string, hash: string, suffix = ""): string {
     return path.join(dir, hash.slice(0, 2), `${hash}${suffix}`);
@@ -106,9 +127,16 @@ export class ObjectStore {
    * last heartbeat.
    */
   async load(): Promise<void> {
+    await this.assertSafeStoreRoot();
+    // Claim the root before creating or deleting any managed child. An
+    // unmarked non-empty directory may belong to another application; the
+    // old pre-marker layout is intentionally not auto-upgraded because its
+    // ownership cannot be established safely.
+    await this.claimOrValidateRoot();
     await mkdir(this.objectsDir, { recursive: true });
     await mkdir(this.metaDir, { recursive: true });
     await mkdir(this.tmpDir, { recursive: true });
+    this.removalPendingState = await this.hasRemovalPendingMarker();
 
     // Anything in tmp is the debris of an interrupted write.
     await rm(this.tmpDir, { recursive: true, force: true });
@@ -139,6 +167,10 @@ export class ObjectStore {
 
   availableBytes(): number {
     return Math.max(0, this.allocatedBytes - this.used);
+  }
+
+  removalPending(): boolean {
+    return this.removalPendingState;
   }
 
   /** Applied when the user changes how much this device contributes. */
@@ -380,6 +412,117 @@ export class ObjectStore {
     await this.withMutationLock(() => this.deleteUnlocked(hash));
   }
 
+  /**
+   * Erases only Benzene-managed object, metadata and temporary directories.
+   * The configured store root itself and every sibling path remain untouched;
+   * device removal must never become a general-purpose filesystem wipe. This
+   * removes filesystem entries; it is not a secure media overwrite guarantee.
+   */
+  async erase(): Promise<void> {
+    await this.assertSafeStoreRoot();
+    await this.withMutationLock(async () => {
+      this.assertLoaded();
+      await this.verifyMarker();
+      await writeFile(this.removalPendingPath, REMOVAL_PENDING_MARKER, {
+        encoding: "utf8",
+        flag: "w",
+      });
+      this.removalPendingState = true;
+      await Promise.all([
+        rm(this.objectsDir, { recursive: true, force: true }),
+        rm(this.metaDir, { recursive: true, force: true }),
+        rm(this.tmpDir, { recursive: true, force: true }),
+      ]);
+      await mkdir(this.objectsDir, { recursive: true });
+      await mkdir(this.metaDir, { recursive: true });
+      await mkdir(this.tmpDir, { recursive: true });
+      this.used = 0;
+    });
+  }
+
+  async clearRemovalPending(): Promise<void> {
+    await this.withMutationLock(async () => {
+      this.assertLoaded();
+      await this.verifyMarker();
+      await rm(this.removalPendingPath, { force: true });
+      this.removalPendingState = false;
+    });
+  }
+
+  private async claimOrValidateRoot(): Promise<void> {
+    await mkdir(this.rootDir, { recursive: true });
+    try {
+      const marker = await readFile(this.markerPath, "utf8");
+      if (marker !== STORE_MARKER) {
+        throw new Error("Configured storage root has an invalid Benzene marker");
+      }
+    } catch (err) {
+      if (!isErrno(err, "ENOENT")) throw err;
+      const entries = await readdir(this.rootDir);
+      if (entries.length > 0) {
+        throw new Error(
+          "Refusing to claim an unmarked non-empty storage root; existing-store upgrade is unsupported"
+        );
+      }
+      try {
+        await writeFile(this.markerPath, STORE_MARKER, {
+          encoding: "utf8",
+          flag: "wx",
+        });
+      } catch (claimError) {
+        // Another process may have claimed the empty root between the scan and
+        // the exclusive create. Validate its marker rather than overwriting it.
+        if (!isErrno(claimError, "EEXIST")) throw claimError;
+        await this.verifyMarker();
+      }
+    }
+  }
+
+  private async verifyMarker(): Promise<void> {
+    const marker = await readFile(this.markerPath, "utf8");
+    if (marker !== STORE_MARKER) {
+      throw new Error("Configured storage root has an invalid Benzene marker");
+    }
+  }
+
+  private async hasRemovalPendingMarker(): Promise<boolean> {
+    try {
+      const marker = await readFile(this.removalPendingPath, "utf8");
+      if (marker !== REMOVAL_PENDING_MARKER) {
+        throw new Error("Configured storage root has an invalid removal marker");
+      }
+      return true;
+    } catch (err) {
+      if (isErrno(err, "ENOENT")) return false;
+      throw err;
+    }
+  }
+
+  private async assertSafeStoreRoot(): Promise<void> {
+    const root = path.resolve(this.rootDir);
+    const canonicalRoot = await canonicalPath(root);
+    const filesystemRoot = path.parse(canonicalRoot).root;
+    const broadRoots = new Set(
+      await Promise.all(
+        [
+          filesystemRoot,
+          path.resolve(homedir()),
+          path.resolve(tmpdir()),
+          "/tmp",
+          "/private/tmp",
+          "/var/tmp",
+          "/mnt",
+        ].map((candidate) => canonicalPath(candidate))
+      )
+    );
+    if (
+      broadRoots.has(canonicalRoot) ||
+      path.dirname(canonicalRoot) === filesystemRoot
+    ) {
+      throw new Error(`Refusing to erase unsafe storage root: ${canonicalRoot}`);
+    }
+  }
+
   private async deleteUnlocked(hash: string): Promise<void> {
     this.assertLoaded();
 
@@ -413,5 +556,24 @@ export class ObjectStore {
     if (!this.loaded) {
       throw new Error("ObjectStore.load() must be awaited before use");
     }
+  }
+}
+
+function isErrno(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code
+  );
+}
+
+async function canonicalPath(candidate: string): Promise<string> {
+  try {
+    return await realpath(candidate);
+  } catch (error) {
+    if (!isErrno(error, "ENOENT")) throw error;
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return candidate;
+    return path.join(await canonicalPath(parent), path.basename(candidate));
   }
 }
