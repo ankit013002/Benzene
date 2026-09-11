@@ -1,4 +1,5 @@
 import pg from "pg";
+import { databaseSslConfig } from "./ssl";
 
 /**
  * This module sets up a connection pool to the PostgreSQL database using the `pg` library.
@@ -10,10 +11,7 @@ import pg from "pg";
  */
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl:
-    process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: false }
-      : false,
+  ssl: databaseSslConfig(),
 });
 
 export default pool;
