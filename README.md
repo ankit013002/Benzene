@@ -147,7 +147,9 @@ so clients behind another proxy or load balancer may share that upstream peer's
 bucket; trusted proxy resolution must be implemented and configured before
 relying on per-origin buckets. Expired pending enrollments are cleaned in
 bounded batches, and approval or rejection locks only the exact normalized code
-row so competing decisions serialize.
+row so competing decisions serialize. Authenticated approve/reject attempts
+share a database-backed per-owner pairing budget, defaulting to 10 attempts per
+60 seconds; it is separate from device-creation peer buckets.
 
 ## Storage accounting and repair safety
 
@@ -181,6 +183,9 @@ a device is stale or offline.
 - PostgreSQL 16 and MongoDB
 - Java 21 for the gateway and user service
 - A shell with Maven available, or the checked-in `mvnw` scripts
+
+The committed Maven wrappers are executable; CI uses their checked-in mode and
+does not repair permissions.
 
 Create two local databases before starting:
 
@@ -285,7 +290,7 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **304** tests, agent **107**, auth **78** when its
+Verified counts: control plane **308** tests, agent **107**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, and **50 smoke
 checks**.
 

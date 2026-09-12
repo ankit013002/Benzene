@@ -145,6 +145,8 @@ Notes:
 - On macOS `JAVA_HOME` usually resolves correctly via `/usr/libexec/java_home`,
   so the JDK override above is Windows-specific — but check `java -version`
   reports 21 before blaming Maven.
+- The committed Maven wrappers are executable; CI uses their checked-in mode and
+  does not repair permissions.
 - The agent's `advertisedUrl` defaults to the machine's LAN address. On a Mac
   that is generally right; override `BENZENE_ADVERTISED_URL` if it picks a
   VPN or virtual interface.
@@ -285,6 +287,10 @@ relying on per-origin buckets. Expired pending enrollments are cleaned in
 bounded batches, and approval or rejection locks only the exact normalized code
 row so competing decisions serialize.
 
+Authenticated approve/reject attempts share a database-backed per-owner pairing
+budget, defaulting to 10 attempts per 60 seconds; it is separate from
+device-creation peer buckets.
+
 ### Storage accounting and repair safety
 
 Capacity admission treats the latest heartbeat's `usedBytes` as a baseline,
@@ -364,7 +370,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **304**, agent **107**, auth **78** when its
+Current counts: control plane **308**, agent **107**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, smoke **50 checks**.
 
 The auth-service and gateway production runtime images run as dedicated
