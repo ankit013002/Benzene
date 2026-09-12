@@ -303,6 +303,12 @@ Upload planning transactionally revalidates existing healthy holders while
 locking devices, allocations and replicas; if a concurrent drain invalidates
 the snapshot, it retries once so a leaving device cannot satisfy protection.
 
+Legacy and device-backed completion paths serialize promotion per file and always
+promote the highest committed immutable version, so a late lower completion
+cannot overwrite current metadata. A process crash between demotion and
+promotion can temporarily leave no current version until completion is retried
+after the lease expires; stored immutable versions remain intact.
+
 Repair assignments bind a target reservation to one healthy source and a
 persisted one-shot assignment id. A signed source-failure report must name
 both values and arrive before the same Unix-second grant boundary; consuming
@@ -374,11 +380,15 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **309**, agent **107**, auth **78** when its
+Current counts: control plane **311**, agent **107**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, smoke **50 checks**.
 
-The auth-service and gateway production runtime images run as dedicated
-non-root `benzene` users. The verified auth-service production-only dependency
+The frontend, auth-service, gateway, control-plane and user-service production
+runtime images run as dedicated non-root `benzene` users. The node agent remains
+a host/LAN process. The frontend Docker context
+excludes local `.env*` files while allowing the committed `.env.example`; its
+runtime stage contains only `public`, Next standalone, and `.next/static`
+artifacts. The verified auth-service production-only dependency
 audit (`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
 repository-wide audit. Logout clears browser credentials even when upstream
 revocation is unavailable; the protected client leaves the session UI and keeps

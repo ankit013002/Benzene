@@ -56,9 +56,13 @@ production Dockerfiles and are published by the release workflow. The node
 agent intentionally remains a host/LAN process; it is not containerized because
 it contributes storage from the user's own computer.
 
-The auth-service and gateway production runtime images run as dedicated
-non-root `benzene` users. The verified auth-service production-only dependency
-audit (`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
+The frontend Docker context excludes local `.env*` files while allowing the
+committed `.env.example`; its runtime stage contains only `public`, Next
+standalone, and `.next/static` artifacts. The frontend, auth-service, gateway,
+control-plane and user-service production runtime images run as dedicated
+non-root `benzene` users. The node agent remains a host/LAN process. The
+verified auth-service production-only dependency audit
+(`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
 repository-wide audit.
 
 ## What works today
@@ -162,6 +166,12 @@ so exact-fit reservations cannot over-issue between heartbeats.
 Upload planning transactionally revalidates existing healthy holders while
 locking devices, allocations and replicas; if a concurrent drain invalidates
 the snapshot, it retries once so a leaving device cannot satisfy protection.
+
+Legacy and device-backed completion paths serialize promotion per file and always
+promote the highest committed immutable version, so a late lower completion
+cannot overwrite current metadata. A process crash between demotion and
+promotion can temporarily leave no current version until completion is retried
+after the lease expires; stored immutable versions remain intact.
 
 Repair work is bound to one healthy source and a persisted one-shot assignment
 id. A signed source-failure report must name that source and assignment before
@@ -294,7 +304,7 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **309** tests, agent **107**, auth **78** when its
+Verified counts: control plane **311** tests, agent **107**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, and **50 smoke
 checks**.
 
