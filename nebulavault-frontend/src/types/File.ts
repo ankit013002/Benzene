@@ -6,6 +6,12 @@ export type FileSize = {
   unit: FileSizeUnit;
 };
 
+export type FileAvailability =
+  | "available"
+  | "waiting_for_device"
+  | "restoring_protection"
+  | "unavailable";
+
 export type FileType = {
   /** DriveNode id, used to delete the logical file (legacy downloads only). */
   id: string;
@@ -24,5 +30,7 @@ export type FileType = {
     state?: string;
     healthyReplicas?: number;
     desiredReplicas?: number;
+    availability?: FileAvailability;
+    reachableHealthyReplicas?: number;
   };
 };

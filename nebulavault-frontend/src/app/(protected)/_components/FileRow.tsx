@@ -3,7 +3,7 @@
 import React from "react";
 import { IoMdDownload } from "react-icons/io";
 import { FaRegTrashAlt } from "react-icons/fa";
-import { FileType } from "@/types/File";
+import { FileType, type FileAvailability } from "@/types/File";
 import { HiOutlineDotsHorizontal } from "react-icons/hi";
 
 interface FileRowProps {
@@ -12,9 +12,20 @@ interface FileRowProps {
   onDelete: (nodeId: string) => void;
 }
 
+const AVAILABILITY_LABEL: Record<FileAvailability, string> = {
+  available: "Available",
+  waiting_for_device: "Waiting for device",
+  restoring_protection: "Restoring protection",
+  unavailable: "Unavailable",
+};
+
 const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
-  // A reserved-but-unfinished upload has no bytes to fetch yet.
-  const canDownload = file.hasContent !== false;
+  // A reserved-but-unfinished upload has no bytes to fetch yet. A known
+  // offline holder cannot serve a browser download until a device returns.
+  const hasContent = file.hasContent !== false;
+  const availability = file.protection?.availability;
+  const canDownload =
+    hasContent && availability !== "waiting_for_device" && availability !== "unavailable";
   const protection = file.protection;
   const confirmDelete = () => {
     if (window.confirm(`Remove “${file.name}” from your Vault?`)) {
@@ -27,15 +38,35 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
       typeof protection.desiredReplicas === "number" &&
       protection.healthyReplicas < protection.desiredReplicas);
 
+  const statusLabel =
+    availability === "unavailable" && protection?.state === "at_risk"
+      ? "Unavailable · At risk"
+      : availability && availability !== "available"
+        ? AVAILABILITY_LABEL[availability]
+        : isReducedProtection
+          ? protection?.state === "at_risk"
+            ? "At risk"
+            : "Reduced protection"
+          : null;
+  const statusClass =
+    availability === "unavailable" ||
+    (availability !== "waiting_for_device" &&
+      availability !== "restoring_protection" &&
+      protection?.state === "at_risk")
+      ? "border-destructive/40 bg-destructive/10 text-destructive"
+      : "border-warning/40 bg-warning/10 text-warning";
+
   return (
     <>
       <div className="min-w-0 flex items-center gap-2">
         <span className="truncate">{file.name}</span>
-        {!canDownload && (
+        {!hasContent && (
           <span className="badge badge-sm badge-warning">Uploading</span>
         )}
-        {canDownload && isReducedProtection && (
-          <span className="badge badge-sm badge-warning">Reduced protection</span>
+        {hasContent && statusLabel && (
+          <span className={`badge badge-sm border ${statusClass}`}>
+            {statusLabel}
+          </span>
         )}
       </div>
       <div className="hidden min-w-0 truncate sm:block">

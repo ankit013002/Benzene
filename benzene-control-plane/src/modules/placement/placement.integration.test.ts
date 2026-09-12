@@ -40,7 +40,8 @@ async function onlineDevice(
   owner: string,
   name: string,
   allocatedBytes = 100 * GB,
-  usedBytes = 0
+  usedBytes = 0,
+  advertisedUrl?: string
 ): Promise<string> {
   const keys = generateDeviceKeyPair();
   const enrollment = await requestEnrollment({
@@ -49,7 +50,7 @@ async function onlineDevice(
     platform: "linux",
   });
   const device = await approveEnrollment(owner, enrollment.code, allocatedBytes);
-  await recordHeartbeat(device.id, { usedBytes });
+  await recordHeartbeat(device.id, { usedBytes, advertisedUrl });
   return device.id;
 }
 
@@ -505,9 +506,74 @@ describe("protection health", () => {
   });
 
   it("reports an object with no replicas as unprotected", async () => {
-    expect((await getObjectProtection(OWNER, hashOf("nothing"))).state).toBe(
-      "unprotected"
-    );
+    const protection = await getObjectProtection(OWNER, hashOf("nothing"));
+    expect(protection.state).toBe("unprotected");
+    expect(protection.availability).toBe("unavailable");
+    expect(protection.reachableHealthyReplicas).toBe(0);
+  });
+
+  it("reports available only when a healthy copy is online and advertised", async () => {
+    const device = await onlineDevice(OWNER, "reachable", 100 * GB, 0, "http://reachable.test");
+    const hash = hashOf("available");
+    await place(hash, [device]);
+
+    const protection = await getObjectProtection(OWNER, hash);
+    expect(protection).toMatchObject({
+      healthyReplicas: 1,
+      reachableHealthyReplicas: 1,
+      availability: "available",
+    });
+  });
+
+  it("keeps offline durable copies protected but waiting for a device", async () => {
+    const device = await onlineDevice(OWNER, "offline", 100 * GB, 0, "http://offline.test");
+    const hash = hashOf("waiting");
+    await place(hash, [device]);
+
+    vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+
+    const protection = await getObjectProtection(OWNER, hash);
+    expect(protection).toMatchObject({
+      healthyReplicas: 1,
+      reachableHealthyReplicas: 0,
+      state: "at_risk",
+      availability: "waiting_for_device",
+    });
+  });
+
+  it("reports a reachable copy while protection is being restored", async () => {
+    const source = await onlineDevice(OWNER, "source", 100 * GB, 0, "http://source.test");
+    const target = await onlineDevice(OWNER, "target", 100 * GB, 0, "http://target.test");
+    const hash = hashOf("restoring");
+    await place(hash, [source]);
+    await reservePlacement(OWNER, { objectHash: hash, sizeBytes: 10, deviceIds: [target] });
+
+    const protection = await getObjectProtection(OWNER, hash);
+    expect(protection).toMatchObject({
+      healthyReplicas: 1,
+      reachableHealthyReplicas: 1,
+      placingReplicas: 1,
+      state: "at_risk",
+      availability: "restoring_protection",
+    });
+  });
+
+  it("does not treat a suspected-lost copy as durable or reachable", async () => {
+    const device = await onlineDevice(OWNER, "lost", 100 * GB, 0, "http://lost.test");
+    const hash = hashOf("lost");
+    await place(hash, [device]);
+    await db
+      .update(schema.devices)
+      .set({ status: "suspected_lost" })
+      .where(eq(schema.devices.id, device));
+
+    const protection = await getObjectProtection(OWNER, hash);
+    expect(protection).toMatchObject({
+      healthyReplicas: 0,
+      reachableHealthyReplicas: 0,
+      state: "unprotected",
+      availability: "unavailable",
+    });
   });
 });
 

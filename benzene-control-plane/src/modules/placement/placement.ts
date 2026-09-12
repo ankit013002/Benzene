@@ -145,6 +145,18 @@ export function planPlacement(
 export type ProtectionState = "healthy" | "degraded" | "at_risk" | "unprotected";
 
 /**
+ * Whether an object can be read now, separately from whether it is durable.
+ *
+ * A healthy replica on an offline device is still protection, but it cannot
+ * serve a read until that device is reachable again.
+ */
+export type AvailabilityState =
+  | "available"
+  | "waiting_for_device"
+  | "restoring_protection"
+  | "unavailable";
+
+/**
  * Translates replica counts into the status a user sees (product §23).
  *
  * `at_risk` is deliberately distinct from `degraded`: degraded means redundancy
@@ -158,6 +170,25 @@ export function protectionState(input: {
   if (input.healthyReplicas <= 0) return "unprotected";
   if (input.healthyReplicas >= input.desiredReplicas) return "healthy";
   return input.healthyReplicas === 1 ? "at_risk" : "degraded";
+}
+
+/**
+ * Translates durable and currently reachable replica counts into the status a
+ * user sees for opening an object. Protection remains a separate concern: an
+ * object may be durable while waiting for a device to come back online.
+ */
+export function availabilityState(input: {
+  desiredReplicas: number;
+  healthyReplicas: number;
+  reachableHealthyReplicas: number;
+  placingReplicas: number;
+}): AvailabilityState {
+  if (input.healthyReplicas <= 0) return "unavailable";
+  if (input.reachableHealthyReplicas <= 0) return "waiting_for_device";
+  if (input.healthyReplicas < input.desiredReplicas && input.placingReplicas > 0) {
+    return "restoring_protection";
+  }
+  return "available";
 }
 
 /**

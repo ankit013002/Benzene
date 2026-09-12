@@ -268,8 +268,10 @@ describe("upload lifecycle", () => {
           objectHash,
           desiredReplicas: 1,
           healthyReplicas: 1,
+          reachableHealthyReplicas: 1,
           placingReplicas: 0,
           state: "healthy",
+          availability: "available",
           deviceIds: ["device-for-test"],
         };
       });

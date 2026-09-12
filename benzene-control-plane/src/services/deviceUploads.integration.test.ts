@@ -130,7 +130,12 @@ describe("device-primary upload metadata", () => {
       versionId,
       objectHash,
       bytes: 22,
-      protection: { healthyReplicas: 1, state: "at_risk" },
+      protection: {
+        healthyReplicas: 1,
+        reachableHealthyReplicas: 1,
+        state: "at_risk",
+        availability: "available",
+      },
     });
     const listing = await request(app)
       .get("/files")
@@ -139,7 +144,11 @@ describe("device-primary upload metadata", () => {
     expect(listing.body.data.files[0]).toMatchObject({
       objectHash,
       hasContent: true,
-      protection: { healthyReplicas: 1 },
+      protection: {
+        healthyReplicas: 1,
+        reachableHealthyReplicas: 1,
+        availability: "available",
+      },
     });
   });
 

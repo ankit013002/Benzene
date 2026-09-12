@@ -22,8 +22,10 @@ import { ensureVaultForOwner } from "../vaults/vaults.service.js";
 import { occupiedBytesSql } from "./capacity.js";
 import {
   isSingleCopyPolicy,
+  availabilityState,
   planPlacement,
   protectionState,
+  type AvailabilityState,
   type PlacementCandidate,
   type PlacementPlan,
   type ProtectionState,
@@ -496,8 +498,10 @@ export interface ObjectProtection {
   objectHash: string;
   desiredReplicas: number;
   healthyReplicas: number;
+  reachableHealthyReplicas: number;
   placingReplicas: number;
   state: ProtectionState;
+  availability: AvailabilityState;
   deviceIds: string[];
 }
 
@@ -518,6 +522,7 @@ export async function getObjectProtection(
       status: replicas.status,
       deviceStatus: devices.status,
       lastSeenAt: devices.lastSeenAt,
+      advertisedUrl: devices.advertisedUrl,
     })
     .from(replicas)
     .innerJoin(devices, eq(devices.id, replicas.deviceId))
@@ -540,13 +545,25 @@ export async function getObjectProtection(
       !leavingStatus(row.deviceStatus) &&
       row.deviceStatus !== "suspected_lost"
   );
+  const reachableHealthy = healthy.filter(
+    (row) =>
+      Boolean(row.advertisedUrl) &&
+      deriveStatus(row.deviceStatus, row.lastSeenAt, offlineAfterMs) === "online"
+  );
 
   return {
     objectHash,
     desiredReplicas,
     healthyReplicas: healthy.length,
+    reachableHealthyReplicas: reachableHealthy.length,
     placingReplicas: placing.length,
     state: protectionState({ desiredReplicas, healthyReplicas: healthy.length }),
+    availability: availabilityState({
+      desiredReplicas,
+      healthyReplicas: healthy.length,
+      reachableHealthyReplicas: reachableHealthy.length,
+      placingReplicas: placing.length,
+    }),
     deviceIds: rows
       .filter((row) => deriveStatus(row.deviceStatus, row.lastSeenAt, offlineAfterMs) !== "removed")
       .map((row) => row.deviceId),
@@ -643,6 +660,7 @@ export async function listUnderProtectedObjects(
   await classifyDeviceOutages(vault.id);
   const policy = await getPolicy(ownerId);
   const desiredReplicas = replicasForMode(policy.mode);
+  const onlineSince = new Date(Date.now() - config().deviceOfflineAfterSeconds * 1000);
 
   const rows = await db()
     .select({
@@ -654,6 +672,12 @@ export async function listUnderProtectedObjects(
       placing: sql<number>`count(*) filter (
         where ${replicas.status} = 'placing'
           and ${devices.status} not in ('draining', 'removed', 'suspected_lost')
+      )::int`,
+      reachableHealthy: sql<number>`count(*) filter (
+        where ${replicas.status} = 'healthy'
+          and ${devices.status} = 'online'
+          and ${devices.lastSeenAt} >= ${onlineSince}
+          and ${devices.advertisedUrl} is not null
       )::int`,
     })
     .from(replicas)
@@ -671,9 +695,16 @@ export async function listUnderProtectedObjects(
     desiredReplicas,
     healthyReplicas: Number(row.healthy),
     placingReplicas: Number(row.placing),
+    reachableHealthyReplicas: Number(row.reachableHealthy),
     state: protectionState({
       desiredReplicas,
       healthyReplicas: Number(row.healthy),
+    }),
+    availability: availabilityState({
+      desiredReplicas,
+      healthyReplicas: Number(row.healthy),
+      reachableHealthyReplicas: Number(row.reachableHealthy),
+      placingReplicas: Number(row.placing),
     }),
     deviceIds: [],
   }));

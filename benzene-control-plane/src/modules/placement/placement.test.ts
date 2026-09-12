@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isSingleCopyPolicy,
+  availabilityState,
   planPlacement,
   protectionState,
   rankCandidates,
@@ -223,5 +224,37 @@ describe("protection status", () => {
 
   it("does not flag a two-copy policy as single copy", () => {
     expect(isSingleCopyPolicy(2)).toBe(false);
+  });
+});
+
+describe("availability status", () => {
+  it.each([
+    ["available with one reachable copy", 2, 1, 1, 0, "available"],
+    ["waiting when durable copies are all offline", 2, 2, 0, 0, "waiting_for_device"],
+    ["restoring when a reachable copy and repair exist", 2, 1, 1, 1, "restoring_protection"],
+    ["unavailable with no durable copies", 2, 0, 0, 1, "unavailable"],
+  ] as const)(
+    "is %s",
+    (_label, desired, healthy, reachable, placing, expected) => {
+      expect(
+        availabilityState({
+          desiredReplicas: desired,
+          healthyReplicas: healthy,
+          reachableHealthyReplicas: reachable,
+          placingReplicas: placing,
+        })
+      ).toBe(expected);
+    }
+  );
+
+  it("does not call an object available just because protection is satisfied", () => {
+    expect(
+      availabilityState({
+        desiredReplicas: 2,
+        healthyReplicas: 2,
+        reachableHealthyReplicas: 0,
+        placingReplicas: 0,
+      })
+    ).toBe("waiting_for_device");
   });
 });
