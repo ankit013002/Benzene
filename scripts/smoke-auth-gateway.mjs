@@ -50,6 +50,7 @@ const FRONTEND_PORT = Number.parseInt(
 );
 const LOGIN_EMAIL = `acceptance-${process.pid}@example.com`;
 const LOGIN_PASSWORD = "acceptance-password-123";
+const REQUEST_TIMEOUT_MS = 15_000;
 
 let failures = 0;
 function check(label, condition, detail = "") {
@@ -69,6 +70,7 @@ function startProcess(command, args, cwd, env) {
   const child = spawn(command, args, {
     cwd,
     env: { ...process.env, ...env },
+    detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
@@ -82,18 +84,57 @@ function startProcess(command, args, cwd, env) {
   return child;
 }
 
-async function stopProcess(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  await new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve();
-    }, 5000);
-    child.once("exit", () => {
+function signalProcess(child, signal) {
+  if (!child?.pid) return;
+
+  if (process.platform !== "win32") {
+    try {
+      // Detached children become their own process-group leaders. Signalling
+      // the group also terminates npm/tsx, Maven and the app they launched.
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+  }
+
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+function waitForExit(child, timeoutMs) {
+  if (!child || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      child.removeListener("exit", finish);
       resolve();
-    });
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    child.once("exit", finish);
+  });
+}
+
+async function stopProcess(child) {
+  if (!child) return;
+  signalProcess(child, "SIGTERM");
+  await waitForExit(child, 2_000);
+  if (child.exitCode === null) {
+    signalProcess(child, "SIGKILL");
+    await waitForExit(child, 1_000);
+  }
+}
+
+function request(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 }
 
@@ -105,8 +146,12 @@ async function waitForHttp(url, child, label) {
       throw new Error(`${label} exited early (${child.exitCode})\n${child.getOutput()}`);
     }
     try {
-      const response = await fetch(url);
-      if (response.status < 500) return response;
+      const response = await request(url);
+      if (response.status < 500) {
+        await response.body?.cancel();
+        return response;
+      }
+      await response.body?.cancel();
       lastError = `HTTP ${response.status}`;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
@@ -161,9 +206,44 @@ async function listen(app) {
   });
 }
 
-async function closeServer(server) {
+async function closeServer(server, label) {
   if (!server) return;
-  await new Promise((resolve) => server.close(resolve));
+  console.log(`cleanup: closing ${label}`);
+  await new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
+      finish();
+    }, 2_000);
+    try {
+      server.close(finish);
+    } catch {
+      finish();
+    }
+  });
+}
+
+async function cleanupStep(label, action) {
+  console.log(`cleanup: ${label}`);
+  const operation = Promise.resolve().then(action);
+  operation.catch(() => {});
+  try {
+    await Promise.race([
+      operation,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("cleanup deadline exceeded")), 5_000)
+      ),
+    ]);
+  } catch (error) {
+    console.warn(`cleanup warning (${label}): ${error}`);
+  }
 }
 
 async function main() {
@@ -179,7 +259,7 @@ async function main() {
   let storageRoot;
 
   try {
-    const admin = new Client({ connectionString: baseUrl });
+    const admin = new Client({ connectionString: baseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
     await admin.connect();
     await admin.query(`create database "${dbName}"`);
     await admin.end();
@@ -188,7 +268,7 @@ async function main() {
     dbUrl.pathname = `/${dbName}`;
     databaseUrl = dbUrl.toString();
 
-    const authPool = new Pool({ connectionString: databaseUrl });
+    const authPool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
     let credentialId;
     try {
       const authMigration = await readFile(
@@ -220,7 +300,7 @@ async function main() {
 
     const { drizzle } = controlPlaneRequire("drizzle-orm/node-postgres");
     const { migrate } = controlPlaneRequire("drizzle-orm/node-postgres/migrator");
-    const migrationPool = new Pool({ connectionString: databaseUrl });
+    const migrationPool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
     try {
       await migrate(drizzle(migrationPool), {
         migrationsFolder: fileURLToPath(
@@ -291,7 +371,7 @@ async function main() {
     console.log(`frontend listening on ${frontendUrl}`);
 
     console.log("\nlogin through the Next.js frontend proxy");
-    const loginResponse = await fetch(`${frontendUrl}/api/auth/login`, {
+    const loginResponse = await request(`${frontendUrl}/api/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ email: LOGIN_EMAIL, password: LOGIN_PASSWORD }),
@@ -312,7 +392,7 @@ async function main() {
     check("frontend session JWT carries the login email", claims?.email === LOGIN_EMAIL);
 
     const cookieHeader = cookies.join("; ");
-    const browserVaultResponse = await fetch(`${frontendUrl}/api/vault`, {
+    const browserVaultResponse = await request(`${frontendUrl}/api/vault`, {
       headers: { Cookie: cookieHeader },
     });
     const browserVaultBody = await jsonOrNull(browserVaultResponse);
@@ -320,7 +400,7 @@ async function main() {
     check("frontend proxy reached the real control plane", browserVaultResponse.status === 200, JSON.stringify(browserVaultBody));
     check("frontend returned a vault for the authenticated user", typeof vaultId === "string");
 
-    const spoofedResponse = await fetch(`${gatewayUrl}/vaults/me`, {
+    const spoofedResponse = await request(`${gatewayUrl}/vaults/me`, {
       headers: {
         Cookie: cookieHeader,
         "X-User-Id": "attacker-id",
@@ -336,10 +416,10 @@ async function main() {
       `expected ${vaultId ?? "a vault"}, got ${spoofedBody?.data?.id ?? "none"}`
     );
 
-    const gatewayAnonymousResponse = await fetch(`${gatewayUrl}/vaults/me`);
+    const gatewayAnonymousResponse = await request(`${gatewayUrl}/vaults/me`);
     check("direct gateway anonymous request is refused", gatewayAnonymousResponse.status === 401, `status ${gatewayAnonymousResponse.status}`);
 
-    const frontendAnonymousResponse = await fetch(`${frontendUrl}/api/vault`, {
+    const frontendAnonymousResponse = await request(`${frontendUrl}/api/vault`, {
       redirect: "manual",
     });
     const frontendRedirect = frontendAnonymousResponse.headers.get("location") ?? "";
@@ -352,22 +432,19 @@ async function main() {
 
     console.log("\nfrontend proxy, gateway identity boundary and control-plane request passed");
   } finally {
-    await stopProcess(frontendProcess);
-    await stopProcess(gatewayProcess);
-    await stopProcess(authProcess);
-    await closeServer(controlPlaneServer);
-    if (storageRoot) await rm(storageRoot, { recursive: true, force: true });
+    await cleanupStep("stopping frontend process group", () => stopProcess(frontendProcess));
+    await cleanupStep("stopping gateway process group", () => stopProcess(gatewayProcess));
+    await cleanupStep("stopping auth process group", () => stopProcess(authProcess));
+    await cleanupStep("closing control-plane server", () => closeServer(controlPlaneServer, "control plane"));
+    if (storageRoot) await cleanupStep("removing temporary storage", () => rm(storageRoot, { recursive: true, force: true }));
 
     if (databaseUrl) {
-      try {
+      await cleanupStep("closing control-plane database pool", async () => {
         const { closeDb } = controlPlaneRequire("./built/db/client.js");
         await closeDb();
-      } catch {
-        // The assertion output is more useful than masking its failure with
-        // cleanup noise when the control-plane module never initialized.
-      }
-      try {
-        const admin = new Client({ connectionString: baseUrl });
+      });
+      await cleanupStep("dropping acceptance database", async () => {
+        const admin = new Client({ connectionString: baseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
         await admin.connect();
         await admin.query(
           `select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()`,
@@ -375,9 +452,7 @@ async function main() {
         );
         await admin.query(`drop database if exists "${dbName}"`);
         await admin.end();
-      } catch (error) {
-        console.warn(`could not drop acceptance database ${dbName}: ${error}`);
-      }
+      });
     }
   }
 
@@ -386,7 +461,13 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    // Do not let a library-owned idle handle keep a successful acceptance job
+    // alive after all services and temporary resources have been cleaned up.
+    setTimeout(() => process.exit(0), 50);
+  })
+  .catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    setTimeout(() => process.exit(1), 50);
+  });
