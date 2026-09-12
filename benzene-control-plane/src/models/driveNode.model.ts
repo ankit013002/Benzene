@@ -23,6 +23,11 @@ export interface DriveNode {
   originalParentId?: Types.ObjectId;
   createdBy?: string;
   updatedBy?: string;
+  /** Short-lived compare-and-set lease used to serialize version promotion. */
+  promotionLock?: {
+    token: string;
+    expiresAt: Date;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -61,6 +66,17 @@ const driveNodeSchema = new Schema<DriveNode>(
     originalParentId: { type: Schema.Types.ObjectId, ref: "DriveNode" },
     createdBy: { type: String },
     updatedBy: { type: String },
+    promotionLock: {
+      type: new Schema(
+        {
+          token: { type: String, required: true },
+          expiresAt: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+      default: undefined,
+    },
   },
   { timestamps: true }
 );

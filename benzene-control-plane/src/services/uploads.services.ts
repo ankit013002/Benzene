@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type { Types } from "mongoose";
 
 import { config } from "../config/env.js";
@@ -292,6 +294,160 @@ async function nextVersionFor(nodeId: Types.ObjectId): Promise<number> {
   return (latest?.version ?? 0) + 1;
 }
 
+const PROMOTION_LOCK_TTL_MS = 30_000;
+const PROMOTION_LOCK_RETRY_MS = 5;
+
+interface CommittedVersionMetadata {
+  bytes: number;
+  uploadedAt: Date;
+  contentType?: string;
+}
+
+/**
+ * Commits a pending version without allowing a stale hydrated document to
+ * overwrite a concurrent completion. Both callers then re-read the row before
+ * building their response when two requests complete the same version at once.
+ */
+async function markVersionCommitted(
+  versionId: string,
+  ownerId: string,
+  metadata: CommittedVersionMetadata & { etag?: string }
+): Promise<void> {
+  const set: Record<string, unknown> = {
+    bytes: metadata.bytes,
+    status: "committed",
+    uploadedAt: metadata.uploadedAt,
+  };
+  if (metadata.contentType) set.contentType = metadata.contentType;
+  if (metadata.etag) set.etag = metadata.etag;
+
+  await FileVersionModel.updateOne(
+    { _id: versionId, ownerId, status: "pending" },
+    { $set: set }
+  );
+}
+
+async function acquirePromotionLock(nodeId: Types.ObjectId, ownerId: string): Promise<string> {
+  const token = randomUUID();
+  const deadline = Date.now() + PROMOTION_LOCK_TTL_MS;
+
+  // The lease is only a crash-recovery guard. Every live promoter releases it
+  // in finally, while the conditional update makes competing promoters wait
+  // without ever demoting one another's current version.
+  for (;;) {
+    const now = new Date();
+    const acquired = await DriveNodeModel.findOneAndUpdate(
+      {
+        _id: nodeId,
+        ownerId,
+        $or: [
+          { promotionLock: { $exists: false } },
+          { "promotionLock.expiresAt": { $lte: now } },
+        ],
+      },
+      {
+        $set: {
+          promotionLock: {
+            token,
+            expiresAt: new Date(Date.now() + PROMOTION_LOCK_TTL_MS),
+          },
+        },
+      },
+      { new: true, timestamps: false }
+    ).select("_id");
+
+    if (acquired) return token;
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out promoting versions for node ${nodeId.toString()}`);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, PROMOTION_LOCK_RETRY_MS));
+  }
+}
+
+/**
+ * Promotes the highest completed version for a node. Completion is deliberately
+ * monotonic: a lower version that finishes after a higher one is retained as
+ * history but cannot become current or overwrite DriveNode metadata.
+ */
+async function promoteHighestCommittedVersion(
+  ownerId: string,
+  nodeId: Types.ObjectId
+): Promise<void> {
+  const token = await acquirePromotionLock(nodeId, ownerId);
+  try {
+    const highest = await FileVersionModel.findOne({
+      nodeId,
+      ownerId,
+      status: "committed",
+    })
+      .sort({ version: -1 })
+      .lean();
+    if (!highest) return;
+
+    const current = await FileVersionModel.findOne({
+      nodeId,
+      ownerId,
+      isCurrent: true,
+      status: "committed",
+    })
+      .sort({ version: -1 })
+      .lean();
+
+    if (!current || current._id.toString() !== highest._id.toString()) {
+      // The lock makes the two updates below a serialized promotion. The
+      // predicates still make each write conditional if a legacy caller or a
+      // manually repaired database changes the row between reads.
+      if (current) {
+        await FileVersionModel.updateOne(
+          { _id: current._id, nodeId, ownerId, isCurrent: true },
+          { $set: { isCurrent: false } }
+        );
+      }
+      await FileVersionModel.updateOne(
+        {
+          _id: highest._id,
+          nodeId,
+          ownerId,
+          status: "committed",
+          isCurrent: false,
+        },
+        { $set: { isCurrent: true } }
+      );
+    }
+
+    // Re-read the winner after promotion so metadata is always derived from
+    // the row that is actually current, not from the request that got the lock.
+    const winner = await FileVersionModel.findOne({
+      nodeId,
+      ownerId,
+      isCurrent: true,
+      status: "committed",
+    })
+      .sort({ version: -1 })
+      .lean();
+    if (!winner) return;
+
+    await DriveNodeModel.updateOne(
+      { _id: nodeId, ownerId, "promotionLock.token": token },
+      {
+        $set: {
+          bytes: winner.bytes,
+          versionsCount: winner.version,
+          uploadedAt: winner.uploadedAt,
+          updatedBy: ownerId,
+          ...(winner.contentType ? { contentType: winner.contentType } : {}),
+        },
+      }
+    );
+  } finally {
+    await DriveNodeModel.updateOne(
+      { _id: nodeId, ownerId, "promotionLock.token": token },
+      { $unset: { promotionLock: 1 } },
+      { timestamps: false }
+    );
+  }
+}
+
 export interface CompletedUpload {
   nodeId: string;
   versionId: string;
@@ -318,62 +474,37 @@ export async function completeUploads(
       throw AppError.notFound(`Upload ${versionId} not found`);
     }
 
-    if (version.status === "committed") {
-      completed.push({
-        nodeId: version.nodeId.toString(),
-        versionId,
-        version: version.version,
-        bytes: version.bytes,
-      });
-      continue;
-    }
-
-    if (!version.storage?.key) {
-      throw AppError.badRequest(
-        `Version ${versionId} is device-backed; use device upload completion`
-      );
-    }
-
-    const stored = await driver.headObject(version.storage.key);
-    if (!stored) {
-      throw AppError.badRequest(
-        `No object was uploaded for version ${versionId}; the presigned PUT did not complete`
-      );
-    }
-
-    // Demote the previous current version first: the partial unique index
-    // permits only one isCurrent=true row per node.
-    await FileVersionModel.updateMany(
-      { nodeId: version.nodeId, isCurrent: true },
-      { $set: { isCurrent: false } }
-    );
-
-    version.bytes = stored.bytes;
-    version.status = "committed";
-    version.isCurrent = true;
-    version.uploadedAt = new Date();
-    if (stored.etag) version.etag = stored.etag;
-    if (stored.contentType) version.contentType = stored.contentType;
-    await version.save();
-
-    await DriveNodeModel.updateOne(
-      { _id: version.nodeId, ownerId },
-      {
-        $set: {
-          bytes: stored.bytes,
-          versionsCount: version.version,
-          uploadedAt: version.uploadedAt,
-          updatedBy: ownerId,
-          ...(version.contentType ? { contentType: version.contentType } : {}),
-        },
+    if (version.status !== "committed") {
+      const storageKey = version.storage?.key;
+      if (!storageKey) {
+        throw AppError.badRequest(
+          `Version ${versionId} is device-backed; use device upload completion`
+        );
       }
-    );
+      const stored = await driver.headObject(storageKey);
+      if (!stored) {
+        throw AppError.badRequest(
+          `No object was uploaded for version ${versionId}; the presigned PUT did not complete`
+        );
+      }
+
+      await markVersionCommitted(versionId, ownerId, {
+        bytes: stored.bytes,
+        uploadedAt: new Date(),
+        etag: stored.etag,
+        contentType: stored.contentType ?? version.contentType,
+      });
+    }
+
+    await promoteHighestCommittedVersion(ownerId, version.nodeId);
+    const committed = await FileVersionModel.findById(versionId).lean();
+    if (!committed) throw AppError.notFound(`Upload ${versionId} not found`);
 
     completed.push({
       nodeId: version.nodeId.toString(),
       versionId,
-      version: version.version,
-      bytes: stored.bytes,
+      version: committed.version,
+      bytes: committed.bytes,
     });
   }
 
@@ -405,36 +536,23 @@ export async function completeDeviceUploads(
     }
 
     if (version.status !== "committed") {
-      await FileVersionModel.updateMany(
-        { nodeId: version.nodeId, isCurrent: true },
-        { $set: { isCurrent: false } }
-      );
-
-      version.status = "committed";
-      version.isCurrent = true;
-      version.uploadedAt = new Date();
-      await version.save();
-
-      await DriveNodeModel.updateOne(
-        { _id: version.nodeId, ownerId },
-        {
-          $set: {
-            bytes: version.bytes,
-            versionsCount: version.version,
-            uploadedAt: version.uploadedAt,
-            updatedBy: ownerId,
-            ...(version.contentType ? { contentType: version.contentType } : {}),
-          },
-        }
-      );
+      await markVersionCommitted(versionId, ownerId, {
+        bytes: version.bytes,
+        uploadedAt: new Date(),
+        contentType: version.contentType,
+      });
     }
+
+    await promoteHighestCommittedVersion(ownerId, version.nodeId);
+    const committed = await FileVersionModel.findById(versionId).lean();
+    if (!committed) throw AppError.notFound(`Upload ${versionId} not found`);
 
     completed.push({
       nodeId: version.nodeId.toString(),
       versionId,
-      version: version.version,
-      objectHash: version.objectHash,
-      bytes: version.bytes,
+      version: committed.version,
+      objectHash: committed.objectHash ?? version.objectHash,
+      bytes: committed.bytes,
       protection,
       shortfall: protection.healthyReplicas < protection.desiredReplicas,
     });

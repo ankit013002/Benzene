@@ -4,20 +4,25 @@ import path from "node:path";
 
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { resetConfigCache, type AppConfig } from "../config/env.js";
 import DriveNodeModel from "../models/driveNode.model.js";
 import FileVersionModel from "../models/fileVersion.model.js";
 import { LocalStorageDriver } from "../storage/local.driver.js";
 import { setStorageDriver } from "../storage/index.js";
+import * as placementService from "../modules/placement/placement.service.js";
 import {
   createFolders,
   deleteNode,
   getUsage,
   listDirectory,
 } from "./driveNodes.services.js";
-import { completeUploads, presignUploads } from "./uploads.services.js";
+import {
+  completeDeviceUploads,
+  completeUploads,
+  presignUploads,
+} from "./uploads.services.js";
 
 const OWNER = "user-alpha";
 const OTHER_OWNER = "user-beta";
@@ -152,6 +157,143 @@ describe("upload lifecycle", () => {
 
     expect(second).toEqual(first);
     expect(await FileVersionModel.countDocuments({ isCurrent: true })).toBe(1);
+  });
+
+  it("keeps the highest version current when completions overlap", async () => {
+    const first = await presignUploads(OWNER, {
+      path: "",
+      files: [{ name: "overlap.txt", size: 2 }],
+    });
+    await uploadBytes(first[0]!.key, "v1");
+
+    const second = await presignUploads(OWNER, {
+      path: "",
+      files: [{ name: "overlap.txt", size: 8 }],
+    });
+    await uploadBytes(second[0]!.key, "version2");
+
+    const originalHeadObject = driver.headObject.bind(driver);
+    let headCalls = 0;
+    let releaseHeaded: () => void = () => undefined;
+    let releaseGate: () => void = () => undefined;
+    const bothHeaded = new Promise<void>((resolve) => {
+      releaseHeaded = resolve;
+    });
+    const headGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+
+    driver.headObject = async (key) => {
+      const stored = await originalHeadObject(key);
+      headCalls += 1;
+      if (headCalls === 2) {
+        releaseHeaded();
+      }
+      await headGate;
+      return stored;
+    };
+
+    try {
+      const lower = completeUploads(OWNER, [first[0]!.versionId]);
+      const higher = completeUploads(OWNER, [second[0]!.versionId]);
+      await bothHeaded;
+      releaseGate();
+      await Promise.all([lower, higher]);
+    } finally {
+      driver.headObject = originalHeadObject;
+    }
+
+    const versions = await FileVersionModel.find({ nodeId: first[0]!.nodeId })
+      .sort({ version: 1 })
+      .lean();
+    expect(versions.map((version) => [version.version, version.status, version.isCurrent])).toEqual([
+      [1, "committed", false],
+      [2, "committed", true],
+    ]);
+
+    const node = await DriveNodeModel.findById(first[0]!.nodeId).lean();
+    expect(node).toMatchObject({ bytes: 8, versionsCount: 2 });
+  });
+
+  it("keeps the highest device version current when completions overlap", async () => {
+    const node = await DriveNodeModel.create({
+      ownerId: OWNER,
+      type: "file",
+      name: "device-overlap.bin",
+      nameLower: "device-overlap.bin",
+      path: "",
+      parentId: null,
+      ancestors: [],
+      createdBy: OWNER,
+    });
+    const first = await FileVersionModel.create({
+      nodeId: node._id,
+      ownerId: OWNER,
+      version: 1,
+      bytes: 2,
+      contentType: "application/octet-stream",
+      objectHash: "a".repeat(64),
+      status: "pending",
+      uploadedBy: OWNER,
+      isCurrent: false,
+    });
+    const second = await FileVersionModel.create({
+      nodeId: node._id,
+      ownerId: OWNER,
+      version: 2,
+      bytes: 8,
+      contentType: "application/octet-stream",
+      objectHash: "b".repeat(64),
+      status: "pending",
+      uploadedBy: OWNER,
+      isCurrent: false,
+    });
+
+    let protectionCalls = 0;
+    let releaseProtection: () => void = () => undefined;
+    let releaseGate: () => void = () => undefined;
+    const bothProtected = new Promise<void>((resolve) => {
+      releaseProtection = resolve;
+    });
+    const protectionGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const protectionSpy = vi
+      .spyOn(placementService, "getObjectProtection")
+      .mockImplementation(async (_ownerId, objectHash) => {
+        protectionCalls += 1;
+        if (protectionCalls === 2) releaseProtection();
+        await protectionGate;
+        return {
+          objectHash,
+          desiredReplicas: 1,
+          healthyReplicas: 1,
+          placingReplicas: 0,
+          state: "healthy",
+          deviceIds: ["device-for-test"],
+        };
+      });
+
+    try {
+      const lower = completeDeviceUploads(OWNER, [first._id.toString()]);
+      const higher = completeDeviceUploads(OWNER, [second._id.toString()]);
+      await bothProtected;
+      releaseGate();
+      await Promise.all([lower, higher]);
+    } finally {
+      protectionSpy.mockRestore();
+    }
+
+    const versions = await FileVersionModel.find({ nodeId: node._id })
+      .sort({ version: 1 })
+      .lean();
+    expect(versions.map((version) => [version.version, version.status, version.isCurrent])).toEqual([
+      [1, "committed", false],
+      [2, "committed", true],
+    ]);
+
+    const persistedNode = await DriveNodeModel.findById(node._id).lean();
+    expect(persistedNode).toMatchObject({ bytes: 8, versionsCount: 2 });
   });
 });
 
