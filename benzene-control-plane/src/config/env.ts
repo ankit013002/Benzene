@@ -21,6 +21,10 @@ export interface AppConfig {
   enrollmentRateLimitMax: number;
   /** Window for unauthenticated enrollment creation throttling. */
   enrollmentRateLimitWindowSeconds: number;
+  /** Maximum authenticated pairing attempts per owner in one window. */
+  enrollmentPairingRateLimitMax: number;
+  /** Window for authenticated pairing-attempt throttling. */
+  enrollmentPairingRateLimitWindowSeconds: number;
   /** Tolerated clock difference when verifying a device request signature. */
   deviceClockSkewSeconds: number;
   /** Silence after which a device is reported offline rather than online. */
@@ -90,6 +94,14 @@ export function loadConfig(): AppConfig {
     enrollmentRateLimitMax: intFromEnv("ENROLLMENT_RATE_LIMIT_MAX", 10),
     enrollmentRateLimitWindowSeconds: intFromEnv(
       "ENROLLMENT_RATE_LIMIT_WINDOW_SECONDS",
+      60
+    ),
+    enrollmentPairingRateLimitMax: intFromEnv(
+      "ENROLLMENT_PAIRING_RATE_LIMIT_MAX",
+      10
+    ),
+    enrollmentPairingRateLimitWindowSeconds: intFromEnv(
+      "ENROLLMENT_PAIRING_RATE_LIMIT_WINDOW_SECONDS",
       60
     ),
     deviceClockSkewSeconds: intFromEnv("DEVICE_CLOCK_SKEW_SECONDS", 300),

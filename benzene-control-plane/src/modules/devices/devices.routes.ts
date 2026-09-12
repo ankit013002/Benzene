@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireUser } from "../../middleware/requireUser.js";
 import { AppError } from "../../utils/AppError.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
+import { enrollmentPairingThrottle } from "./enrollmentThrottle.js";
 import {
   approveEnrollment,
   beginDeviceRemoval,
@@ -58,6 +59,7 @@ router.get(
 
 router.post(
   "/enrollments/approve",
+  enrollmentPairingThrottle,
   asyncHandler(async (req, res) => {
     const body = parse(approveSchema, req.body);
     const device = await approveEnrollment(
@@ -73,6 +75,7 @@ router.post(
 
 router.post(
   "/enrollments/reject",
+  enrollmentPairingThrottle,
   asyncHandler(async (req, res) => {
     const body = parse(codeSchema, req.body);
     await rejectEnrollment(ownerOf(req), body.code);

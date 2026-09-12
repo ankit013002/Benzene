@@ -72,6 +72,8 @@ beforeAll(async () => {
   process.env["DATABASE_URL"] ??= process.env["TEST_DATABASE_URL"] ?? "";
   process.env["MONGOOSE_URI"] ??= "mongodb://127.0.0.1:27017/unused";
   process.env["STORAGE_DRIVER"] ??= "local";
+  process.env["ENROLLMENT_PAIRING_RATE_LIMIT_MAX"] = "3";
+  process.env["ENROLLMENT_PAIRING_RATE_LIMIT_WINDOW_SECONDS"] = "1";
   resetConfigCache();
   db = await setupTestDb();
 
@@ -134,6 +136,96 @@ describe("enrollment over HTTP", () => {
       .set("X-Benzene-Client-Ip", "198.51.100.11")
       .send({ publicKey: keys.publicKey, deviceName: "B", platform: "linux" })
       .expect(201);
+  });
+
+  it("keeps authenticated pairing attempts isolated per gateway owner", async () => {
+    const invalid = { code: "ABCD-EFGH", allocatedBytes: GB };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await request(app)
+        .post(attempt === 1 ? "/devices/enrollments/reject" : "/devices/enrollments/approve")
+        .set("X-User-Id", "auth|pairing-owner-a")
+        .send(attempt === 1 ? { code: invalid.code } : invalid)
+        .expect(404);
+    }
+
+    await request(app)
+      .post("/devices/enrollments/approve")
+      .set("X-User-Id", "auth|pairing-owner-b")
+      .send(invalid)
+      .expect(404);
+
+    const limited = await request(app)
+      .post("/devices/enrollments/reject")
+      .set("X-User-Id", "auth|pairing-owner-a")
+      .send({ code: invalid.code })
+      .expect(429);
+    expect(limited.headers["retry-after"]).toBe("1");
+  });
+
+  it("shares one authenticated pairing budget across approve and reject", async () => {
+    const invalid = { code: "IJKL-MNOP", allocatedBytes: GB };
+    await request(app)
+      .post("/devices/enrollments/approve")
+      .set("X-User-Id", "auth|shared-pairing-owner")
+      .send(invalid)
+      .expect(404);
+    await request(app)
+      .post("/devices/enrollments/reject")
+      .set("X-User-Id", "auth|shared-pairing-owner")
+      .send({ code: invalid.code })
+      .expect(404);
+    await request(app)
+      .post("/devices/enrollments/approve")
+      .set("X-User-Id", "auth|shared-pairing-owner")
+      .send(invalid)
+      .expect(404);
+
+    await request(app)
+      .post("/devices/enrollments/reject")
+      .set("X-User-Id", "auth|shared-pairing-owner")
+      .send({ code: invalid.code })
+      .expect(429);
+  });
+
+  it("resets an authenticated pairing budget after its configured window", async () => {
+    const invalid = { code: "QRST-UVWX", allocatedBytes: GB };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await request(app)
+        .post("/devices/enrollments/approve")
+        .set("X-User-Id", "auth|window-pairing-owner")
+        .send(invalid)
+        .expect(404);
+    }
+    await request(app)
+      .post("/devices/enrollments/approve")
+      .set("X-User-Id", "auth|window-pairing-owner")
+      .send(invalid)
+      .expect(429);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    await request(app)
+      .post("/devices/enrollments/reject")
+      .set("X-User-Id", "auth|window-pairing-owner")
+      .send({ code: invalid.code })
+      .expect(404);
+  });
+
+  it("keeps authenticated pairing limits separate from enrollment creation buckets", async () => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const keys = generateDeviceKeyPair();
+      await request(app)
+        .post("/agent/enrollments")
+        .set("X-Benzene-Client-Ip", "198.51.100.30")
+        .send({ publicKey: keys.publicKey, deviceName: `Desktop ${attempt}`, platform: "linux" })
+        .expect(201);
+    }
+
+    await request(app)
+      .post("/devices/enrollments/approve")
+      .set("X-User-Id", "auth|separate-pairing-owner")
+      .send({ code: "YZAB-CDEF", allocatedBytes: GB })
+      .expect(404);
   });
 
   it("rejects an enrollment with a non-Ed25519 key", async () => {

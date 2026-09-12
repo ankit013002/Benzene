@@ -3,7 +3,7 @@ import type { NextFunction, Request, Response } from "express";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
-import { enrollmentCreationAttempts } from "../../db/schema.js";
+import { enrollmentRateLimitAttempts } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
 
 /**
@@ -23,79 +23,137 @@ export function enrollmentCreationThrottle(
   const clientKey =
     req.get("x-benzene-client-ip")?.trim() || req.socket.remoteAddress || "unknown";
 
-  void claimEnrollmentAttempt(clientKey)
+  const cfg = config();
+  runThrottle(
+    `peer:${clientKey}`,
+    "peer:",
+    {
+      max: cfg.enrollmentRateLimitMax,
+      windowSeconds: cfg.enrollmentRateLimitWindowSeconds,
+    },
+    res,
+    next
+  );
+}
+
+/** Limits pairing-code guesses across both approval and rejection endpoints. */
+export function enrollmentPairingThrottle(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  const ownerId = req.ownerId?.trim();
+  if (!ownerId) {
+    next(AppError.unauthorized("Missing X-User-Id header from gateway"));
+    return;
+  }
+
+  const cfg = config();
+  runThrottle(
+    `owner:${ownerId}`,
+    "owner:",
+    {
+      max: cfg.enrollmentPairingRateLimitMax,
+      windowSeconds: cfg.enrollmentPairingRateLimitWindowSeconds,
+    },
+    res,
+    next
+  );
+}
+
+function runThrottle(
+  bucketKey: string,
+  bucketPrefix: string,
+  limit: RateLimit,
+  res: Response,
+  next: NextFunction
+): void {
+  void claimEnrollmentAttempt(bucketKey, bucketPrefix, limit)
     .then((allowed) => {
       if (allowed) {
         next();
         return;
       }
 
-      res.setHeader("Retry-After", String(config().enrollmentRateLimitWindowSeconds));
+      res.setHeader("Retry-After", String(limit.windowSeconds));
       next(
         new AppError(
           429,
           "RATE_LIMITED",
-          "Too many enrollment requests; please try again later"
+          "Too many enrollment attempts; please try again later"
         )
       );
     })
     .catch(next);
 }
 
-async function claimEnrollmentAttempt(clientKey: string): Promise<boolean> {
-  const cfg = config();
+interface RateLimit {
+  max: number;
+  windowSeconds: number;
+}
+
+/** Claims one namespaced enrollment bucket in one transaction. */
+async function claimEnrollmentAttempt(
+  bucketKey: string,
+  bucketPrefix: string,
+  limit: RateLimit
+): Promise<boolean> {
   const now = new Date();
   const windowStart = new Date(
-    now.getTime() - cfg.enrollmentRateLimitWindowSeconds * 1000
+    now.getTime() - limit.windowSeconds * 1000
   );
 
   return db().transaction(async (tx) => {
-    // Keep stale peer keys from accumulating forever, while bounding cleanup
-    // work performed by any one unauthenticated request.
+    // Keep stale keys from accumulating forever, while bounding cleanup work
+    // performed by any one unauthenticated or authenticated request.
     await tx.execute(sql`
       WITH expired AS (
-        SELECT ${enrollmentCreationAttempts.clientKey}
-        FROM ${enrollmentCreationAttempts}
-        WHERE ${enrollmentCreationAttempts.windowStartedAt} <= ${windowStart}
-        ORDER BY ${enrollmentCreationAttempts.windowStartedAt} ASC
+        SELECT ${enrollmentRateLimitAttempts.clientKey}
+        FROM ${enrollmentRateLimitAttempts}
+        WHERE left(
+          ${enrollmentRateLimitAttempts.clientKey},
+          ${bucketPrefix.length}
+        ) = ${bucketPrefix}
+          AND ${enrollmentRateLimitAttempts.windowStartedAt} <= ${windowStart}
+        ORDER BY ${enrollmentRateLimitAttempts.windowStartedAt} ASC
         LIMIT 32
       )
-      DELETE FROM ${enrollmentCreationAttempts}
+      DELETE FROM ${enrollmentRateLimitAttempts}
       WHERE client_key IN (
         SELECT client_key FROM expired
       )
     `);
 
     const [attempt] = await tx
-      .insert(enrollmentCreationAttempts)
-      .values({ clientKey, windowStartedAt: now, attemptCount: 1 })
+      .insert(enrollmentRateLimitAttempts)
+      .values({ clientKey: bucketKey, windowStartedAt: now, attemptCount: 1 })
       .onConflictDoUpdate({
-        target: enrollmentCreationAttempts.clientKey,
+        target: enrollmentRateLimitAttempts.clientKey,
         set: {
           windowStartedAt: sql`
             CASE
-              WHEN ${enrollmentCreationAttempts.windowStartedAt} <= ${windowStart}
+              WHEN ${enrollmentRateLimitAttempts.windowStartedAt} <= ${windowStart}
               THEN ${now}
-              ELSE ${enrollmentCreationAttempts.windowStartedAt}
+              ELSE ${enrollmentRateLimitAttempts.windowStartedAt}
             END
           `,
-          // Saturating at max+1 prevents an abusive peer from overflowing the
-          // integer counter while it remains over the configured limit.
+          // Saturating at max+1 prevents an abusive caller from overflowing
+          // the integer counter while it remains over the configured limit.
           attemptCount: sql`
             CASE
-              WHEN ${enrollmentCreationAttempts.windowStartedAt} <= ${windowStart}
+              WHEN ${enrollmentRateLimitAttempts.windowStartedAt} <= ${windowStart}
               THEN 1
               ELSE LEAST(
-                ${enrollmentCreationAttempts.attemptCount} + 1,
-                ${cfg.enrollmentRateLimitMax + 1}
+                ${enrollmentRateLimitAttempts.attemptCount} + 1,
+                ${limit.max + 1}
               )
             END
           `,
         },
       })
-      .returning({ attemptCount: enrollmentCreationAttempts.attemptCount });
+      .returning({ attemptCount: enrollmentRateLimitAttempts.attemptCount });
 
-    if (!attempt) throw new AppError(500, "SERVER", "Could not record enrollment request");
-    return attempt.attemptCount <= cfg.enrollmentRateLimitMax;
+    if (!attempt) throw new AppError(500, "SERVER", "Could not record enrollment attempt");
+    return attempt.attemptCount <= limit.max;
   });
 }

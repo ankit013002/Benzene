@@ -14,6 +14,8 @@ function makeConfig(): AppConfig {
     enrollmentCodeTtlSeconds: 600,
     enrollmentRateLimitMax: 10,
     enrollmentRateLimitWindowSeconds: 60,
+    enrollmentPairingRateLimitMax: 10,
+    enrollmentPairingRateLimitWindowSeconds: 60,
     s3: {
       bucket: "benzene-test-bucket",
       region: "us-east-1",

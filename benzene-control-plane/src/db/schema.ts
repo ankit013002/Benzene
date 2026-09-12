@@ -212,11 +212,12 @@ export const deviceEnrollments = pgTable(
 );
 
 /**
- * Database-backed throttle state for unauthenticated enrollment creation.
- * Keeping the counter in PostgreSQL makes the limit hold across control-plane
- * instances instead of silently becoming per-process state.
+ * Database-backed throttle state for enrollment flows. Keys are namespaced by
+ * the caller type so unauthenticated peers and authenticated owners never
+ * share a bucket. Keeping counters in PostgreSQL makes limits hold across
+ * control-plane instances instead of silently becoming per-process state.
  */
-export const enrollmentCreationAttempts = pgTable(
+export const enrollmentRateLimitAttempts = pgTable(
   "enrollment_creation_attempts",
   {
     clientKey: text("client_key").primaryKey(),

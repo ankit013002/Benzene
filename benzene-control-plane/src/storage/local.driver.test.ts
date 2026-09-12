@@ -19,6 +19,8 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     enrollmentCodeTtlSeconds: 600,
     enrollmentRateLimitMax: 10,
     enrollmentRateLimitWindowSeconds: 60,
+    enrollmentPairingRateLimitMax: 10,
+    enrollmentPairingRateLimitWindowSeconds: 60,
     s3: { bucket: "", region: "", endpoint: undefined, forcePathStyle: false },
     local: { rootDir: root, publicBaseUrl: "http://localhost:5000/local-objects" },
     ...overrides,
