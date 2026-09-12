@@ -54,6 +54,7 @@ jobs:
               - 'benzene-control-plane/**'
               - 'benzene-node-agent/**'
               - 'scripts/smoke-agent.mjs'
+              - 'scripts/smoke-protection.mjs'
               - '.github/workflows/**'
 
   web:
@@ -346,6 +347,8 @@ jobs:
         run: npm run build
       - name: Run cross-package smoke
         run: node scripts/smoke-agent.mjs
+      - name: Run protection repair smoke
+        run: node scripts/smoke-protection.mjs
 
   docs:
     name: Agent guides are in sync
