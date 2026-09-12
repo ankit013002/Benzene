@@ -331,8 +331,22 @@ active repair and user-facing paths, not a standalone scheduler. Offline and
 extended-offline replicas remain durable healthy protection, but cannot serve
 downloads or repair while their device is not online. Suspected-lost devices
 are quarantined and excluded from protection counts while their replica metadata
-is preserved. A signed heartbeat does not restore a suspected-lost device.
-Inventory reconciliation/recovery is still unimplemented.
+is preserved. A signed heartbeat alone does not restore a suspected-lost device.
+
+When a presumed-lost device returns, it must complete a fresh usage heartbeat
+and then submit one complete, locally hash-verified inventory. The MVP accepts
+at most 8,000 whole-file objects in one authenticated request. Exact known
+hash/size matches are restored; omissions and size mismatches become missing;
+unknown hashes are ignored. The report is authenticated but is not independent
+proof against a compromised device. Inventory reconciliation takes the same
+allocation and per-object locking path as repair, so repair bindings,
+reservations and capacity accounting remain safe while the device is released
+from quarantine.
+
+Availability is distinct from protection. Durable copies on offline devices can
+keep protection healthy while the user-facing file state is `Waiting for
+device`; an online healthy copy is `Available`, a reachable copy with active
+repair is `Restoring protection`, and no durable healthy copy is `Unavailable`.
 
 ### The `/agent` prefix
 
@@ -391,7 +405,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **311**, agent **107**, auth **78** when its
+Current counts: control plane **342**, agent **115**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, smoke **50 checks**.
 
 The frontend, auth-service, gateway, control-plane and user-service production
@@ -469,6 +483,10 @@ the standard to match.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
 - Placement engine with protection policies (1/2/3 copies) and health reporting
+- Presumed-lost inventory reconciliation: a fresh usage heartbeat followed by
+  one locally hash-verified inventory restores known hash/size matches, marks
+  omissions and mismatches missing, ignores unknown hashes, and safely updates
+  repair bindings and capacity accounting (maximum 8,000 objects per request)
 - Automatic whole-file LAN repair fills recorded replica shortfalls via direct
   healthy-peer transfer, with hash verification before recording the new replica
   and serialized possession-versus-repair transitions that reject stale device
@@ -490,17 +508,21 @@ the standard to match.
 
 ### Not built
 
-- **Outage inventory reconciliation/recovery and rebalancing** — opportunistic
+- **Outage scheduler and rebalancing** — opportunistic
   offline/extended-offline classification is implemented, and suspected-loss
   classification is opt-in via `DEVICE_SUSPECTED_LOST_AFTER_SECONDS`. Offline
   and extended-offline replicas remain durable healthy protection, but cannot
   serve downloads or repair while their device is not online; suspected-lost
   devices are quarantined, excluded from protection counts, and retain replica
-  metadata. Signed heartbeats do not restore them. Inventory reconciliation and
-  recovery are not implemented. Repair currently acts on recorded replica
-  shortfalls and can use a draining source; final drain detach and device-row
-  removal are implemented only after protection is restored and the node
-  completes its signed removal handshake
+  metadata. A signed heartbeat alone does not restore them: the returning node
+  must complete a fresh usage heartbeat and locally hash-verified inventory
+  reconciliation (one request, at most 8,000 whole-file objects). Known
+  hash/size matches return to healthy, omissions and mismatches become missing,
+  and unknown hashes are ignored; the authenticated report is not independent
+  proof against a compromised device. Repair currently acts on recorded
+  replica shortfalls and can use a draining source; final drain detach and
+  device-row removal are implemented only after protection is restored and the
+  node completes its signed removal handshake
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later

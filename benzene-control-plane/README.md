@@ -32,8 +32,31 @@ Offline and extended-offline devices retain durable bytes and replica metadata;
 those replicas still count as healthy protection, but cannot serve downloads or
 repair while the device is not online. A suspected-lost device is quarantined
 and excluded from protection counts while its replica metadata is preserved. A
-signed heartbeat does not restore that quarantine; inventory
-reconciliation/recovery is still unimplemented.
+signed heartbeat alone does not restore that quarantine.
+
+### Presumed-lost inventory reconciliation
+
+When a presumed-lost device returns, its agent must first complete a fresh
+usage heartbeat and then submit one complete, signed inventory request. The
+agent scans its local store and verifies each whole-file object's SHA-256 and
+size before submission. The MVP accepts at most 8,000 objects in that one
+request; larger stores must wait for a future paged protocol. The request is
+authenticated, but it is not independent proof against a compromised device.
+
+The control plane reconciles only replica metadata it already knows. An exact
+known hash/size match is restored as healthy, an omission or size mismatch is
+marked missing, and unknown hashes are ignored rather than creating file
+metadata. The transaction locks the allocation and per-object guards, updates
+verification watermarks, and safely clears or preserves repair bindings so the
+returning device cannot create a capacity or source-failure race. Only after a
+successful report is the device released from quarantine and marked online.
+
+Protection and availability remain separate. A file can retain durable healthy
+protection while waiting for an offline device. Availability is `available`
+when an online healthy copy is reachable, `waiting_for_device` when durable
+copies exist but none are reachable, `restoring_protection` when a reachable
+copy exists while repair is active, and `unavailable` when no durable healthy
+copy remains.
 
 ## Verification
 
@@ -44,6 +67,5 @@ latest fully verified cross-service counts.
 
 ## Explicit limits
 
-This slice is whole-file and LAN-only. Inventory reconciliation/recovery after
-outage classification, rebalancing, encryption and key recovery, remote access,
-chunking/manifests and garbage collection remain unfinished.
+This slice is whole-file and LAN-only. Rebalancing, encryption and key recovery,
+remote access, chunking/manifests and garbage collection remain unfinished.

@@ -78,6 +78,18 @@ file before reporting possession, and reports an integrity failure with the
 persisted assignment id. Network failures remain retryable; a consumed
 failure report cannot be replayed against another source.
 
+**Presumed-lost recovery is inventory-based.** After a fresh usage heartbeat
+still reports `suspected_lost`, the agent scans the complete local object store,
+hash-verifies every whole-file object, and submits one signed inventory request.
+The MVP caps that request at 8,000 objects; an oversized scan is rejected
+without submitting a partial report. The control plane restores only known
+hash/size matches, marks omissions or size mismatches missing, and ignores
+unknown hashes. The signature authenticates the report, but cannot provide
+independent proof against a compromised device. Until reconciliation succeeds,
+the agent does not poll repair assignments. A failed or lost submission
+is retried on a later heartbeat; a normal heartbeat response clears the pending
+recovery gate if the server has already accepted the report.
+
 **The object format is versioned.** Client-side encryption is not implemented
 yet, but each object records `v` and an explicit `encryption: "none"`. When
 encryption lands, encrypted and plaintext-era objects coexist and no migration
@@ -100,8 +112,8 @@ control.
   paths, not a node-agent scheduler. Offline and extended-offline replicas stay
   durable healthy protection, but cannot serve downloads or repair while their
   device is not online; suspected-lost devices remain quarantined and excluded
-  from protection counts until inventory reconciliation/recovery, which is not
-  implemented. Rebalancing and garbage collection are also unfinished.
+  from protection counts until the fresh-heartbeat inventory reconciliation
+  described above. Rebalancing and garbage collection are also unfinished.
 - **Whole files, not chunks.** Deliberate, per §107 — chunking lands after the
   core loop is proven.
 - **There is no automatic erase policy or GC.** An authorized object-delete
@@ -116,5 +128,5 @@ format. CI diffs the two files.
 
 ## Verification
 
-The current node-agent suite has **86 tests**. The broader verified counts are
-control plane **287**, auth **72**, gateway **15**, and **34 smoke checks**.
+The current node-agent suite has **115 tests**. The broader verified counts are
+control plane **342**, auth **78**, gateway **18**, and **50 smoke checks**.

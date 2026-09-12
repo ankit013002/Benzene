@@ -10,8 +10,9 @@ upload path.
 
 The repository contains a working local/LAN development slice. Automatic
 whole-file LAN repair fills recorded replica shortfalls via direct healthy-peer
-transfer. Basic outage classification is now recorded opportunistically while
-active repair and user-facing paths run, but inventory reconciliation/recovery,
+transfer. Outage classification runs opportunistically while active repair and
+user-facing paths run; presumed-lost inventory reconciliation is initiated by
+returning agents;
 encryption, remote access, chunking, garbage collection and several client
 surfaces remain unfinished.
 
@@ -78,7 +79,20 @@ repository-wide audit.
   after 120 seconds and `extended_offline` after 24 hours. `suspected_lost` is
   disabled unless `DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly set to a
   value later than the extended-offline threshold.
+- Presumed-lost inventory reconciliation: a returning device remains
+  quarantined after a signed heartbeat until it has sent a fresh usage
+  heartbeat and a complete, locally hash-verified inventory. One authenticated
+  request carries at most 8,000 whole-file objects; known hash/size matches are
+  restored, omissions and size mismatches become missing, and unknown hashes
+  are ignored. The report is authenticated but is not independent proof
+  against a compromised device. Repair bindings and capacity accounting are
+  updated under the same per-object and allocation locks used by repair.
 - Whole-file placement with protection policies and replica health reporting.
+- Availability is reported separately from protection: a protected file may be
+  `Waiting for device` when all durable copies are offline, `Restoring
+  protection` while a reachable copy exists and repair is active, `Available`
+  when an online healthy copy can serve it, or `Unavailable` when no durable
+  healthy copy remains. The file UI exposes those states directly.
 - Automatic whole-file LAN repair that fills recorded replica shortfalls by
   copying from a healthy peer, verifying the hash and recording the new replica.
 - Coordinated whole-file drain and safe final device removal: capacity is
@@ -103,8 +117,17 @@ repository-wide audit.
   devices' replicas remain durable healthy protection, but cannot serve
   downloads or repair while the device is not online. An explicitly enabled
   suspected-lost device is quarantined and excluded from protection counts; its
-  replica metadata is preserved. A signed heartbeat does not restore that state:
-  inventory reconciliation/recovery is still unimplemented.
+  replica metadata is preserved. A signed heartbeat alone does not restore that
+  state. The returning agent must complete a fresh usage heartbeat followed by
+  a complete locally hash-verified inventory report; reports are authenticated
+  but are not independent proof against a compromised device. The MVP accepts
+  one request of at most 8,000 whole-file objects, restores only known
+  hash/size matches, marks omissions and mismatches missing, ignores unknown
+  hashes, and safely reconciles repair bindings and capacity accounting.
+- Protection and availability are distinct. A file can remain protected while
+  waiting for an offline device; the UI labels files `Waiting for device`,
+  `Restoring protection`, `Available`, or `Unavailable` according to whether a
+  reachable healthy copy exists and whether repair is active.
 - Rebalancing is not implemented; repair currently acts on recorded replica
   shortfalls and can use a draining source. Final drain detach and device-row
   removal are implemented only after protection is restored and the node
@@ -327,7 +350,7 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **311** tests, agent **107**, auth **78** when its
+Verified counts: control plane **342** tests, agent **115**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, and **50 smoke
 checks**.
 
@@ -358,9 +381,8 @@ scripts/smoke-agent.mjs      Cross-package HTTP smoke test
 ## Roadmap
 
 The next priorities follow the architecture: design encryption and key recovery
-before real user data; then make remote/HTTPS access safe; then implement
-inventory reconciliation/recovery for outage classification. Rebalancing,
-chunking, garbage collection and richer clients follow those foundations.
+before real user data; then make remote/HTTPS access safe. Rebalancing, chunking,
+garbage collection and richer clients follow those foundations.
 
 ## Contributing
 
