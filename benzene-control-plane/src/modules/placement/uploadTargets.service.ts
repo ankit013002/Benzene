@@ -73,90 +73,100 @@ export async function planUpload(
 
   // Reachability is part of upload placement, not a post-selection filter. A
   // high-ranked offline-address device must not consume a slot that a lower-
-  // ranked reachable device could fill.
-  const decision = await decidePlacement(ownerId, input, { requireReachable: true });
+  // ranked reachable device could fill. The retry closes the smaller race in
+  // which a healthy existing holder begins draining between the decision and
+  // the reservation transaction.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const decision = await decidePlacement(ownerId, input, { requireReachable: true });
 
-  if (decision.deviceIds.length === 0) {
+    // Placement is allowed to consider only live capacity, but an online
+    // device without an advertised URL still cannot receive browser traffic.
+    // Filter before inserting replica rows so an unreachable machine is never
+    // recorded as a physical copy (and cannot leave a false reservation behind).
+    const deviceRows = await db()
+      .select({
+        id: devices.id,
+        name: devices.name,
+        advertisedUrl: devices.advertisedUrl,
+      })
+      .from(devices)
+      .where(
+        and(eq(devices.vaultId, vault.id), inArray(devices.id, decision.deviceIds))
+      );
+    const reachableIds = new Set(
+      deviceRows.filter((row) => row.advertisedUrl).map((row) => row.id)
+    );
+    const reservableDeviceIds = decision.deviceIds.filter((id) => reachableIds.has(id));
+
+    try {
+      if (reservableDeviceIds.length > 0 || decision.existingDeviceIds.length > 0) {
+        await reservePlacement(
+          ownerId,
+          {
+            objectHash: input.objectHash,
+            sizeBytes: input.sizeBytes,
+            deviceIds: reservableDeviceIds,
+          },
+          {
+            requireReachable: true,
+            holdDeviceIds: decision.existingDeviceIds,
+          }
+        );
+      }
+    } catch (error) {
+      // A drain or liveness change can win the device lock after the decision.
+      // Recompute once so the returned plan never relies on the old holder.
+      const retryable =
+        error instanceof AppError &&
+        (error.status === 409 ||
+          (error.status === 400 && error.message.includes("cannot receive transfers")));
+      if (attempt === 0 && retryable) continue;
+      throw error;
+    }
+
+    const rows = deviceRows.filter((row) => reachableIds.has(row.id));
+    const ttl = config().transferGrantTtlSeconds;
+    const expiresAt = Math.floor(Date.now() / 1000) + ttl;
+
+    const targets: UploadTarget[] = [];
+    for (const row of rows) {
+      // A device that has never advertised an address cannot be reached, so it
+      // is dropped from the plan rather than handed to the browser as a target
+      // that would fail on connect.
+      if (!row.advertisedUrl) continue;
+
+      targets.push({
+        deviceId: row.id,
+        deviceName: row.name,
+        url: `${row.advertisedUrl.replace(/\/+$/, "")}/objects/${input.objectHash}`,
+        grant: issueTransferGrant(key, {
+          objectHash: input.objectHash,
+          deviceId: row.id,
+          op: "put",
+          exp: expiresAt,
+          size: input.sizeBytes,
+        }),
+        expiresAt: new Date(expiresAt * 1000).toISOString(),
+      });
+    }
+
+    const placed = targets.length + decision.existingDeviceIds.length;
+
     return {
       objectHash: input.objectHash,
       sizeBytes: input.sizeBytes,
       desiredReplicas: decision.desiredReplicas,
       alreadyHeldBy: decision.existingDeviceIds,
-      targets: [],
-      shortfall: decision.shortfall,
-      ...(decision.reason ? { reason: decision.reason } : {}),
+      targets,
+      shortfall: placed < decision.desiredReplicas,
+      ...(placed < decision.desiredReplicas
+        ? { reason: decision.reason ?? "unreachable_devices" }
+        : {}),
       singleCopy: decision.singleCopy,
     };
   }
 
-  // Placement is allowed to consider only live capacity, but an online
-  // device without an advertised URL still cannot receive browser traffic.
-  // Filter before inserting replica rows so an unreachable machine is never
-  // recorded as a physical copy (and cannot leave a false reservation behind).
-  const deviceRows = await db()
-    .select({
-      id: devices.id,
-      name: devices.name,
-      advertisedUrl: devices.advertisedUrl,
-    })
-    .from(devices)
-    .where(
-      and(eq(devices.vaultId, vault.id), inArray(devices.id, decision.deviceIds))
-    );
-  const reachableIds = new Set(
-    deviceRows.filter((row) => row.advertisedUrl).map((row) => row.id)
-  );
-  const reservableDeviceIds = decision.deviceIds.filter((id) => reachableIds.has(id));
-
-  if (reservableDeviceIds.length > 0) {
-    await reservePlacement(ownerId, {
-      objectHash: input.objectHash,
-      sizeBytes: input.sizeBytes,
-      deviceIds: reservableDeviceIds,
-    }, { requireReachable: true });
-  }
-
-  const rows = deviceRows.filter((row) => reachableIds.has(row.id));
-
-  const ttl = config().transferGrantTtlSeconds;
-  const expiresAt = Math.floor(Date.now() / 1000) + ttl;
-
-  const targets: UploadTarget[] = [];
-  for (const row of rows) {
-    // A device that has never advertised an address cannot be reached, so it
-    // is dropped from the plan rather than handed to the browser as a target
-    // that would fail on connect.
-    if (!row.advertisedUrl) continue;
-
-    targets.push({
-      deviceId: row.id,
-      deviceName: row.name,
-      url: `${row.advertisedUrl.replace(/\/+$/, "")}/objects/${input.objectHash}`,
-      grant: issueTransferGrant(key, {
-        objectHash: input.objectHash,
-        deviceId: row.id,
-        op: "put",
-        exp: expiresAt,
-        size: input.sizeBytes,
-      }),
-      expiresAt: new Date(expiresAt * 1000).toISOString(),
-    });
-  }
-
-  const placed = targets.length + decision.existingDeviceIds.length;
-
-  return {
-    objectHash: input.objectHash,
-    sizeBytes: input.sizeBytes,
-    desiredReplicas: decision.desiredReplicas,
-    alreadyHeldBy: decision.existingDeviceIds,
-    targets,
-    shortfall: placed < decision.desiredReplicas,
-    ...(placed < decision.desiredReplicas
-      ? { reason: decision.reason ?? "unreachable_devices" }
-      : {}),
-    singleCopy: decision.singleCopy,
-  };
+  throw new AppError(409, "PLACEMENT_CHANGED", "Placement changed while the upload was planned");
 }
 
 /** Authorises reading one object back from a device that holds it. */

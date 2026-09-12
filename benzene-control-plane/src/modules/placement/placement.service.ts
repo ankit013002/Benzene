@@ -207,10 +207,13 @@ export async function decidePlacement(
 export async function reservePlacement(
   ownerId: string,
   input: { objectHash: string; sizeBytes: number; deviceIds: string[] },
-  options: { requireReachable?: boolean } = {}
+  options: { requireReachable?: boolean; holdDeviceIds?: string[] } = {}
 ): Promise<Replica[]> {
   const vault = await ensureVaultForOwner(ownerId);
-  if (input.deviceIds.length === 0) return [];
+  const deviceIds = [...new Set(input.deviceIds)];
+  const holdDeviceIds = [...new Set(options.holdDeviceIds ?? [])];
+  const lockDeviceIds = [...new Set([...deviceIds, ...holdDeviceIds])].sort();
+  if (lockDeviceIds.length === 0) return [];
 
   return db().transaction(async (tx) => {
     const allocation = alias(deviceStorageAllocations, "reserve_allocation");
@@ -225,18 +228,23 @@ export async function reservePlacement(
         advertisedUrl: devices.advertisedUrl,
       })
       .from(devices)
-      .where(and(eq(devices.vaultId, vault.id), inArray(devices.id, input.deviceIds)))
+      .where(and(eq(devices.vaultId, vault.id), inArray(devices.id, lockDeviceIds)))
       .orderBy(asc(devices.id))
       .for("update");
-    if (lockedDevices.length !== input.deviceIds.length) {
+    if (lockedDevices.length !== lockDeviceIds.length) {
       throw AppError.badRequest("One or more devices are not part of this vault");
     }
-    if (lockedDevices.some((device) => device.status === "draining" || device.status === "removed")) {
+    if (
+      lockedDevices.some(
+        (device) => device.status === "draining" || device.status === "removed"
+      )
+    ) {
       throw AppError.conflict("One or more devices are no longer accepting placements");
     }
     if (options.requireReachable) {
       const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
-      const unreachable = lockedDevices.some(
+      const reservableIds = new Set(deviceIds);
+      const unreachable = lockedDevices.filter((device) => reservableIds.has(device.id)).some(
         (device) =>
           !device.advertisedUrl ||
           deriveStatus(device.status, device.lastSeenAt, offlineAfterMs) !== "online"
@@ -257,12 +265,29 @@ export async function reservePlacement(
         occupiedBytes: occupiedBytesSql("reserve_allocation"),
       })
       .from(allocation)
-      .where(inArray(allocation.deviceId, [...input.deviceIds].sort()))
+      .where(inArray(allocation.deviceId, deviceIds.sort()))
       .orderBy(asc(allocation.deviceId))
       .for("update");
     const allocationByDevice = new Map(
       lockedAllocations.map((allocation) => [allocation.deviceId, allocation])
     );
+    if (holdDeviceIds.length > 0) {
+      const heldRows = await tx
+        .select({ deviceId: replicas.deviceId, status: replicas.status })
+        .from(replicas)
+        .where(
+          and(
+            eq(replicas.vaultId, vault.id),
+            eq(replicas.objectHash, input.objectHash),
+            inArray(replicas.deviceId, holdDeviceIds)
+          )
+        )
+        .for("update");
+      const heldByDevice = new Map(heldRows.map((row) => [row.deviceId, row.status]));
+      if (holdDeviceIds.some((deviceId) => heldByDevice.get(deviceId) !== "healthy")) {
+        throw AppError.conflict("An existing replica changed before placement could be reserved");
+      }
+    }
     const existingRows = await tx
       .select({
         id: replicas.id,
@@ -275,9 +300,10 @@ export async function reservePlacement(
         and(
           eq(replicas.vaultId, vault.id),
           eq(replicas.objectHash, input.objectHash),
-          inArray(replicas.deviceId, input.deviceIds)
+          inArray(replicas.deviceId, deviceIds)
         )
-      );
+      )
+      .for("update");
     const existingDevices = new Set(existingRows.map((row) => row.deviceId));
     const reusableExistingDevices = new Set(
       existingRows
@@ -291,7 +317,7 @@ export async function reservePlacement(
       }
     }
 
-    for (const deviceId of input.deviceIds) {
+    for (const deviceId of deviceIds) {
       const allocation = allocationByDevice.get(deviceId);
       if (!allocation) throw AppError.badRequest("Device has no storage allocation");
       const availableBytes = Math.max(
@@ -325,7 +351,7 @@ export async function reservePlacement(
       if (updated) reopened.push(updated);
     }
 
-    const newDeviceIds = input.deviceIds.filter((deviceId) => !existingDevices.has(deviceId));
+    const newDeviceIds = deviceIds.filter((deviceId) => !existingDevices.has(deviceId));
     if (newDeviceIds.length === 0) return reopened;
 
     const inserted = await tx

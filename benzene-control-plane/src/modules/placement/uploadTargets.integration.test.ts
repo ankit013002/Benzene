@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -10,6 +10,7 @@ import { setupTestDb, teardownTestDb, truncateAll } from "../../test/postgres.js
 import { generateDeviceKeyPair } from "../devices/deviceIdentity.js";
 import {
   approveEnrollment,
+  beginDeviceRemoval,
   recordHeartbeat,
   requestEnrollment,
 } from "../devices/devices.service.js";
@@ -31,6 +32,23 @@ function decodeGrant(grant: string): Record<string, unknown> {
   return JSON.parse(
     Buffer.from(encoded.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
   ) as Record<string, unknown>;
+}
+
+/** Observe PostgreSQL's lock queue instead of guessing with a timer. */
+async function waitForLockWaiters(count: number): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const result = await db.execute(sql`
+      select count(*)::int as waiting
+      from pg_stat_activity
+      where datname = current_database()
+        and state = 'active'
+        and wait_event_type = 'Lock'
+    `);
+    const row = result.rows[0];
+    if (Number(row?.waiting ?? 0) >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} PostgreSQL lock waiter(s)`);
 }
 
 /** Enrolls a device, brings it online and gives it a reachable address. */
@@ -186,6 +204,70 @@ describe("planning an upload", () => {
     expect(
       (await db.select().from(schema.replicas)).map((row) => row.status)
     ).toEqual(["placing"]);
+  });
+
+  it("replaces a maximum-capacity holder that starts draining during planning", async () => {
+    const source = await reachableDevice("source", "http://192.168.1.10:7070");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    const objectHash = hashOf("drain during upload planning");
+
+    const initial = await planUpload(OWNER, { objectHash, sizeBytes: 17 });
+    expect(initial.targets).toHaveLength(1);
+    expect(initial.targets[0]?.deviceId).toBe(source);
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 17 });
+    const target = await reachableDevice("target", "http://192.168.1.11:7070");
+
+    let releaseHolder: (() => void) | undefined;
+    let signalLocked: (() => void) | undefined;
+    const locked = new Promise<void>((resolve) => {
+      signalLocked = resolve;
+    });
+    const holder = db.transaction(async (tx) => {
+      await tx
+        .select({ id: schema.devices.id })
+        .from(schema.devices)
+        .where(eq(schema.devices.id, source))
+        .for("update");
+      signalLocked?.();
+      await new Promise<void>((resolve) => {
+        releaseHolder = resolve;
+      });
+    });
+    await locked;
+
+    const drain = beginDeviceRemoval(OWNER, source);
+    let plan: ReturnType<typeof planUpload> | undefined;
+    try {
+      // The drain is queued first. The plan's unlocked decision therefore sees
+      // the old healthy holder, then its reservation must wait for the drain
+      // transaction and retry after the holder becomes draining.
+      await waitForLockWaiters(1);
+      plan = planUpload(OWNER, { objectHash, sizeBytes: 17 });
+      await waitForLockWaiters(2);
+    } finally {
+      releaseHolder?.();
+      await holder;
+      await Promise.allSettled([drain, ...(plan ? [plan] : [])]);
+    }
+
+    await expect(drain).resolves.toMatchObject({ status: "draining" });
+    if (!plan) throw new Error("Upload plan did not start");
+    await expect(plan).resolves.toMatchObject({
+      alreadyHeldBy: [],
+      targets: [{ deviceId: target }],
+      shortfall: false,
+    });
+
+    const rows = await db
+      .select({ deviceId: schema.replicas.deviceId, status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, objectHash));
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        { deviceId: source, status: "healthy" },
+        { deviceId: target, status: "placing" },
+      ])
+    );
   });
 
   it("releases an abandoned reservation after the grant window", async () => {
