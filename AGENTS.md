@@ -299,6 +299,10 @@ allocation's `usageReportedAt` watermark. Placement, repair, drain preflight
 and allocation changes use that same accounting while locking the allocation
 row, so an exact-fit reservation cannot be over-issued between heartbeats.
 
+Upload planning transactionally revalidates existing healthy holders while
+locking devices, allocations and replicas; if a concurrent drain invalidates
+the snapshot, it retries once so a leaving device cannot satisfy protection.
+
 Repair assignments bind a target reservation to one healthy source and a
 persisted one-shot assignment id. A signed source-failure report must name
 both values and arrive before the same Unix-second grant boundary; consuming
@@ -370,7 +374,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 ```
 
-Current counts: control plane **308**, agent **107**, auth **78** when its
+Current counts: control plane **309**, agent **107**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, smoke **50 checks**.
 
 The auth-service and gateway production runtime images run as dedicated

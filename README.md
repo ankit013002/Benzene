@@ -159,6 +159,10 @@ allocation's usage watermark. The same calculation is used by placement,
 repair, drain preflight and allocation changes under an allocation-row lock,
 so exact-fit reservations cannot over-issue between heartbeats.
 
+Upload planning transactionally revalidates existing healthy holders while
+locking devices, allocations and replicas; if a concurrent drain invalidates
+the snapshot, it retries once so a leaving device cannot satisfy protection.
+
 Repair work is bound to one healthy source and a persisted one-shot assignment
 id. A signed source-failure report must name that source and assignment before
 the same Unix-second grant boundary; consuming it clears the binding and makes
@@ -290,7 +294,7 @@ services. It starts the real control plane and node agent itself and talks
 directly to the control plane; it requires a reachable PostgreSQL instance,
 built packages and MongoMemoryServer, and is not a mocked unit test.
 
-Verified counts: control plane **308** tests, agent **107**, auth **78** when its
+Verified counts: control plane **309** tests, agent **107**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, and **50 smoke
 checks**.
 
