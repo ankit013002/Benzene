@@ -232,8 +232,8 @@ opportunistic, not driven by a standalone scheduler. Offline and
 extended-offline replicas remain durable healthy protection, but cannot serve
 downloads or repair while their device is not online. Suspected-lost devices
 are quarantined and excluded from protection counts while their replica metadata
-is retained. Signed heartbeats do not clear that quarantine, and inventory
-reconciliation/recovery has not been implemented.
+is retained. Signed heartbeats do not clear that quarantine; the returning agent
+must complete the documented inventory reconciliation flow.
 
 ## Local development
 
@@ -254,6 +254,13 @@ createdb benzene
 createdb benzene_auth
 ```
 
+Initialize the schemas that are not created automatically at service startup:
+
+```bash
+psql -d benzene_auth -f benzene-auth-service/src/db/migrations/001_initial.sql
+psql -d benzene -f nebulavault-user-service/src/main/resources/schema.sql
+```
+
 Generate one shared secret and one control-plane transfer signing key:
 
 ```bash
@@ -272,16 +279,22 @@ cp nebulavault-frontend/.env.example nebulavault-frontend/.env.local
 
 Put the first generated value in `AUTH_SECRET` in the auth service, gateway
 environment and frontend. Put the second in the control plane as
-`TRANSFER_SIGNING_KEY`. The control plane also needs `DATABASE_URL` and
-`MONGOOSE_URI`; the templates contain working localhost examples.
+`TRANSFER_SIGNING_KEY`. Set `DATABASE_URL` in the auth service and control
+plane, and `DB_URL` for the user service, to URLs for the role and host your
+PostgreSQL installation actually uses; the `.env.example` values are
+illustrative localhost examples, not universal credentials. For a Homebrew
+install using the current macOS user, the Node URLs commonly look like
+`postgresql://$USER@localhost:5432/benzene` and
+`postgresql://$USER@localhost:5432/benzene_auth`; adjust the user, password,
+host or socket settings when yours differ.
 
 Run each process in its own terminal:
 
 ```bash
 cd benzene-auth-service && npm ci && npm run dev
 cd benzene-control-plane && npm ci && npm run db:migrate && npm run dev
-cd nebula-gateway && ./mvnw spring-boot:run
-cd nebulavault-user-service && DB_URL=jdbc:postgresql://localhost:5432/benzene ./mvnw spring-boot:run
+cd nebula-gateway && AUTH_SECRET=<same generated AUTH_SECRET> ./mvnw spring-boot:run
+cd nebulavault-user-service && DB_URL="jdbc:postgresql://localhost:5432/benzene?user=$USER" ./mvnw spring-boot:run
 cd benzene-node-agent && npm ci && npm run dev
 cd nebulavault-frontend && npm ci && npm run dev
 ```
