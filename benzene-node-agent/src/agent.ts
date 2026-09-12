@@ -42,6 +42,10 @@ export class Agent {
   private removalInFlight = false;
   private transferServingAllowed = true;
   private lastRepairAttemptAt = 0;
+  private inventoryReconciliationInFlight: Promise<void> | undefined;
+  private inventoryReconciled = false;
+  private inventoryRecoveryRequired = false;
+  private inventoryStatusGeneration = 0;
 
   constructor(
     private readonly config: AgentConfig,
@@ -172,8 +176,70 @@ export class Agent {
     });
 
     const report = { status: result.status, usedBytes };
+    await this.reconcileInventoryIfNeeded(
+      result.status,
+      identity.deviceId,
+      identity.privateKey
+    );
     this.events.onHeartbeat?.(report);
     return report;
+  }
+
+  private async reconcileInventoryIfNeeded(
+    status: string,
+    deviceId: string,
+    privateKey: string
+  ): Promise<void> {
+    if (status !== "suspected_lost") {
+      // An online response is authoritative after a lost inventory response:
+      // the server may have committed the report before the client observed a
+      // transport failure. Do not rescan and replay it indefinitely.
+      this.inventoryRecoveryRequired = false;
+      this.inventoryReconciled = false;
+      this.inventoryStatusGeneration += 1;
+      return;
+    }
+
+    this.inventoryRecoveryRequired = true;
+
+    // A normal heartbeat may complete while an earlier suspected-lost
+    // reconciliation is still scanning. Do not let that stale scan mark the
+    // next suspected-lost episode as reconciled.
+    const generation = this.inventoryStatusGeneration;
+    if (this.inventoryReconciled) {
+      this.inventoryRecoveryRequired = false;
+      return;
+    }
+    if (this.inventoryReconciliationInFlight) {
+      await this.inventoryReconciliationInFlight;
+      if (this.inventoryReconciled || generation !== this.inventoryStatusGeneration) {
+        return;
+      }
+    }
+
+    const reconciliation = (async (): Promise<void> => {
+      const objects = await this.store.inventory();
+      await this.client.submitInventory({
+        deviceId,
+        privateKey,
+        objects: objects.map(({ hash, size }) => ({
+          objectHash: hash,
+          sizeBytes: size,
+        })),
+      });
+      if (generation === this.inventoryStatusGeneration) {
+        this.inventoryReconciled = true;
+        this.inventoryRecoveryRequired = false;
+      }
+    })();
+    this.inventoryReconciliationInFlight = reconciliation;
+    try {
+      await reconciliation;
+    } finally {
+      if (this.inventoryReconciliationInFlight === reconciliation) {
+        this.inventoryReconciliationInFlight = undefined;
+      }
+    }
   }
 
   /** Reports possession using the device key, never a browser credential. */
@@ -244,7 +310,15 @@ export class Agent {
    */
   async attemptRepair(): Promise<boolean> {
     const identity = this.requireIdentity();
-    if (!identity.deviceId || this.repairInFlight || this.removalInFlight) return false;
+    if (
+      !identity.deviceId ||
+      this.repairInFlight ||
+      this.removalInFlight ||
+      this.inventoryRecoveryRequired ||
+      this.inventoryReconciliationInFlight
+    ) {
+      return false;
+    }
 
     const now = Date.now();
     if (now - this.lastRepairAttemptAt < this.config.repairIntervalMs) return false;

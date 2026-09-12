@@ -34,6 +34,8 @@ import type { Readable } from "node:stream";
  * rewriting every stored byte on machines we do not control.
  */
 export const OBJECT_FORMAT_VERSION = 1;
+/** Shared MVP limit for one signed presumed-loss inventory report. */
+export const MAX_INVENTORY_OBJECTS = 8_000;
 const STORE_MARKER = "benzene-object-store-v1\n";
 const REMOVAL_PENDING_MARKER = "benzene-removal-pending-v1\n";
 
@@ -71,6 +73,15 @@ export class SizeMismatchError extends Error {
   constructor(readonly expected: number, readonly actual: number) {
     super(`Object has size ${actual} bytes, expected ${expected} bytes`);
     this.name = "SizeMismatchError";
+  }
+}
+
+export class InventoryTooLargeError extends Error {
+  constructor(readonly count: number, readonly maximum: number) {
+    super(
+      `Verified object inventory contains ${count} objects, exceeding the ${maximum}-object reconciliation limit; no inventory was submitted`
+    );
+    this.name = "InventoryTooLargeError";
   }
 }
 
@@ -550,6 +561,65 @@ export class ObjectStore {
       hashes.push(...entries);
     }
     return hashes.sort();
+  }
+
+  /**
+   * Scrubs the complete managed object tree and returns only objects whose
+   * bytes still match their content address. The mutation lock is held for the
+   * whole scan so an inventory cannot describe a mixture of pre- and
+   * post-write state.
+   *
+   * Files with invalid names or failed integrity checks are omitted: they are
+   * not safe to advertise as replicas. Filesystem failures are surfaced so a
+   * caller never submits a silently partial inventory.
+   */
+  async inventory(maximum = MAX_INVENTORY_OBJECTS): Promise<StoredObject[]> {
+    if (!Number.isInteger(maximum) || maximum < 1) {
+      throw new Error("Inventory maximum must be a positive integer");
+    }
+
+    return this.withMutationLock(async () => {
+      this.assertLoaded();
+
+      const objects: StoredObject[] = [];
+      const prefixes = await readdir(this.objectsDir, { withFileTypes: true });
+      for (const prefix of prefixes) {
+        if (!prefix.isDirectory() || !/^[0-9a-f]{2}$/.test(prefix.name)) continue;
+
+        const entries = await readdir(path.join(this.objectsDir, prefix.name), {
+          withFileTypes: true,
+        });
+        for (const entry of entries) {
+          if (!entry.isFile()) continue;
+          const hash = entry.name;
+          if (!/^[0-9a-f]{64}$/.test(hash) || !hash.startsWith(prefix.name)) continue;
+
+          const inspected = await this.inspectObject(hash);
+          if (inspected) {
+            objects.push(inspected);
+            if (objects.length > maximum) {
+              throw new InventoryTooLargeError(objects.length, maximum);
+            }
+          }
+        }
+      }
+
+      return objects.sort((left, right) => left.hash.localeCompare(right.hash));
+    });
+  }
+
+  private async inspectObject(hash: string): Promise<StoredObject | null> {
+    const hasher = createHash("sha256");
+    let size = 0;
+    await pipeline(this.read(hash), async function (chunks) {
+      for await (const chunk of chunks) {
+        const buf = chunk as Buffer;
+        size += buf.length;
+        hasher.update(buf);
+      }
+    });
+
+    return hasher.digest("hex") === hash ? { hash, size } : null;
   }
 
   private assertLoaded(): void {

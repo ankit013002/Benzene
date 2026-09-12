@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -17,6 +17,7 @@ import {
   type EnrollmentStatus,
   type EnrollmentTicket,
   type HeartbeatResult,
+  type InventoryResult,
 } from "./controlPlane.js";
 import type { DeviceIdentity } from "./identity.js";
 import { ObjectStore } from "./store.js";
@@ -31,6 +32,12 @@ let root: string;
 class FakeControlPlane extends ControlPlaneClient {
   enrollmentRequests = 0;
   heartbeats: Array<{ deviceId: string; usedBytes: number }> = [];
+  heartbeatStatus = "online";
+  inventorySubmissions: Array<Array<{ objectHash: string; sizeBytes: number }>> = [];
+  inventoryError: Error | undefined;
+  inventoryAcceptThenThrow = false;
+  inventoryStarted: (() => void) | undefined;
+  inventoryRelease: Promise<void> | undefined;
   status: EnrollmentStatus["status"] = "pending";
   approvedDeviceId = "device-123";
   statusError: ControlPlaneError | undefined;
@@ -76,7 +83,31 @@ class FakeControlPlane extends ControlPlaneClient {
     usedBytes: number;
   }): Promise<HeartbeatResult> {
     this.heartbeats.push({ deviceId: input.deviceId, usedBytes: input.usedBytes });
-    return { status: "online" };
+    return { status: this.heartbeatStatus };
+  }
+
+  override async submitInventory(input: {
+    deviceId: string;
+    privateKey: string;
+    objects: Array<{ objectHash: string; sizeBytes: number }>;
+  }): Promise<InventoryResult> {
+    this.inventoryStarted?.();
+    if (this.inventoryError) {
+      const error = this.inventoryError;
+      this.inventoryError = undefined;
+      throw error;
+    }
+    if (this.inventoryRelease) await this.inventoryRelease;
+    this.inventorySubmissions.push(input.objects);
+    if (this.inventoryAcceptThenThrow) {
+      this.inventoryAcceptThenThrow = false;
+      throw new Error("inventory response was lost");
+    }
+    return {
+      status: "online",
+      reconciled: input.objects.length,
+      missing: 0,
+    };
   }
 
   override async pollRepair(): Promise<RepairAssignment | null> {
@@ -301,6 +332,126 @@ describe("heartbeat", () => {
     expect(plane.heartbeats).toEqual([
       { deviceId: "device-123", usedBytes: "stored bytes".length },
     ]);
+  });
+
+  it("submits only verified objects with their actual sizes after suspected loss", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const valid = await agent.store.put(Readable.from([Buffer.from("valid bytes")]));
+    const corrupt = await agent.store.put(Readable.from([Buffer.from("corrupt bytes")]));
+    await writeFile(
+      path.join(root, "storage", "objects", corrupt.hash.slice(0, 2), corrupt.hash),
+      "tampered"
+    );
+    await mkdir(path.join(root, "storage", "objects", valid.hash.slice(0, 2)), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(root, "storage", "objects", valid.hash.slice(0, 2), "renamed-junk"),
+      "not an object"
+    );
+    plane.heartbeatStatus = "suspected_lost";
+
+    await expect(agent.sendHeartbeat()).resolves.toMatchObject({
+      status: "suspected_lost",
+    });
+    expect(plane.inventorySubmissions).toEqual([
+      [{ objectHash: valid.hash, sizeBytes: "valid bytes".length }],
+    ]);
+  });
+
+  it("retries inventory reconciliation on a later heartbeat after submission failure", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    await agent.store.put(Readable.from([Buffer.from("retry me")]));
+    plane.heartbeatStatus = "suspected_lost";
+    plane.inventoryError = new Error("inventory endpoint unavailable");
+
+    await expect(agent.sendHeartbeat()).rejects.toThrow(/inventory endpoint unavailable/);
+    expect(plane.inventorySubmissions).toEqual([]);
+
+    await expect(agent.sendHeartbeat()).resolves.toMatchObject({
+      status: "suspected_lost",
+    });
+    expect(plane.inventorySubmissions).toHaveLength(1);
+  });
+
+  it("blocks public repair polling while inventory recovery is required", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    plane.heartbeatStatus = "suspected_lost";
+    plane.inventoryError = new Error("inventory unavailable");
+
+    await expect(agent.sendHeartbeat()).rejects.toThrow(/inventory unavailable/);
+    await expect(agent.attemptRepair()).resolves.toBe(false);
+    expect(plane.repairPolls).toBe(0);
+
+    plane.heartbeatStatus = "online";
+    await expect(agent.sendHeartbeat()).resolves.toMatchObject({ status: "online" });
+    await expect(agent.attemptRepair()).resolves.toBe(false);
+    expect(plane.repairPolls).toBe(1);
+  });
+
+  it("does not rescan when an online heartbeat follows a lost inventory response", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    await agent.store.put(Readable.from([Buffer.from("already accepted")]));
+    plane.heartbeatStatus = "suspected_lost";
+    plane.inventoryAcceptThenThrow = true;
+
+    await expect(agent.sendHeartbeat()).rejects.toThrow(/response was lost/);
+    expect(plane.inventorySubmissions).toHaveLength(1);
+
+    plane.heartbeatStatus = "online";
+    await expect(agent.sendHeartbeat()).resolves.toMatchObject({ status: "online" });
+    expect(plane.inventorySubmissions).toHaveLength(1);
+  });
+
+  it("does not reconcile inventory during a normal heartbeat", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    await expect(agent.sendHeartbeat()).resolves.toMatchObject({ status: "online" });
+    expect(plane.inventorySubmissions).toEqual([]);
+  });
+
+  it("does not overlap inventory scans or submissions", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    await agent.store.put(Readable.from([Buffer.from("one scan")]));
+    plane.heartbeatStatus = "suspected_lost";
+
+    let release: (() => void) | undefined;
+    plane.inventoryRelease = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const firstStarted = new Promise<void>((resolve) => {
+      plane.inventoryStarted = resolve;
+    });
+    const first = agent.sendHeartbeat();
+    await firstStarted;
+    const second = agent.sendHeartbeat();
+    await Promise.resolve();
+    expect(plane.inventorySubmissions).toEqual([]);
+    await expect(agent.attemptRepair()).resolves.toBe(false);
+    expect(plane.repairPolls).toBe(0);
+
+    release?.();
+    await Promise.all([first, second]);
+    expect(plane.inventorySubmissions).toHaveLength(1);
   });
 
   // The control plane being briefly unreachable is normal, and must not stop an

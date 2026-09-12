@@ -29,6 +29,12 @@ export interface HeartbeatResult {
   status: string;
 }
 
+export interface InventoryResult {
+  status: "online";
+  reconciled: number;
+  missing: number;
+}
+
 export interface PossessionResult {
   status: string;
 }
@@ -172,6 +178,40 @@ export class ControlPlaneClient {
     }
 
     const payload = (await res.json()) as { data: HeartbeatResult };
+    return payload.data;
+  }
+
+  /** Reports the verified contents of a device that was classified lost. */
+  async submitInventory(input: {
+    deviceId: string;
+    privateKey: string;
+    objects: Array<{ objectHash: string; sizeBytes: number }>;
+  }): Promise<InventoryResult> {
+    const path = "/agent/inventory";
+    const body = JSON.stringify({ objects: input.objects });
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "POST",
+          path,
+          body,
+        }),
+      },
+      body,
+    });
+
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Inventory submission rejected")
+      );
+    }
+
+    const payload = (await res.json()) as { data: InventoryResult };
     return payload.data;
   }
 

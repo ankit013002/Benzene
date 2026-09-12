@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   AllocationExceededError,
   IntegrityError,
+  InventoryTooLargeError,
+  MAX_INVENTORY_OBJECTS,
   ObjectStore,
   OBJECT_FORMAT_VERSION,
   SizeMismatchError,
@@ -242,6 +244,37 @@ describe("integrity", () => {
     const store = await makeStore();
 
     await expect(store.verify(sha256("never stored"))).resolves.toBe(false);
+  });
+});
+
+describe("inventory reconciliation", () => {
+  it("enforces the shared eight-thousand-object ceiling without truncating", async () => {
+    const store = await makeStore();
+    await store.put(bytes("first"));
+    await store.put(bytes("second"));
+
+    expect(MAX_INVENTORY_OBJECTS).toBe(8_000);
+    const error = await store.inventory(1).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(InventoryTooLargeError);
+    expect(error).toMatchObject({
+      count: 2,
+      maximum: 1,
+    });
+    await expect(store.inventory()).resolves.toHaveLength(2);
+  });
+
+  it("surfaces a read failure and releases the mutation lock", async () => {
+    const store = await makeStore();
+    await store.put(bytes("existing"));
+    const read = vi.spyOn(store, "read").mockImplementationOnce(() => {
+      throw new Error("inventory read failed");
+    });
+
+    await expect(store.inventory()).rejects.toThrow("inventory read failed");
+    read.mockRestore();
+    await expect(store.put(bytes("after failure"))).resolves.toMatchObject({
+      size: "after failure".length,
+    });
   });
 });
 

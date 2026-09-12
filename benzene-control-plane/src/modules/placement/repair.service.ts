@@ -57,8 +57,16 @@ export async function reportRepairSourceFailure(
       .select({ vaultId: devices.vaultId })
       .from(devices)
       .where(eq(devices.id, targetDeviceId))
+      .for("update")
       .limit(1);
     if (!target) throw AppError.notFound("Target device not found");
+
+    // Inventory reconciliation takes this same per-object guard before it
+    // locks any source or target replica rows. Keeping the guard ahead of both
+    // paths' row mutations prevents a source-row/target-row deadlock.
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`${target.vaultId}:${input.objectHash}`}))`
+    );
 
     const [targetReplica] = await tx
       .select({

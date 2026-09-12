@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { eq } from "drizzle-orm";
 import type { Express } from "express";
@@ -6,7 +6,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { resetConfigCache } from "../../config/env.js";
+import { config, resetConfigCache } from "../../config/env.js";
 import * as schema from "../../db/schema.js";
 import { setupTestDb, teardownTestDb, truncateAll } from "../../test/postgres.js";
 import {
@@ -20,6 +20,7 @@ import {
   beginDeviceRemoval,
   recordHeartbeat,
   requestEnrollment,
+  setAllocation,
 } from "./devices.service.js";
 import { confirmReplica, reservePlacement, setPolicy } from "../placement/placement.service.js";
 
@@ -682,5 +683,182 @@ describe("device signature authentication", () => {
       )
       .send(body)
       .expect(401);
+  });
+});
+
+describe("presumed-lost inventory reconciliation", () => {
+  it("restores matching replicas, marks omitted or corrupt copies missing, and ignores unknown hashes", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    await recordHeartbeat(deviceId, { usedBytes: 100 });
+    const presentHash = "a".repeat(64);
+    const corruptHash = "b".repeat(64);
+    const omittedHash = "c".repeat(64);
+    for (const [objectHash, sizeBytes] of [
+      [presentHash, 7],
+      [corruptHash, 8],
+      [omittedHash, 9],
+    ] as const) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes, deviceIds: [deviceId] });
+      await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes });
+    }
+    await db
+      .update(schema.replicas)
+      .set({ repairSourceDeviceId: deviceId, repairAssignmentId: randomUUID() })
+      .where(eq(schema.replicas.deviceId, deviceId));
+    const staleAt = new Date(Date.now() - config().deviceOfflineAfterSeconds * 1000 - 1_000);
+    await db
+      .update(schema.devices)
+      .set({ status: "suspected_lost", lastSeenAt: staleAt })
+      .where(eq(schema.devices.id, deviceId));
+    await db
+      .update(schema.deviceStorageAllocations)
+      .set({ usageReportedAt: staleAt })
+      .where(eq(schema.deviceStorageAllocations.deviceId, deviceId));
+
+    const body = {
+      objects: [
+        { objectHash: presentHash.toUpperCase(), sizeBytes: 7 },
+        { objectHash: corruptHash, sizeBytes: 99 },
+        { objectHash: "d".repeat(64), sizeBytes: 123 },
+      ],
+    };
+    await request(app)
+      .post("/agent/inventory")
+      .set(signedHeaders({ keys, deviceId, method: "POST", path: "/agent/inventory", body }))
+      .send(body)
+      .expect(409);
+
+    await recordHeartbeat(deviceId, { usedBytes: 100 });
+    const res = await request(app)
+      .post("/agent/inventory")
+      .set(
+        signedHeaders({
+          keys,
+          deviceId,
+          method: "POST",
+          path: "/agent/inventory",
+          body,
+          timestamp: Math.floor(Date.now() / 1000) + 1,
+        })
+      )
+      .send(body)
+      .expect(200);
+
+    expect(res.body.data).toEqual({ status: "online", reconciled: 1, missing: 2 });
+    const rows = await db
+      .select({
+        objectHash: schema.replicas.objectHash,
+        status: schema.replicas.status,
+        repairSourceDeviceId: schema.replicas.repairSourceDeviceId,
+        repairAssignmentId: schema.replicas.repairAssignmentId,
+      })
+      .from(schema.replicas)
+      .where(eq(schema.replicas.deviceId, deviceId));
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        {
+          objectHash: presentHash,
+          status: "healthy",
+          repairSourceDeviceId: null,
+          repairAssignmentId: null,
+        },
+        {
+          objectHash: corruptHash,
+          status: "missing",
+          repairSourceDeviceId: null,
+          repairAssignmentId: null,
+        },
+        {
+          objectHash: omittedHash,
+          status: "missing",
+          repairSourceDeviceId: null,
+          repairAssignmentId: null,
+        },
+      ])
+    );
+    const [device] = await db
+      .select({ status: schema.devices.status, lastSeenAt: schema.devices.lastSeenAt })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, deviceId));
+    expect(device?.status).toBe("online");
+    expect(device?.lastSeenAt?.getTime()).toBeGreaterThan(0);
+
+    const resized = await setAllocation(OWNER, deviceId, 100);
+    expect(resized.allocatedBytes).toBe(100);
+  });
+
+  it("does not let a normal device churn replica state, and a retry remains harmless", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    await recordHeartbeat(deviceId, { advertisedUrl: "http://127.0.0.1:7070" });
+    const objectHash = "e".repeat(64);
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 12, deviceIds: [deviceId] });
+    await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 12 });
+    const before = await db
+      .select({ status: schema.devices.status, lastSeenAt: schema.devices.lastSeenAt })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, deviceId));
+    const body = { objects: [{ objectHash, sizeBytes: 12 }] };
+
+    await request(app)
+      .post("/agent/inventory")
+      .set(signedHeaders({ keys, deviceId, method: "POST", path: "/agent/inventory", body }))
+      .send(body)
+      .expect(409);
+
+    const after = await db
+      .select({ status: schema.devices.status, lastSeenAt: schema.devices.lastSeenAt })
+      .from(schema.devices)
+      .where(eq(schema.devices.id, deviceId));
+    expect(after).toEqual(before);
+    const [replica] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, objectHash));
+    expect(replica?.status).toBe("healthy");
+  });
+
+  it("rejects duplicate hashes and inventories over the explicit MVP ceiling", async () => {
+    const { deviceId, keys } = await enrolledDevice();
+    const duplicateHash = "f".repeat(64);
+    const duplicateBody = {
+      objects: [
+        { objectHash: duplicateHash, sizeBytes: 1 },
+        { objectHash: duplicateHash.toUpperCase(), sizeBytes: 1 },
+      ],
+    };
+    await request(app)
+      .post("/agent/inventory")
+      .set(
+        signedHeaders({
+          keys,
+          deviceId,
+          method: "POST",
+          path: "/agent/inventory",
+          body: duplicateBody,
+        })
+      )
+      .send(duplicateBody)
+      .expect(400);
+
+    const oversizedBody = {
+      objects: Array.from({ length: 8_001 }, (_, index) => ({
+        objectHash: index.toString(16).padStart(64, "0"),
+        sizeBytes: 1,
+      })),
+    };
+    await request(app)
+      .post("/agent/inventory")
+      .set(
+        signedHeaders({
+          keys,
+          deviceId,
+          method: "POST",
+          path: "/agent/inventory",
+          body: oversizedBody,
+          timestamp: Math.floor(Date.now() / 1000) + 1,
+        })
+      )
+      .send(oversizedBody)
+      .expect(400);
   });
 });

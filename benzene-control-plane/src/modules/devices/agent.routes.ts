@@ -13,6 +13,10 @@ import {
   pollRepairForDevice,
   reportRepairSourceFailure,
 } from "../placement/repair.service.js";
+import {
+  MAX_INVENTORY_OBJECTS,
+  reconcileDeviceInventory,
+} from "./inventory.service.js";
 import { transferPublicKey } from "../placement/uploadTargets.service.js";
 import {
   getEnrollmentStatus,
@@ -60,6 +64,32 @@ const repairFailureSchema = z.object({
   reason: z.literal("integrity"),
 });
 
+const inventoryObjectSchema = z.object({
+  objectHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest")
+    .transform((value) => value.toLowerCase()),
+  sizeBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+});
+
+const inventorySchema = z
+  .object({
+    objects: z.array(inventoryObjectSchema).max(MAX_INVENTORY_OBJECTS),
+  })
+  .superRefine((value, context) => {
+    const hashes = new Set<string>();
+    for (const [index, object] of value.objects.entries()) {
+      if (hashes.has(object.objectHash)) {
+        context.addIssue({
+          code: "custom",
+          path: ["objects", index, "objectHash"],
+          message: "objectHash must appear only once",
+        });
+      }
+      hashes.add(object.objectHash);
+    }
+  });
+
 function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
   const result = schema.safeParse(payload);
   if (!result.success) {
@@ -106,6 +136,19 @@ router.post(
     const body = parse(heartbeatSchema, req.body);
     if (!req.deviceId) throw AppError.unauthorized();
     res.status(200).json({ data: await recordHeartbeat(req.deviceId, body) });
+  })
+);
+
+/** A presumed-lost node reports its complete, hash-verified local inventory. */
+router.post(
+  "/inventory",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    const body = parse(inventorySchema, req.body);
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({
+      data: await reconcileDeviceInventory(req.deviceId, body.objects),
+    });
   })
 );
 

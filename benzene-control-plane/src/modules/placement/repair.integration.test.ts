@@ -14,6 +14,7 @@ import {
   requestEnrollment,
 } from "../devices/devices.service.js";
 import { generateDeviceKeyPair } from "../devices/deviceIdentity.js";
+import { reconcileDeviceInventory } from "../devices/inventory.service.js";
 import { GRANT_TEST_PRIVATE_KEY } from "./grantVectors.js";
 import {
   confirmReplica,
@@ -56,14 +57,15 @@ async function onlineDevice(
   name: string,
   advertisedUrl: string,
   usedBytes = 0,
-  allocatedBytes = 10 * GB
+  allocatedBytes = 10 * GB,
+  ownerId = OWNER
 ): Promise<string> {
   const keys = await requestEnrollment({
     publicKey: generateDeviceKeyPair().publicKey,
     deviceName: name,
     platform: "linux",
   });
-  const device = await approveEnrollment(OWNER, keys.code, allocatedBytes);
+  const device = await approveEnrollment(ownerId, keys.code, allocatedBytes);
   await recordHeartbeat(device.id, { advertisedUrl, usedBytes });
   return device.id;
 }
@@ -227,6 +229,123 @@ describe("whole-file repair assignments", () => {
 
     const second = await pollRepairForDevice(target);
     expect(second?.source.deviceId).toBe(goodSource);
+  });
+
+  it("resets a repair bound to a returning source when an empty inventory omits the object", async () => {
+    const missingSource = await onlineDevice("missing-source", "http://192.168.1.10:7070");
+    const healthySource = await onlineDevice("healthy-source", "http://192.168.1.11:7070");
+    const target = await onlineDevice("target", "http://192.168.1.12:7070");
+    await setPolicy(OWNER, { mode: "highly_protected" });
+    const objectHash = hashOf("returning source inventory");
+    for (const deviceId of [missingSource, healthySource]) {
+      await reservePlacement(OWNER, { objectHash, sizeBytes: 23, deviceIds: [deviceId] });
+      await confirmReplica(OWNER, { objectHash, deviceId, sizeBytes: 23 });
+    }
+
+    const first = await pollRepairForDevice(target);
+    expect(first?.source.deviceId).toBe(missingSource);
+    await db
+      .update(schema.devices)
+      .set({ status: "suspected_lost" })
+      .where(eq(schema.devices.id, missingSource));
+
+    await expect(reconcileDeviceInventory(missingSource, [])).resolves.toMatchObject({
+      status: "online",
+      reconciled: 0,
+      missing: 1,
+    });
+    const [resetTarget] = await db
+      .select({ status: schema.replicas.status, repairSourceDeviceId: schema.replicas.repairSourceDeviceId })
+      .from(schema.replicas)
+      .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target)));
+    expect(resetTarget).toEqual({ status: "missing", repairSourceDeviceId: null });
+
+    const second = await pollRepairForDevice(target);
+    expect(second?.source.deviceId).toBe(healthySource);
+  });
+
+  it("isolates an empty inventory from a malformed cross-vault repair binding", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.20:7070");
+    const otherTarget = await onlineDevice(
+      "other-vault-target",
+      "http://192.168.1.21:7070",
+      0,
+      10 * GB,
+      "other-owner"
+    );
+    const objectHash = hashOf("cross-vault inventory");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 29, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 29 });
+    await reservePlacement("other-owner", { objectHash, sizeBytes: 29, deviceIds: [otherTarget] });
+    await db
+      .update(schema.replicas)
+      .set({ repairSourceDeviceId: source })
+      .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, otherTarget)));
+    await db
+      .update(schema.devices)
+      .set({ status: "suspected_lost" })
+      .where(eq(schema.devices.id, source));
+
+    await reconcileDeviceInventory(source, []);
+
+    const [otherRow] = await db
+      .select({
+        status: schema.replicas.status,
+        repairSourceDeviceId: schema.replicas.repairSourceDeviceId,
+      })
+      .from(schema.replicas)
+      .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, otherTarget)));
+    expect(otherRow).toEqual({ status: "placing", repairSourceDeviceId: source });
+  });
+
+  it("serializes inventory omission with a concurrent source-failure report", async () => {
+    const source = await onlineDevice("source", "http://192.168.1.30:7070");
+    const target = await onlineDevice("target", "http://192.168.1.31:7070");
+    const objectHash = hashOf("inventory source race");
+    await reservePlacement(OWNER, { objectHash, sizeBytes: 37, deviceIds: [source] });
+    await confirmReplica(OWNER, { objectHash, deviceId: source, sizeBytes: 37 });
+
+    const assignment = await pollRepairForDevice(target);
+    if (!assignment) throw new Error("Expected a repair assignment");
+    await db
+      .update(schema.devices)
+      .set({ status: "suspected_lost" })
+      .where(eq(schema.devices.id, source));
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const outcomes = await Promise.race([
+      Promise.allSettled([
+        reconcileDeviceInventory(source, []),
+        reportRepairSourceFailure(target, {
+          objectHash,
+          sourceDeviceId: source,
+          repairAssignmentId: assignment.repairAssignmentId,
+        }),
+      ]),
+      new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error("inventory/source-failure race timed out")),
+          5_000
+        );
+      }),
+    ]);
+    if (timeoutId) clearTimeout(timeoutId);
+    expect(outcomes).toHaveLength(2);
+
+    const [sourceRow] = await db
+      .select({ status: schema.replicas.status })
+      .from(schema.replicas)
+      .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, source)));
+    const [targetRow] = await db
+      .select({
+        status: schema.replicas.status,
+        repairSourceDeviceId: schema.replicas.repairSourceDeviceId,
+        repairAssignmentId: schema.replicas.repairAssignmentId,
+      })
+      .from(schema.replicas)
+      .where(and(eq(schema.replicas.objectHash, objectHash), eq(schema.replicas.deviceId, target)));
+    expect(sourceRow?.status).toBe("missing");
+    expect(targetRow).toEqual({ status: "missing", repairSourceDeviceId: null, repairAssignmentId: null });
   });
 
   it("does not let a stale possession report resurrect a failed repair reservation", async () => {
