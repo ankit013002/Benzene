@@ -129,13 +129,8 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
       - name: Apply auth database schema
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/001_initial.sql
-      - name: Build (with fallback)
-        run: |
-          if npm run -s | grep -qE '(^| )build( |$)'; then
-            npm run build
-          else
-            npx --yes tsc -p tsconfig.json
-          fi
+      - name: Build
+        run: npm run build
       - name: Test (including PostgreSQL concurrency regression)
         run: |
           test -n "$AUTH_TEST_DATABASE_URL"
