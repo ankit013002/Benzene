@@ -41,6 +41,10 @@ function check(label, condition, detail = "") {
   }
 }
 
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function jsonOrNull(response) {
   try {
     return await response.json();
@@ -119,6 +123,7 @@ async function main() {
     const { Agent } = agentRequire("./built/agent.js");
     const { loadAgentConfig } = agentRequire("./built/config.js");
     const { ObjectStore } = agentRequire("./built/store.js");
+    const { ControlPlaneClient } = agentRequire("./built/controlPlane.js");
 
     const config = loadAgentConfig({
       controlPlaneUrl,
@@ -371,6 +376,189 @@ async function main() {
       check("device refuses a grant replayed onto another object", false, "no usable transfer grant");
     }
 
+    console.log("\npresumed-lost inventory recovery");
+    // Keep only the recovery lifecycle short enough for this smoke test. The
+    // enrollment/upload flow above must retain production-like timing so a
+    // slow CI runner cannot classify the device before placement completes.
+    process.env.DEVICE_OFFLINE_AFTER_SECONDS = "1";
+    process.env.DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS = "2";
+    process.env.DEVICE_SUSPECTED_LOST_AFTER_SECONDS = "3";
+    const { resetConfigCache } = controlPlaneRequire("./built/config/env.js");
+    resetConfigCache();
+    const recoveryIdentity = agent.currentIdentity();
+    const recoveryDeviceId = recoveryIdentity?.deviceId;
+    const recoveryClient = recoveryIdentity?.deviceId
+      ? new ControlPlaneClient(controlPlaneUrl)
+      : undefined;
+    const recoveryHeartbeatInput = recoveryIdentity?.deviceId
+      ? {
+          deviceId: recoveryIdentity.deviceId,
+          privateKey: recoveryIdentity.privateKey,
+          usedBytes: store.usedBytes(),
+          availableBytes: store.availableBytes(),
+          appVersion: "smoke",
+          advertisedUrl: `http://127.0.0.1:${AGENT_PORT}`,
+        }
+      : undefined;
+
+    // Classification is intentionally opportunistic. Let the last signed
+    // heartbeat age, then use the normal user-facing read to classify it.
+    await sleep(3_500);
+    const staleDevicesRes = await fetch(`${controlPlaneUrl}/devices`, {
+      headers: { "X-User-Id": OWNER },
+    });
+    const staleDevices = (await jsonOrNull(staleDevicesRes))?.data;
+    check(
+      "stale device is classified as presumed lost",
+      Array.isArray(staleDevices) && staleDevices.some(
+        (device) => device.id === recoveryDeviceId && device.status === "suspected_lost"
+      ),
+      JSON.stringify(staleDevices)
+    );
+
+    if (recoveryClient && recoveryHeartbeatInput) {
+      const quarantinedHeartbeat = await recoveryClient.heartbeat(recoveryHeartbeatInput);
+      check(
+        "a signed heartbeat alone leaves the device quarantined",
+        quarantinedHeartbeat.status === "suspected_lost",
+        JSON.stringify(quarantinedHeartbeat)
+      );
+      const quarantinedDevicesRes = await fetch(`${controlPlaneUrl}/devices`, {
+        headers: { "X-User-Id": OWNER },
+      });
+      const quarantinedDevices = (await jsonOrNull(quarantinedDevicesRes))?.data;
+      check(
+        "quarantine persists until inventory is reconciled",
+        Array.isArray(quarantinedDevices) && quarantinedDevices.some(
+          (device) => device.id === recoveryDeviceId && device.status === "suspected_lost"
+        ),
+        JSON.stringify(quarantinedDevices)
+      );
+    } else {
+      check("a signed heartbeat alone leaves the device quarantined", false, "device was not enrolled");
+      check("quarantine persists until inventory is reconciled", false, "device was not enrolled");
+    }
+
+    // Agent.sendHeartbeat performs the hash-verified scan and signed inventory
+    // submission after the control plane reports suspected loss.
+    const recoveredHeartbeat = await agent.sendHeartbeat();
+    check(
+      "returned agent submits its full verified inventory",
+      recoveredHeartbeat?.status === "suspected_lost"
+    );
+    const recoveredDevicesRes = await fetch(`${controlPlaneUrl}/devices`, {
+      headers: { "X-User-Id": OWNER },
+    });
+    const recoveredDevices = (await jsonOrNull(recoveredDevicesRes))?.data;
+    check(
+      "inventory recovery brings the device online",
+      Array.isArray(recoveredDevices) && recoveredDevices.some(
+        (device) => device.id === recoveryDeviceId && device.status === "online"
+      ),
+      JSON.stringify(recoveredDevices)
+    );
+    const recoveredProtectionRes = await fetch(
+      `${controlPlaneUrl}/placement/protection/${objectHash}`,
+      { headers: { "X-User-Id": OWNER } }
+    );
+    const recoveredProtection = (await jsonOrNull(recoveredProtectionRes))?.data;
+    check(
+      "present object is healthy again after inventory recovery",
+      recoveredProtection?.healthyReplicas === 1,
+      JSON.stringify(recoveredProtection)
+    );
+
+    // A fresh process gives the next presumed-loss episode a clean
+    // reconciliation state, just as a restarted node would have.
+    const missingAgent = new Agent(config, store);
+    await missingAgent.initialise();
+
+    // Exercise the omission branch deterministically: remove the managed
+    // object, let the same device become presumed lost again, and reconcile
+    // an inventory that proves the replica is missing.
+    await store.delete(objectHash);
+    check("missing-object fixture was removed from the device", !(await store.has(objectHash)));
+    await sleep(3_500);
+    await fetch(`${controlPlaneUrl}/devices`, { headers: { "X-User-Id": OWNER } });
+    if (recoveryClient && recoveryHeartbeatInput) {
+      const missingHeartbeat = await recoveryClient.heartbeat({
+        ...recoveryHeartbeatInput,
+        usedBytes: store.usedBytes(),
+        availableBytes: store.availableBytes(),
+      });
+      check(
+        "missing-object heartbeat is still quarantined before inventory",
+        missingHeartbeat.status === "suspected_lost",
+        JSON.stringify(missingHeartbeat)
+      );
+    } else {
+      check("missing-object heartbeat is still quarantined before inventory", false, "device was not enrolled");
+    }
+    const missingInventoryHeartbeat = await missingAgent.sendHeartbeat();
+    check(
+      "missing-object inventory is accepted",
+      missingInventoryHeartbeat?.status === "suspected_lost"
+    );
+    const missingProtectionRes = await fetch(
+      `${controlPlaneUrl}/placement/protection/${objectHash}`,
+      { headers: { "X-User-Id": OWNER } }
+    );
+    const missingProtection = (await jsonOrNull(missingProtectionRes))?.data;
+    check(
+      "omitted object is no longer counted as healthy protection",
+      missingProtection?.healthyReplicas === 0,
+      JSON.stringify(missingProtection)
+    );
+
+    // Restore the bytes, then use a fresh agent instance to represent the
+    // returning process after the prior missing-inventory episode.
+    await store.put(Readable.from([fileBody]), {
+      expectedHash: objectHash,
+      expectedSize: fileBody.length,
+    });
+    // The missing inventory brought the device online. Age that fresh
+    // heartbeat again so the restarted agent exercises the recovery path
+    // rather than taking the normal-online fast path.
+    await sleep(3_500);
+    const finalStaleDevicesRes = await fetch(`${controlPlaneUrl}/devices`, {
+      headers: { "X-User-Id": OWNER },
+    });
+    const finalStaleDevices = (await jsonOrNull(finalStaleDevicesRes))?.data;
+    check(
+      "restored device is classified as presumed lost again",
+      Array.isArray(finalStaleDevices) && finalStaleDevices.some(
+        (device) => device.id === recoveryDeviceId && device.status === "suspected_lost"
+      ),
+      JSON.stringify(finalStaleDevices)
+    );
+    const returningAgent = new Agent(config, store);
+    await returningAgent.initialise();
+    const finalRecoveryHeartbeat = await returningAgent.sendHeartbeat();
+    check(
+      "restored object is reconciled on the returning agent",
+      finalRecoveryHeartbeat?.status === "suspected_lost"
+    );
+    const finalProtectionRes = await fetch(
+      `${controlPlaneUrl}/placement/protection/${objectHash}`,
+      { headers: { "X-User-Id": OWNER } }
+    );
+    const finalProtection = (await jsonOrNull(finalProtectionRes))?.data;
+    check(
+      "restored object regains healthy protection",
+      finalProtection?.healthyReplicas === 1,
+      JSON.stringify(finalProtection)
+    );
+    missingAgent.stopHeartbeat();
+    returningAgent.stopHeartbeat();
+
+    // Do not let the smoke-only timing affect the remaining removal checks or
+    // the config used while the process shuts down. Use deliberately safe
+    // defaults even if the caller supplied unusually short values.
+    process.env.DEVICE_OFFLINE_AFTER_SECONDS = "120";
+    process.env.DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS = "86400";
+    delete process.env.DEVICE_SUSPECTED_LOST_AFTER_SECONDS;
+    resetConfigCache();
+
     console.log("\nrejects a forged signature");
     const forgedDeviceId = agent.currentIdentity()?.deviceId;
     if (forgedDeviceId) {
@@ -405,7 +593,6 @@ async function main() {
       rootDir: removalConfig.storageDir,
       allocatedBytes: removalConfig.allocatedBytes,
     });
-    const { ControlPlaneClient } = agentRequire("./built/controlPlane.js");
     const { Agent: RemovalAgent } = agentRequire("./built/agent.js");
     const removalAgent = new RemovalAgent(removalConfig, removalStore);
     await removalAgent.initialise();

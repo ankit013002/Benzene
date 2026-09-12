@@ -25,6 +25,7 @@ jobs:
       docs: ${{ steps.filter.outputs.docs }}
       agent: ${{ steps.filter.outputs.agent }}
       infra: ${{ steps.filter.outputs.infra }}
+      smoke: ${{ steps.filter.outputs.smoke }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -49,6 +50,11 @@ jobs:
               - 'CLAUDE.md'
             infra:
               - 'infrastructure/**'
+            smoke:
+              - 'benzene-control-plane/**'
+              - 'benzene-node-agent/**'
+              - 'scripts/smoke-agent.mjs'
+              - '.github/workflows/**'
 
   web:
     name: Frontend (Next.js) — build
@@ -286,6 +292,60 @@ jobs:
         run: |
           diff -u ../benzene-control-plane/src/modules/devices/protocolVectors.ts src/protocolVectors.ts
           diff -u ../benzene-control-plane/src/modules/placement/grantVectors.ts src/grantVectors.ts
+
+  smoke-agent:
+    name: Cross-package smoke (control plane + node agent)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.smoke == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SMOKE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            benzene-control-plane/package-lock.json
+            benzene-node-agent/package-lock.json
+      # mongodb-memory-server downloads its MongoDB binary on the first smoke
+      # run. Cache that binary separately from npm so repeated CI runs stay
+      # bounded without hiding a dependency change.
+      - name: Cache MongoDB binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: ${{ runner.os }}-mongodb-${{ hashFiles('benzene-control-plane/package-lock.json') }}
+      - name: Install control plane dependencies
+        working-directory: benzene-control-plane
+        run: npm ci --include=dev
+      - name: Install node agent dependencies
+        working-directory: benzene-node-agent
+        run: npm ci --include=dev
+      - name: Build control plane
+        working-directory: benzene-control-plane
+        run: npm run build
+      - name: Build node agent
+        working-directory: benzene-node-agent
+        run: npm run build
+      - name: Run cross-package smoke
+        run: node scripts/smoke-agent.mjs
 
   docs:
     name: Agent guides are in sync
