@@ -344,19 +344,22 @@ cd nebula-gateway && ./mvnw -B -ntp test
 ```
 
 Control-plane tests use real PostgreSQL and create throwaway databases per test
-file. The agent smoke test (`node scripts/smoke-agent.mjs`) exercises enrollment,
-heartbeat, upload, download and rejected unauthorized requests against running
-services. It starts the real control plane and node agent itself and talks
-directly to the control plane; it requires a reachable PostgreSQL instance,
-built packages and MongoMemoryServer, and is not a mocked unit test.
+file. The cross-package smoke test (`node scripts/smoke-agent.mjs`) exercises
+enrollment, heartbeat, presumed-lost inventory recovery, upload, download,
+authentication rejection and device removal against running services. It starts
+the real control plane and node agent itself and talks directly to the control
+plane; it requires a reachable PostgreSQL instance, built packages and
+MongoMemoryServer, and is not a mocked unit test.
 
 Verified counts: control plane **342** tests, agent **115**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway **18**, and **50 smoke
+real-Postgres concurrency test is enabled, gateway **18**, and **63 smoke
 checks**.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
-control plane, node agent, Terraform and the guide files. Frontend lint errors
-are fatal. Where a package has a lockfile, CI uses `npm ci` for reproducibility.
+control plane, node agent, Terraform and the guide files. It runs the
+cross-package smoke when control-plane, node-agent, smoke-script or workflow
+paths change. Frontend lint errors are fatal. Where a package has a lockfile,
+CI uses `npm ci` for reproducibility.
 
 ## Release coverage
 

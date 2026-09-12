@@ -393,9 +393,10 @@ vectors and updating both files in the same commit.
   Vitest runs files in parallel and a shared one has each file truncating
   another's fixtures mid-run.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
-  plane** over HTTP: enrollment, approval, signed heartbeat, upload to device,
-  download back, and unauthorised attempts refused. Needs both packages built
-  and a reachable Postgres.
+  plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
+  inventory recovery, upload to device, download back, authentication
+  rejection and device removal. Needs both packages built and a reachable
+  Postgres.
 
 ```bash
 # control plane
@@ -406,7 +407,7 @@ node scripts/smoke-agent.mjs
 ```
 
 Current counts: control plane **342**, agent **115**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway **18**, smoke **50 checks**.
+real-Postgres concurrency test is enabled, gateway **18**, smoke **63 checks**.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains

@@ -129,4 +129,4 @@ format. CI diffs the two files.
 ## Verification
 
 The current node-agent suite has **115 tests**. The broader verified counts are
-control plane **342**, auth **78**, gateway **18**, and **50 smoke checks**.
+control plane **342**, auth **78**, gateway **18**, and **63 smoke checks**.
