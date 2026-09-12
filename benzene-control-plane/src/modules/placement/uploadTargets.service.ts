@@ -4,8 +4,13 @@ import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
 import { devices, replicas } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
+import { classifyDeviceOutages } from "../devices/devices.service.js";
+import { deriveDeviceStatus as deriveStatus } from "../devices/liveness.js";
 import { ensureVaultForOwner } from "../vaults/vaults.service.js";
-import { decidePlacement, reservePlacement } from "./placement.service.js";
+import {
+  decidePlacement,
+  reservePlacement,
+} from "./placement.service.js";
 import { issueTransferGrant, publicKeyFor } from "./transferGrant.js";
 
 /**
@@ -70,6 +75,7 @@ export async function planUpload(
 ): Promise<UploadPlan> {
   const key = signingKey();
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
 
   // Reachability is part of upload placement, not a post-selection filter. A
   // high-ranked offline-address device must not consume a slot that a lower-
@@ -176,6 +182,7 @@ export async function planDownload(
 ): Promise<UploadTarget[]> {
   const key = signingKey();
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
 
   const rows = await db()
     .select({
@@ -183,6 +190,7 @@ export async function planDownload(
       name: devices.name,
       advertisedUrl: devices.advertisedUrl,
       status: devices.status,
+      lastSeenAt: devices.lastSeenAt,
     })
     .from(replicas)
     .innerJoin(devices, eq(devices.id, replicas.deviceId))
@@ -191,15 +199,31 @@ export async function planDownload(
         eq(replicas.vaultId, vault.id),
         eq(replicas.objectHash, objectHash),
         eq(replicas.status, "healthy"),
-        sql`${devices.status} <> 'removed'`
+        sql`${devices.status} not in ('removed', 'suspected_lost')`
       )
     );
 
   const ttl = config().transferGrantTtlSeconds;
   const expiresAt = Math.floor(Date.now() / 1000) + ttl;
 
+  const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
+  const extendedOfflineAfterMs = config().deviceExtendedOfflineAfterSeconds * 1000;
+  const suspectedLostAfterMs =
+    (config().deviceSuspectedLostAfterSeconds ?? Number.POSITIVE_INFINITY) * 1000;
+
   return rows
-    .filter((row) => row.advertisedUrl)
+    .filter(
+      (row) =>
+        row.advertisedUrl &&
+        deriveStatus(
+          row.status,
+          row.lastSeenAt,
+          offlineAfterMs,
+          Date.now(),
+          extendedOfflineAfterMs,
+          suspectedLostAfterMs
+        ) === "online"
+    )
     .map((row) => ({
       deviceId: row.id,
       deviceName: row.name,

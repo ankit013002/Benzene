@@ -14,11 +14,16 @@ export function deriveDeviceStatus(
   stored: string,
   lastSeenAt: Date | null,
   offlineAfterMs: number,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  extendedOfflineAfterMs = Number.POSITIVE_INFINITY,
+  suspectedLostAfterMs = Number.POSITIVE_INFINITY
 ): string {
   if (stored === "draining" || stored === "removed" || stored === "suspected_lost") {
     return stored;
   }
   if (!lastSeenAt) return "pending";
-  return lastSeenAt >= deviceOnlineSince(offlineAfterMs, nowMs) ? "online" : "offline";
+  const silenceMs = nowMs - lastSeenAt.getTime();
+  if (silenceMs > suspectedLostAfterMs) return "suspected_lost";
+  if (silenceMs > extendedOfflineAfterMs) return "extended_offline";
+  return silenceMs > offlineAfterMs ? "offline" : "online";
 }

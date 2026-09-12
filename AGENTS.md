@@ -323,6 +323,17 @@ Vault online-device counts and online capacity use the same last-heartbeat
 liveness cutoff as device views. Raw capacity remains owned capacity, even when
 a device is stale or offline.
 
+Outage classification uses 120 seconds as the offline default and 24 hours as
+the extended-offline default. Suspected-loss classification is disabled unless
+`DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly configured and strictly
+later than the extended-offline threshold. Classification is opportunistic from
+active repair and user-facing paths, not a standalone scheduler. Offline and
+extended-offline replicas remain durable healthy protection, but cannot serve
+downloads or repair while their device is not online. Suspected-lost devices
+are quarantined and excluded from protection counts while their replica metadata
+is preserved. A signed heartbeat does not restore a suspected-lost device.
+Inventory reconciliation/recovery is still unimplemented.
+
 ### The `/agent` prefix
 
 Agent endpoints live under `/agent/**` and the gateway routes that prefix
@@ -479,10 +490,17 @@ the standard to match.
 
 ### Not built
 
-- **Outage/loss classification and rebalancing** — repair currently acts on
-  recorded replica shortfalls and can use a draining source; final drain
-  detach and device-row removal are implemented only after protection is
-  restored and the node completes its signed removal handshake
+- **Outage inventory reconciliation/recovery and rebalancing** — opportunistic
+  offline/extended-offline classification is implemented, and suspected-loss
+  classification is opt-in via `DEVICE_SUSPECTED_LOST_AFTER_SECONDS`. Offline
+  and extended-offline replicas remain durable healthy protection, but cannot
+  serve downloads or repair while their device is not online; suspected-lost
+  devices are quarantined, excluded from protection counts, and retain replica
+  metadata. Signed heartbeats do not restore them. Inventory reconciliation and
+  recovery are not implemented. Repair currently acts on recorded replica
+  shortfalls and can use a draining source; final drain detach and device-row
+  removal are implemented only after protection is restored and the node
+  completes its signed removal handshake
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later

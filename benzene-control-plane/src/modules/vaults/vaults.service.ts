@@ -4,6 +4,7 @@ import { db } from "../../db/client.js";
 import { deviceStorageAllocations, devices, vaults, type Vault } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
 import { config } from "../../config/env.js";
+import { classifyDeviceOutages } from "../devices/outageClassification.js";
 import { deviceOnlineSince } from "../devices/liveness.js";
 
 /**
@@ -65,6 +66,7 @@ export interface VaultSummary {
  */
 export async function getVaultSummary(ownerId: string): Promise<VaultSummary> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const onlineSince = deviceOnlineSince(config().deviceOfflineAfterSeconds * 1000);
 
   const [row] = await db()
@@ -75,7 +77,7 @@ export async function getVaultSummary(ownerId: string): Promise<VaultSummary> {
       onlineCapacityBytes: sql<number>`
         coalesce(sum(${deviceStorageAllocations.allocatedBytes})
           filter (
-            where ${devices.status} not in ('draining', 'removed', 'suspected_lost')
+            where ${devices.status} not in ('draining', 'removed', 'extended_offline', 'suspected_lost')
               and ${devices.lastSeenAt} >= ${onlineSince}
           ), 0)::bigint
       `,
@@ -87,7 +89,7 @@ export async function getVaultSummary(ownerId: string): Promise<VaultSummary> {
       `,
       onlineDeviceCount: sql<number>`
         count(distinct ${devices.id}) filter (
-          where ${devices.status} not in ('draining', 'removed', 'suspected_lost')
+          where ${devices.status} not in ('draining', 'removed', 'extended_offline', 'suspected_lost')
             and ${devices.lastSeenAt} >= ${onlineSince}
         )::int
       `,

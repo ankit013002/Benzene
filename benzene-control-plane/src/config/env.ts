@@ -29,6 +29,10 @@ export interface AppConfig {
   deviceClockSkewSeconds: number;
   /** Silence after which a device is reported offline rather than online. */
   deviceOfflineAfterSeconds: number;
+  /** Silence after which an offline device is reported as extended-offline. */
+  deviceExtendedOfflineAfterSeconds: number;
+  /** Silence after which an extended-offline device is presumed lost, if enabled. */
+  deviceSuspectedLostAfterSeconds: number | undefined;
   /**
    * Ed25519 private key (base64 PKCS8) the control plane signs transfer grants
    * with. Read lazily: only upload paths need it, so a deployment that has not
@@ -75,6 +79,16 @@ function intFromEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function optionalPositiveIntFromEnv(name: string): number | undefined {
+  const raw = optional(name);
+  if (raw === undefined) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Environment variable ${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function resolveDriver(): StorageDriverName {
   const raw = (optional("STORAGE_DRIVER") ?? "local").toLowerCase();
   if (raw !== "s3" && raw !== "local") {
@@ -85,6 +99,29 @@ function resolveDriver(): StorageDriverName {
 
 export function loadConfig(): AppConfig {
   const storageDriver = resolveDriver();
+  const deviceOfflineAfterSeconds = intFromEnv("DEVICE_OFFLINE_AFTER_SECONDS", 120);
+  const deviceExtendedOfflineAfterSeconds = intFromEnv(
+    "DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS",
+    24 * 60 * 60
+  );
+  const deviceSuspectedLostAfterSeconds = optionalPositiveIntFromEnv(
+    "DEVICE_SUSPECTED_LOST_AFTER_SECONDS"
+  );
+  if (!(deviceOfflineAfterSeconds < deviceExtendedOfflineAfterSeconds)) {
+    throw new Error(
+      "DEVICE_OFFLINE_AFTER_SECONDS must be less than " +
+        "DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS"
+    );
+  }
+  if (
+    deviceSuspectedLostAfterSeconds !== undefined &&
+    !(deviceExtendedOfflineAfterSeconds < deviceSuspectedLostAfterSeconds)
+  ) {
+    throw new Error(
+      "DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS must be less than " +
+        "DEVICE_SUSPECTED_LOST_AFTER_SECONDS"
+    );
+  }
 
   return {
     port: intFromEnv("PORT", 5000),
@@ -105,7 +142,9 @@ export function loadConfig(): AppConfig {
       60
     ),
     deviceClockSkewSeconds: intFromEnv("DEVICE_CLOCK_SKEW_SECONDS", 300),
-    deviceOfflineAfterSeconds: intFromEnv("DEVICE_OFFLINE_AFTER_SECONDS", 120),
+    deviceOfflineAfterSeconds,
+    deviceExtendedOfflineAfterSeconds,
+    deviceSuspectedLostAfterSeconds,
     transferSigningKey: optional("TRANSFER_SIGNING_KEY"),
     transferGrantTtlSeconds: intFromEnv("TRANSFER_GRANT_TTL_SECONDS", 300),
     storageDriver,

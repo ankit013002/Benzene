@@ -95,9 +95,13 @@ control.
   DPAPI and Keystore are per-platform native work (§34).
 - **Repair is whole-file and bounded.** The agent fills recorded replica
   shortfalls through direct healthy-peer transfer, including assignments that
-  copy from a draining source during drain preparation. Final detach/device-row
-  removal, outage/loss classification, rebalancing and garbage collection are
-  not implemented.
+  copy from a draining source during drain preparation. Outage classification
+  is control-plane work performed opportunistically by active repair and user
+  paths, not a node-agent scheduler. Offline and extended-offline replicas stay
+  durable healthy protection, but cannot serve downloads or repair while their
+  device is not online; suspected-lost devices remain quarantined and excluded
+  from protection counts until inventory reconciliation/recovery, which is not
+  implemented. Rebalancing and garbage collection are also unfinished.
 - **Whole files, not chunks.** Deliberate, per §107 — chunking lands after the
   core loop is proven.
 - **There is no automatic erase policy or GC.** An authorized object-delete

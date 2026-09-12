@@ -26,8 +26,10 @@ import {
   normalizePairingCode,
 } from "./deviceIdentity.js";
 import { deriveDeviceStatus as deriveStatus } from "./liveness.js";
+import { classifyDeviceOutages } from "./outageClassification.js";
 
 export { deriveDeviceStatus as deriveStatus } from "./liveness.js";
+export { classifyDeviceOutages } from "./outageClassification.js";
 
 type DbExecutor = Pick<ReturnType<typeof db>, "select" | "update" | "delete" | "execute">;
 
@@ -350,7 +352,11 @@ export interface DeviceView {
  */
 export async function listDevices(ownerId: string): Promise<DeviceView[]> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
+  const extendedOfflineAfterMs = config().deviceExtendedOfflineAfterSeconds * 1000;
+  const suspectedLostAfterMs =
+    (config().deviceSuspectedLostAfterSeconds ?? Number.POSITIVE_INFINITY) * 1000;
 
   const rows = await db()
     .select({
@@ -385,7 +391,14 @@ export async function listDevices(ownerId: string): Promise<DeviceView[]> {
     id: row.id,
     name: row.name,
     platform: row.platform,
-    status: deriveStatus(row.status, row.lastSeenAt, offlineAfterMs),
+    status: deriveStatus(
+      row.status,
+      row.lastSeenAt,
+      offlineAfterMs,
+      Date.now(),
+      extendedOfflineAfterMs,
+      suspectedLostAfterMs
+    ),
     allocatedBytes: Number(row.allocatedBytes ?? 0),
     usedBytes: Number(row.usedBytes ?? 0),
     lastSeenAt: row.lastSeenAt,
@@ -429,7 +442,7 @@ async function isReadyToDisconnect(
         (row) =>
           row.deviceId === deviceId &&
           row.status !== "corrupt" &&
-          row.status !== "lost"
+          row.status !== "missing"
       )
       .map((row) => row.objectHash)
   );
@@ -441,7 +454,8 @@ async function isReadyToDisconnect(
         row.deviceId !== deviceId &&
         row.status === "healthy" &&
         row.deviceStatus !== "draining" &&
-        row.deviceStatus !== "removed"
+        row.deviceStatus !== "removed" &&
+        row.deviceStatus !== "suspected_lost"
     ).length;
     if (healthyElsewhere < desiredReplicas) return false;
   }
@@ -578,7 +592,7 @@ export async function recordHeartbeat(
       updatedAt: now,
       ...(input.appVersion ? { appVersion: input.appVersion } : {}),
       ...(input.advertisedUrl ? { advertisedUrl: input.advertisedUrl } : {}),
-      status: sql`case when ${devices.status} in ('draining','removed')
+      status: sql`case when ${devices.status} in ('draining','removed','suspected_lost')
                        then ${devices.status} else 'online' end`,
     })
     .where(eq(devices.id, deviceId))
@@ -803,7 +817,8 @@ async function ensureRemovalCapacity(
           row.deviceId !== deviceId &&
           row.replicaStatus === "healthy" &&
           row.deviceStatus !== "draining" &&
-          row.deviceStatus !== "removed"
+          row.deviceStatus !== "removed" &&
+          row.deviceStatus !== "suspected_lost"
       ).length;
       const required = Math.max(0, desiredReplicas - activeElsewhere);
       const occupiedDeviceIds = new Set(
@@ -812,7 +827,7 @@ async function ensureRemovalCapacity(
             (row) =>
               row.objectHash === leaving.objectHash &&
               row.replicaStatus !== "corrupt" &&
-              row.replicaStatus !== "lost"
+              row.replicaStatus !== "missing"
           )
           .map((row) => row.deviceId)
       );
@@ -836,7 +851,7 @@ async function ensureRemovalCapacity(
           (row) =>
             row.objectHash === leaving.objectHash &&
             row.replicaStatus !== "corrupt" &&
-            row.replicaStatus !== "lost"
+            row.replicaStatus !== "missing"
         )
         .map((row) => row.deviceId)
     );

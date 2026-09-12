@@ -12,7 +12,10 @@ import {
   storagePolicies,
 } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
-import { deriveStatus } from "../devices/devices.service.js";
+import {
+  classifyDeviceOutages,
+  deriveStatus,
+} from "../devices/devices.service.js";
 import { occupiedBytesSql } from "./capacity.js";
 import { replicasForMode } from "./placement.service.js";
 import { issueTransferGrant } from "./transferGrant.js";
@@ -41,6 +44,14 @@ export async function reportRepairSourceFailure(
   targetDeviceId: string,
   input: { objectHash: string; sourceDeviceId: string; repairAssignmentId: string }
 ): Promise<{ status: "corrupt" }> {
+  const [knownTarget] = await db()
+    .select({ vaultId: devices.vaultId })
+    .from(devices)
+    .where(eq(devices.id, targetDeviceId))
+    .limit(1);
+  if (!knownTarget) throw AppError.notFound("Target device not found");
+  await classifyDeviceOutages(knownTarget.vaultId);
+
   return db().transaction(async (tx) => {
     const [target] = await tx
       .select({ vaultId: devices.vaultId })
@@ -141,6 +152,7 @@ export async function pollRepairForDevice(
     .where(eq(devices.id, deviceId))
     .limit(1);
   if (!target) return null;
+  await classifyDeviceOutages(target.vaultId);
 
   const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
 
@@ -233,7 +245,10 @@ export async function pollRepairForDevice(
           and(eq(replicas.vaultId, target.vaultId), eq(replicas.objectHash, object.objectHash))
         );
       const availableReplicas = replicaRows.filter(
-        (row) => row.deviceStatus !== "draining" && row.deviceStatus !== "removed"
+        (row) =>
+          row.deviceStatus !== "draining" &&
+          row.deviceStatus !== "removed" &&
+          row.deviceStatus !== "suspected_lost"
       );
       const healthyCount = availableReplicas.filter((row) => row.status === "healthy").length;
       const activeCount = availableReplicas.filter(

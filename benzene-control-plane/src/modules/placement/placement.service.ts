@@ -14,7 +14,10 @@ import {
   type StoragePolicy,
 } from "../../db/schema.js";
 import { AppError } from "../../utils/AppError.js";
-import { deriveStatus } from "../devices/devices.service.js";
+import {
+  classifyDeviceOutages,
+  deriveStatus,
+} from "../devices/devices.service.js";
 import { ensureVaultForOwner } from "../vaults/vaults.service.js";
 import { occupiedBytesSql } from "./capacity.js";
 import {
@@ -145,6 +148,7 @@ export async function decidePlacement(
   options: { requireReachable?: boolean } = {}
 ): Promise<PlacementDecision> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const policy = await getPolicy(ownerId);
   const desiredReplicas = replicasForMode(policy.mode);
 
@@ -175,7 +179,7 @@ export async function decidePlacement(
         // satisfy the policy or be reported as already held. A draining copy
         // is deliberately excluded because it is scheduled to leave.
         eq(replicas.status, "healthy"),
-        sql`${devices.status} not in ('draining', 'removed')`
+        sql`${devices.status} not in ('draining', 'removed', 'suspected_lost')`
       )
     );
 
@@ -210,6 +214,7 @@ export async function reservePlacement(
   options: { requireReachable?: boolean; holdDeviceIds?: string[] } = {}
 ): Promise<Replica[]> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const deviceIds = [...new Set(input.deviceIds)];
   const holdDeviceIds = [...new Set(options.holdDeviceIds ?? [])];
   const lockDeviceIds = [...new Set([...deviceIds, ...holdDeviceIds])].sort();
@@ -236,7 +241,10 @@ export async function reservePlacement(
     }
     if (
       lockedDevices.some(
-        (device) => device.status === "draining" || device.status === "removed"
+        (device) =>
+          device.status === "draining" ||
+          device.status === "removed" ||
+          device.status === "suspected_lost"
       )
     ) {
       throw AppError.conflict("One or more devices are no longer accepting placements");
@@ -417,7 +425,26 @@ export async function confirmReplicaForDevice(
   deviceId: string,
   input: { objectHash: string; sizeBytes: number }
 ): Promise<Replica> {
+  const [knownDevice] = await db()
+    .select({ vaultId: devices.vaultId })
+    .from(devices)
+    .where(eq(devices.id, deviceId))
+    .limit(1);
+  if (!knownDevice) throw AppError.notFound("Device not found");
+  await classifyDeviceOutages(knownDevice.vaultId);
+
   return db().transaction(async (tx) => {
+    const [device] = await tx
+      .select({ status: devices.status })
+      .from(devices)
+      .where(eq(devices.id, deviceId))
+      .for("update")
+      .limit(1);
+    if (!device) throw AppError.notFound("Device not found");
+    if (device.status === "suspected_lost") {
+      throw AppError.conflict("A presumed-lost device must reconcile its inventory before possession reports");
+    }
+
     // The failure report and possession report race on the same durable row.
     // Lock it before deciding which state may be acknowledged: otherwise a
     // stale possession can select `placing`, wait behind a failure report that
@@ -480,6 +507,7 @@ export async function getObjectProtection(
   objectHash: string
 ): Promise<ObjectProtection> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const policy = await getPolicy(ownerId);
   const desiredReplicas = replicasForMode(policy.mode);
   const offlineAfterMs = config().deviceOfflineAfterSeconds * 1000;
@@ -501,10 +529,16 @@ export async function getObjectProtection(
   // is explicit that offline is not the same as lost, and treating it as lost
   // would trigger pointless repairs every time a laptop closes.
   const healthy = rows.filter(
-    (row) => row.status === "healthy" && !leavingStatus(row.deviceStatus)
+    (row) =>
+      row.status === "healthy" &&
+      !leavingStatus(row.deviceStatus) &&
+      row.deviceStatus !== "suspected_lost"
   );
   const placing = rows.filter(
-    (row) => row.status === "placing" && !leavingStatus(row.deviceStatus)
+    (row) =>
+      row.status === "placing" &&
+      !leavingStatus(row.deviceStatus) &&
+      row.deviceStatus !== "suspected_lost"
   );
 
   return {
@@ -544,6 +578,7 @@ export async function getVaultProtection(
   ownerId: string
 ): Promise<VaultProtectionSummary> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const policy = await getPolicy(ownerId);
   const desiredReplicas = replicasForMode(policy.mode);
 
@@ -552,7 +587,7 @@ export async function getVaultProtection(
       objectHash: replicas.objectHash,
       healthy: sql<number>`count(*) filter (
         where ${replicas.status} = 'healthy'
-          and ${devices.status} not in ('draining', 'removed')
+          and ${devices.status} not in ('draining', 'removed', 'suspected_lost')
       )::int`,
     })
     .from(replicas)
@@ -605,6 +640,7 @@ export async function listUnderProtectedObjects(
   limit = 100
 ): Promise<ObjectProtection[]> {
   const vault = await ensureVaultForOwner(ownerId);
+  await classifyDeviceOutages(vault.id);
   const policy = await getPolicy(ownerId);
   const desiredReplicas = replicasForMode(policy.mode);
 
@@ -613,11 +649,11 @@ export async function listUnderProtectedObjects(
       objectHash: replicas.objectHash,
       healthy: sql<number>`count(*) filter (
         where ${replicas.status} = 'healthy'
-          and ${devices.status} not in ('draining', 'removed')
+          and ${devices.status} not in ('draining', 'removed', 'suspected_lost')
       )::int`,
       placing: sql<number>`count(*) filter (
         where ${replicas.status} = 'placing'
-          and ${devices.status} not in ('draining', 'removed')
+          and ${devices.status} not in ('draining', 'removed', 'suspected_lost')
       )::int`,
     })
     .from(replicas)
@@ -625,8 +661,8 @@ export async function listUnderProtectedObjects(
     .where(eq(replicas.vaultId, vault.id))
     .groupBy(replicas.objectHash)
     .having(sql`count(*) filter (
-      where ${replicas.status} = 'healthy'
-        and ${devices.status} not in ('draining', 'removed')
+          where ${replicas.status} = 'healthy'
+            and ${devices.status} not in ('draining', 'removed', 'suspected_lost')
     ) < ${desiredReplicas}`)
     .limit(limit);
 

@@ -10,9 +10,10 @@ upload path.
 
 The repository contains a working local/LAN development slice. Automatic
 whole-file LAN repair fills recorded replica shortfalls via direct healthy-peer
-transfer, but this is not yet a production-ready remote drive: outage/loss
-classification, encryption, remote access, chunking, garbage collection and
-several client surfaces remain unfinished.
+transfer. Basic outage classification is now recorded opportunistically while
+active repair and user-facing paths run, but inventory reconciliation/recovery,
+encryption, remote access, chunking, garbage collection and several client
+surfaces remain unfinished.
 
 ## How it fits together
 
@@ -73,6 +74,10 @@ repository-wide audit.
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
   allocation.
+- Opportunistic device outage classification: silence defaults to `offline`
+  after 120 seconds and `extended_offline` after 24 hours. `suspected_lost` is
+  disabled unless `DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly set to a
+  value later than the extended-offline threshold.
 - Whole-file placement with protection policies and replica health reporting.
 - Automatic whole-file LAN repair that fills recorded replica shortfalls by
   copying from a healthy peer, verifying the hash and recording the new replica.
@@ -93,10 +98,17 @@ repository-wide audit.
 
 ## Deliberate limits
 
-- General outage/loss classification and rebalancing are not implemented;
-  repair currently acts on recorded replica shortfalls and can use a draining
-  source. Final drain detach and device-row removal are implemented only after
-  protection is restored and the node completes its signed removal handshake.
+- Outage classification is not a standalone scheduler: it runs opportunistically
+  from active repair and user-facing paths. Offline and extended-offline
+  devices' replicas remain durable healthy protection, but cannot serve
+  downloads or repair while the device is not online. An explicitly enabled
+  suspected-lost device is quarantined and excluded from protection counts; its
+  replica metadata is preserved. A signed heartbeat does not restore that state:
+  inventory reconciliation/recovery is still unimplemented.
+- Rebalancing is not implemented; repair currently acts on recorded replica
+  shortfalls and can use a draining source. Final drain detach and device-row
+  removal are implemented only after protection is restored and the node
+  completes its signed removal handshake.
 - Objects are whole files; chunking, manifests and streaming browser hashing are
   future work. The browser currently hashes a complete file in memory.
 - Encryption at rest and key recovery are not implemented. Stored objects are
@@ -188,6 +200,17 @@ and folder removal explicitly warns that descendants are included.
 Vault online-device counts and online capacity use the same last-heartbeat
 liveness cutoff as device views. Raw capacity remains owned capacity, even when
 a device is stale or offline.
+
+Outage classification uses the same defaults: 120 seconds to become offline and
+24 hours to become extended-offline. Suspected-loss classification is disabled
+unless `DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly configured and is
+strictly later than the extended-offline threshold. Classification is
+opportunistic, not driven by a standalone scheduler. Offline and
+extended-offline replicas remain durable healthy protection, but cannot serve
+downloads or repair while their device is not online. Suspected-lost devices
+are quarantined and excluded from protection counts while their replica metadata
+is retained. Signed heartbeats do not clear that quarantine, and inventory
+reconciliation/recovery has not been implemented.
 
 ## Local development
 
@@ -335,9 +358,9 @@ scripts/smoke-agent.mjs      Cross-package HTTP smoke test
 ## Roadmap
 
 The next priorities follow the architecture: design encryption and key recovery
-before real user data; then make remote/HTTPS access safe; then complete
-outage/loss classification. Rebalancing, chunking, garbage collection and
-richer clients follow those foundations.
+before real user data; then make remote/HTTPS access safe; then implement
+inventory reconciliation/recovery for outage classification. Rebalancing,
+chunking, garbage collection and richer clients follow those foundations.
 
 ## Contributing
 
