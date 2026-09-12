@@ -1,0 +1,17 @@
+# Never send local credentials or generated dependencies to the Docker daemon.
+.env*
+!.env.example
+**/.env*
+!**/.env.example
+
+node_modules
+.next
+coverage
+*.tsbuildinfo
+
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode
+*.log
