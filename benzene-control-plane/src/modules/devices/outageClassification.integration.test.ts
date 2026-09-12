@@ -208,6 +208,7 @@ describe("automatic device outage classification", () => {
     await confirmReplica(OWNER, { objectHash, deviceId: keeper, sizeBytes: 10 });
 
     vi.setSystemTime(Date.now() + (LOST_SECONDS + 1) * 1000);
+    await recordHeartbeat(keeper, { usedBytes: 10, advertisedUrl: "http://keeper.test" });
     const protection = await getObjectProtection(OWNER, objectHash);
 
     expect(protection.healthyReplicas).toBe(1);

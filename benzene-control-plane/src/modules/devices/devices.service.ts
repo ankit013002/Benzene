@@ -441,8 +441,7 @@ async function isReadyToDisconnect(
       .filter(
         (row) =>
           row.deviceId === deviceId &&
-          row.status !== "corrupt" &&
-          row.status !== "missing"
+          row.status !== "corrupt"
       )
       .map((row) => row.objectHash)
   );
