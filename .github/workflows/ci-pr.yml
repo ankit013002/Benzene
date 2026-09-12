@@ -136,9 +136,7 @@ jobs:
           java-version: "21"
           cache: maven
       - name: Test
-        run: |
-          chmod +x mvnw || true
-          ./mvnw -B -ntp test
+        run: ./mvnw -B -ntp test
       - name: Package
         run: ./mvnw -B -ntp -DskipTests package
       - uses: actions/upload-artifact@v4
@@ -213,9 +211,7 @@ jobs:
           java-version: "21"
           cache: maven
       - name: Test
-        run: |
-          chmod +x mvnw || true
-          ./mvnw -B -ntp test
+        run: ./mvnw -B -ntp test
       - name: Package
         run: ./mvnw -B -ntp -DskipTests package
       - uses: actions/upload-artifact@v4
