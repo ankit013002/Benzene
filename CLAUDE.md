@@ -51,6 +51,7 @@ storage-layer work.
 | `nebulavault-user-service/` | User profiles, quota fields | Java 21, Spring Boot |
 | `infrastructure/terraform/` | S3 bucket + least-privilege IAM | Terraform |
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
+| `scripts/smoke-protection.mjs` | Three-device Protected repair smoke test | Node |
 | `YAGNI-CODE/` | Notes on removed code. Not built. | — |
 | `simple-flask-server/` | Debug scratch. Not production. | — |
 
@@ -397,6 +398,11 @@ vectors and updating both files in the same commit.
   inventory recovery, upload to device, download back, authentication
   rejection and device removal. Needs both packages built and a reachable
   Postgres.
+- `scripts/smoke-protection.mjs` runs a three-device local protection smoke:
+  it uploads to devices A and B, marks A presumed lost, repairs directly from
+  B to C, verifies restored two-copy health, and reads the bytes back from C to
+  prove they are identical. It does not test remote access, encryption,
+  garbage collection, or frontend/gateway behavior.
 
 ```bash
 # control plane
@@ -404,10 +410,14 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 
 # end to end
 node scripts/smoke-agent.mjs
+node scripts/smoke-protection.mjs
 ```
 
 Current counts: control plane **342**, agent **115**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway **18**, smoke **63 checks**.
+real-Postgres concurrency test is enabled, gateway **18**. The core
+cross-package smoke has **63 checks**; the three-device Protected repair smoke
+has **40 checks**. These smoke milestones were verified by CI run
+`34719594345` at commit `41462e8`.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
