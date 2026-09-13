@@ -119,6 +119,10 @@ repository-wide zero.
   entries, and removing the device from the Vault.
 - Browser-to-device upload and download over a LAN, with SHA-256 content
   addressing and device-side integrity checks.
+- Mongo-backed upload versioning is concurrency-safe for both legacy presign
+  and device-backed reservations: concurrent requests receive distinct
+  immutable version numbers, and reverse-order completion leaves the highest
+  committed version current with matching node metadata.
 - Authenticated LAN web-route/topology acceptance through Next.js, the Java
   gateway, auth/control plane and two real node agents: enrollment and
   approval, heartbeats, a default Protected two-device upload, completion,
@@ -133,12 +137,14 @@ repository-wide zero.
   profile through the gateway and Next bridge, checks default profile/quota
   fields, and verifies anonymous redirects/401 responses. It has exactly 12
   `ok` assertions and is green in CI run `34768007763` at commit `090c7eb`.
-- Frontend transfer helpers have seven deterministic `node:test`/`tsx` tests for
-  hashing and reservation, direct Protected uploads, completion gating,
-  pending/shortfall errors, download fallback, unresponsive-holder
-  timeout/fallback and safe DOM cleanup. A live browser check verifies the
-  landing page renders without an overlay and can navigate to sign-in; it also
-  caught and fixed CSS import ordering and a missing base selector.
+- Frontend transfer helpers have eight deterministic `node:test`/`tsx` tests
+  (five upload and three download) for hashing and reservation, direct
+  Protected uploads, completion gating, pending/shortfall errors, download
+  fallback, unresponsive-holder timeout/fallback and safe DOM cleanup. Reduced
+  protection messaging is based on authoritative completion state rather than
+  the reservation plan. A live browser check verifies the landing page renders
+  without an overlay and can navigate to sign-in; it also caught and fixed CSS
+  import ordering and a missing base selector.
 - An atomic, allocation-bounded node object store with restart-safe usage
   accounting.
 - Vault and Devices views plus the current file-management UI.
@@ -447,12 +453,17 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **342** tests, agent **115**, auth **78** when its
+Verified counts: control plane **344** tests, agent **115**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend transfer
-helpers **7**, user-profile acceptance **12 `ok` assertions**, and **63 smoke
-checks**. The integrated authenticated LAN acceptance has exactly **60 `ok`
+helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
+assertions**, and **63 smoke checks**. The frontend suite has **18 tests** total.
+The integrated authenticated LAN acceptance has exactly **60 `ok`
 assertions** and was green in CI run `34788300450`. Default Turbopack and
 Webpack production builds pass.
+
+CI run `34789553908` is fully green and verifies exactly **344/344
+control-plane tests**, including concurrent legacy/device-backed version
+reservation and reverse-order completion regressions.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,

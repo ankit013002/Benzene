@@ -406,10 +406,10 @@ vectors and updating both files in the same commit.
   **4.1.11**, which preserves Node 20 compatibility and resolves the prior
   Vitest advisory.
 - Frontend transfer-helper tests use Node's built-in `node:test` and
-  `node:assert` through `tsx`; seven deterministic tests cover reservation
-  hashing, direct Protected PUTs and grants, completion gating, pending and
-  shortfall errors, download fallback, unresponsive-holder timeout/fallback,
-  and safe browser download cleanup.
+  `node:assert` through `tsx`; eight deterministic tests (five upload and three
+  download) cover reservation hashing, direct Protected PUTs and grants,
+  completion gating, pending and shortfall errors, download fallback,
+  unresponsive-holder timeout/fallback, and safe browser download cleanup.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
   plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
   inventory recovery, upload to device, download back, authentication
@@ -456,9 +456,10 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **342**, agent **115**, auth **78** when its
+Current counts: control plane **344**, agent **115**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend
-transfer-helper **7**, user-profile acceptance **12 `ok` assertions**. The core
+transfer-helper **8** (five upload, three download), user-profile acceptance
+**12 `ok` assertions**. The frontend suite has **18 tests** total. The core
 cross-package smoke has **63 checks**; the
 three-device Protected repair smoke has **40 checks**. These smoke milestones
 were verified by CI run
@@ -470,6 +471,13 @@ landing page renders without an overlay and navigates to sign-in; that check
 also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
+
+CI run `34789553908` is fully green and verifies exactly **344/344
+control-plane tests**, including concurrent legacy/device-backed version
+reservation and reverse-order completion regressions. Those regressions prove
+that each reservation receives a distinct immutable version number and that
+completing versions in reverse order leaves the highest committed version
+current with matching node metadata.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -591,11 +599,17 @@ the standard to match.
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
-- Frontend transfer helpers have seven deterministic `node:test`/`tsx` tests for
-  hashing and reservation, direct Protected uploads, completion gating,
-  pending/shortfall errors, download fallback, unresponsive-holder
-  timeout/fallback and safe DOM cleanup. A live browser check also verifies the
-  landing page renders without an overlay and can navigate to sign-in.
+- Mongo-backed upload versioning is concurrency-safe for both legacy presign
+  and device-backed reservations: concurrent requests receive distinct
+  immutable version numbers, and reverse-order completion leaves the highest
+  committed version current with matching node metadata.
+- Frontend transfer helpers have eight deterministic `node:test`/`tsx` tests
+  (five upload and three download) for hashing and reservation, direct
+  Protected uploads, completion gating, pending/shortfall errors, download
+  fallback, unresponsive-holder timeout/fallback and safe DOM cleanup. Reduced
+  protection messaging is based on authoritative completion state rather than
+  the reservation plan. A live browser check also verifies the landing page
+  renders without an overlay and can navigate to sign-in.
 - The user-profile acceptance covers real signup/session, SMTP delivery,
   pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,
   persisted default profile/quota fields, Next anonymous redirect and gateway
