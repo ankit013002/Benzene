@@ -4,12 +4,16 @@
  * This starts the real auth service, Java gateway, control-plane app, Next.js
  * frontend and two node agents. It seeds one bcrypt credential (signup sends
  * email through SMTP, which is not a dependency of this boundary test), logs
- * in through the frontend proxy, enrolls agents through the gateway, approves
+ * in through the Next web route, enrolls agents through the gateway, approves
  * their pairing codes through Next, and completes a Protected upload whose
  * bytes travel directly between the caller and the agents.
  *
+ * This is an authenticated HTTP web-route/topology acceptance harness, not a
+ * browser-runtime test: it does not execute frontend helper code or validate
+ * browser CORS, mixed-content, or other browser-enforcement behavior.
+ *
  * The direct gateway request with spoofed headers remains intentional: it
- * isolates the gateway's identity-header stripping from the frontend proxy.
+ * isolates the gateway's identity-header stripping from the Next web route.
  *
  * Run from the repository root after building the control plane, node agent
  * and frontend:
@@ -56,6 +60,8 @@ const FRONTEND_PORT = Number.parseInt(
 const LOGIN_EMAIL = `acceptance-${process.pid}@example.com`;
 const LOGIN_PASSWORD = "acceptance-password-123";
 const REQUEST_TIMEOUT_MS = 15_000;
+const MONGO_START_TIMEOUT_MS = 120_000;
+const MONGO_CONNECT_TIMEOUT_MS = 15_000;
 const AGENT_PORT_BASE = Number.parseInt(
   process.env.SMOKE_LAN_AGENT_PORT_BASE ?? "7274",
   10
@@ -74,6 +80,23 @@ function check(label, condition, detail = "") {
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function withTimeout(label, operation, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function startProcess(command, args, cwd, env) {
@@ -304,7 +327,11 @@ async function main() {
     check("acceptance credential was seeded", typeof credentialId === "string");
 
     const { MongoMemoryServer } = controlPlaneRequire("mongodb-memory-server");
-    mongo = await MongoMemoryServer.create();
+    mongo = await withTimeout(
+      "MongoMemoryServer startup",
+      () => MongoMemoryServer.create(),
+      MONGO_START_TIMEOUT_MS
+    );
     process.env.DATABASE_URL = databaseUrl;
     process.env.MONGOOSE_URI = mongo.getUri();
     process.env.STORAGE_DRIVER = "local";
@@ -317,7 +344,15 @@ async function main() {
     ).generateTransferSigningKeys().privateKey;
 
     const mongoose = controlPlaneRequire("mongoose");
-    await mongoose.connect(mongo.getUri());
+    await withTimeout(
+      "Mongoose connection",
+      () =>
+        mongoose.connect(mongo.getUri(), {
+          serverSelectionTimeoutMS: MONGO_CONNECT_TIMEOUT_MS,
+          connectTimeoutMS: MONGO_CONNECT_TIMEOUT_MS,
+        }),
+      MONGO_CONNECT_TIMEOUT_MS
+    );
 
     const { drizzle } = controlPlaneRequire("drizzle-orm/node-postgres");
     const { migrate } = controlPlaneRequire("drizzle-orm/node-postgres/migrator");
@@ -391,7 +426,7 @@ async function main() {
     const frontendUrl = `http://127.0.0.1:${FRONTEND_PORT}`;
     console.log(`frontend listening on ${frontendUrl}`);
 
-    console.log("\nlogin through the Next.js frontend proxy");
+    console.log("\nlogin through the Next.js web route");
     const loginResponse = await request(`${frontendUrl}/api/auth/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -402,24 +437,24 @@ async function main() {
     const cookies = responseCookies(loginResponse);
     const session = cookieValue(cookies, "session");
     const claims = decodeJwtPayload(session);
-    check("frontend proxy forwarded a successful real password login", loginResponse.status === 200, JSON.stringify(loginBody));
+    check("Next login route forwarded a successful real password login", loginResponse.status === 200, JSON.stringify(loginBody));
     check(
-      "frontend forwarded an httpOnly session cookie",
+      "Next login route forwarded an httpOnly session cookie",
       typeof session === "string" &&
         session.length > 0 &&
         rawCookies.some((cookie) => /^\s*session=/.test(cookie) && /;\s*HttpOnly(?:;|$)/i.test(cookie))
     );
-    check("frontend session JWT identifies the seeded credential", claims?.sub === credentialId);
-    check("frontend session JWT carries the login email", claims?.email === LOGIN_EMAIL);
+    check("Next login route session JWT identifies the seeded credential", claims?.sub === credentialId);
+    check("Next login route session JWT carries the login email", claims?.email === LOGIN_EMAIL);
 
     const cookieHeader = cookies.join("; ");
-    const browserVaultResponse = await request(`${frontendUrl}/api/vault`, {
+    const webVaultResponse = await request(`${frontendUrl}/api/vault`, {
       headers: { Cookie: cookieHeader },
     });
-    const browserVaultBody = await jsonOrNull(browserVaultResponse);
-    const vaultId = browserVaultBody?.data?.id;
-    check("frontend proxy reached the real control plane", browserVaultResponse.status === 200, JSON.stringify(browserVaultBody));
-    check("frontend returned a vault for the authenticated user", typeof vaultId === "string");
+    const webVaultBody = await jsonOrNull(webVaultResponse);
+    const vaultId = webVaultBody?.data?.id;
+    check("Next vault route reached the real control plane", webVaultResponse.status === 200, JSON.stringify(webVaultBody));
+    check("Next vault route returned a vault for the authenticated user", typeof vaultId === "string");
 
     const spoofedResponse = await request(`${gatewayUrl}/vaults/me`, {
       headers: {
@@ -438,20 +473,22 @@ async function main() {
     );
 
     const gatewayAnonymousResponse = await request(`${gatewayUrl}/vaults/me`);
+    await gatewayAnonymousResponse.body?.cancel();
     check("direct gateway anonymous request is refused", gatewayAnonymousResponse.status === 401, `status ${gatewayAnonymousResponse.status}`);
 
     const frontendAnonymousResponse = await request(`${frontendUrl}/api/vault`, {
       redirect: "manual",
     });
+    await frontendAnonymousResponse.body?.cancel();
     const frontendRedirect = frontendAnonymousResponse.headers.get("location") ?? "";
     check(
-      "browser-facing anonymous request is redirected without following it",
+      "Next vault route anonymous request is redirected without following it",
       frontendAnonymousResponse.status >= 300 && frontendAnonymousResponse.status < 400 &&
         new URL(frontendRedirect, frontendUrl).pathname === "/login",
       `status ${frontendAnonymousResponse.status}, location ${frontendRedirect || "missing"}`
     );
 
-    console.log("\nreal agents enroll through the gateway and approval goes through Next");
+    console.log("\nreal agents enroll through the gateway and approval goes through the Next web route");
     const { Agent } = agentRequire("./built/agent.js");
     const { loadAgentConfig } = agentRequire("./built/config.js");
     const { ObjectStore } = agentRequire("./built/store.js");
@@ -481,7 +518,7 @@ async function main() {
       return { config, store, agent, port };
     };
 
-    const enrollThroughBrowser = async (device) => {
+    const enrollThroughWebRoute = async (device) => {
       const enrollment = await device.agent.ensureEnrolled();
       check(`${device.config.deviceName} received a pairing code`, Boolean(enrollment.prompt?.code));
       let approval;
@@ -496,18 +533,19 @@ async function main() {
         });
       }
       check(
-        `${device.config.deviceName} approval passed through Next`,
+        `${device.config.deviceName} approval passed through the Next web route`,
         approval?.status === 201,
         `status ${approval?.status ?? "not attempted"}`
       );
+      await approval?.body?.cancel();
       check(`${device.config.deviceName} became enrolled through the gateway`, await device.agent.pollEnrollment());
       return device.agent.currentIdentity()?.deviceId;
     };
 
     const first = await makeAgent("agent-a", AGENT_PORT_BASE);
     const second = await makeAgent("agent-b", AGENT_PORT_BASE + 1);
-    const firstId = await enrollThroughBrowser(first);
-    const secondId = await enrollThroughBrowser(second);
+    const firstId = await enrollThroughWebRoute(first);
+    const secondId = await enrollThroughWebRoute(second);
     check("two real agents have distinct device identities", Boolean(firstId && secondId && firstId !== secondId));
 
     const startTransferServer = async (device) => {
@@ -534,7 +572,7 @@ async function main() {
     check("first agent heartbeat is accepted by the gateway", (await first.agent.sendHeartbeat())?.status === "online");
     check("second agent heartbeat is accepted by the gateway", (await second.agent.sendHeartbeat())?.status === "online");
 
-    console.log("\nbrowser reserves Protected placement; bytes go directly to agents");
+    console.log("\nNext upload route reserves Protected placement; bytes go directly to agents");
     const fileBody = Buffer.from("authenticated LAN journey payload");
     const objectHash = createHash("sha256").update(fileBody).digest("hex");
     const reservationResponse = await request(`${frontendUrl}/api/files/uploads/device`, {
@@ -549,7 +587,7 @@ async function main() {
       }),
     });
     const reservation = (await jsonOrNull(reservationResponse))?.data;
-    check("browser-facing upload reservation succeeded", reservationResponse.status === 201, JSON.stringify(reservation));
+    check("Next upload route reservation succeeded", reservationResponse.status === 201, JSON.stringify(reservation));
     const targets = Array.isArray(reservation?.placement?.targets)
       ? reservation.placement.targets
       : [];
@@ -590,6 +628,7 @@ async function main() {
         body: fileBody,
       });
       check(`agent ${target.deviceId} accepted direct bytes`, putResponse.status === 201, `status ${putResponse.status}`);
+      await putResponse.body?.cancel();
     }
     check("first agent verifies the uploaded bytes", await first.store.verify(objectHash));
     check("second agent verifies the uploaded bytes", await second.store.verify(objectHash));
@@ -600,7 +639,7 @@ async function main() {
       body: JSON.stringify({ versionIds: [reservation?.versionId] }),
     });
     const completed = (await jsonOrNull(completeResponse))?.data;
-    check("browser-facing completion succeeded", completeResponse.status === 200, JSON.stringify(completed));
+    check("Next completion route succeeded", completeResponse.status === 200, JSON.stringify(completed));
     check(
       "completion reports healthy Protected protection",
       completed?.completed?.[0]?.protection?.healthyReplicas === 2 &&
@@ -612,7 +651,7 @@ async function main() {
       headers: { Cookie: cookieHeader },
     });
     const listing = (await jsonOrNull(listingResponse))?.data;
-    check("browser-facing directory listing succeeded", listingResponse.status === 200);
+    check("Next directory-listing route succeeded", listingResponse.status === 200);
     check("listing exposes the device-backed object hash", listing?.files?.[0]?.objectHash === objectHash);
 
     const protectionResponse = await request(`${frontendUrl}/api/protection`, {
@@ -620,7 +659,7 @@ async function main() {
     });
     const protection = (await jsonOrNull(protectionResponse))?.data;
     check(
-      "browser-facing protection summary is healthy",
+      "Next protection route reports a healthy summary",
       protectionResponse.status === 200 &&
         protection?.mode === "protected" &&
         protection?.desiredReplicas === 2 &&
@@ -634,22 +673,43 @@ async function main() {
       { headers: { Cookie: cookieHeader } }
     );
     const downloadTargets = (await jsonOrNull(downloadPlanResponse))?.data?.targets;
-    check("browser-facing read plan returns both device targets", downloadPlanResponse.status === 200 && downloadTargets?.length === 2);
-    const downloadTarget = Array.isArray(downloadTargets) ? downloadTargets[0] : undefined;
-    if (downloadTarget) {
-      const downloadResponse = await request(downloadTarget.url, {
-        headers: { "X-Transfer-Grant": downloadTarget.grant },
-      });
-      const downloaded = Buffer.from(await downloadResponse.arrayBuffer());
-      check(
-        "direct device download is byte-for-byte identical",
-        downloadResponse.status === 200 && downloaded.equals(fileBody)
-      );
-    } else {
-      check("direct device download is byte-for-byte identical", false, "no device read target");
+    const downloadIds = Array.isArray(downloadTargets)
+      ? downloadTargets.map((target) => target.deviceId)
+      : [];
+    const downloadOrigins = Array.isArray(downloadTargets)
+      ? downloadTargets.map((target) => {
+          try {
+            return new URL(target.url).origin;
+          } catch {
+            return "invalid";
+          }
+        })
+      : [];
+    check(
+      "Next read-plan route returns two unique agent targets",
+        downloadPlanResponse.status === 200 &&
+        downloadIds.length === 2 &&
+        new Set(downloadIds).size === 2 &&
+        downloadIds.includes(firstId) &&
+        downloadIds.includes(secondId) &&
+        downloadOrigins.every((origin) => agentOrigins.has(origin)) &&
+        downloadOrigins.every((origin) => !serviceOrigins.has(origin)),
+      JSON.stringify({ downloadIds, downloadOrigins })
+    );
+    if (Array.isArray(downloadTargets)) {
+      for (const downloadTarget of downloadTargets) {
+        const downloadResponse = await request(downloadTarget.url, {
+          headers: { "X-Transfer-Grant": downloadTarget.grant },
+        });
+        const downloaded = Buffer.from(await downloadResponse.arrayBuffer());
+        check(
+          `direct download from agent ${downloadTarget.deviceId} is byte-for-byte identical`,
+          downloadResponse.status === 200 && downloaded.equals(fileBody)
+        );
+      }
     }
 
-    console.log("\nauthenticated LAN MVP journey passed through the browser boundary");
+    console.log("\nauthenticated web-route and LAN-topology acceptance passed");
   } finally {
     for (const agent of agents) agent.stopHeartbeat();
     for (const transferServer of transferServers) {
