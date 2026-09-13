@@ -1,9 +1,5 @@
 import { hashToken } from "../lib/tokens";
-import {
-  deleteVerificationTokenByTokenHash,
-  getVerificationTokenEntryByTokenHash,
-} from "../services/email-verification-token";
-import { markEmailVerified } from "../services/credentials.service";
+import { consumeVerificationTokenAtomically } from "../services/email-verification-token";
 
 /**
  * Handles email verification by validating the provided token, updating the user's email verification status,
@@ -24,19 +20,5 @@ export async function handleVerifyEmail(
   }
 
   const hashedToken = hashToken(token);
-
-  const emailVerificationsToken =
-    await getVerificationTokenEntryByTokenHash(hashedToken);
-
-  if (!emailVerificationsToken) {
-    const error = new Error("Invalid or expired verification token");
-    error.name = "InvalidTokenError";
-    throw error;
-  }
-
-  const credentialId = emailVerificationsToken.credential_id;
-
-  await markEmailVerified(credentialId);
-
-  await deleteVerificationTokenByTokenHash(hashedToken);
+  await consumeVerificationTokenAtomically(hashedToken);
 }

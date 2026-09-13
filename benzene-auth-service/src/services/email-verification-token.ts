@@ -1,11 +1,20 @@
 import pool from "../db";
-import { EmailVerificationToken } from "../types/database";
+
+function invalidVerificationTokenError(): Error {
+  const error = new Error("Invalid or expired verification token");
+  error.name = "InvalidTokenError";
+  return error;
+}
+
+function emailAlreadyVerifiedError(): Error {
+  const error = new Error("Email already verified");
+  error.name = "EmailAlreadyVerifiedError";
+  return error;
+}
 
 /**
- * Creates a new email verification token for the specified credential ID and token hash.
- *
- * @param credentialId - The ID of the credential for which the verification token is being created.
- * @param tokenHash - The hash of the verification token to be stored in the database for later verification.
+ * Creates the initial verification token for a newly signed-up credential.
+ * Existing tokens must use replaceVerificationTokenAtomically instead.
  */
 export async function createVerificationToken(
   credentialId: string,
@@ -13,62 +22,126 @@ export async function createVerificationToken(
 ): Promise<void> {
   await pool.query(
     `
-        INSERT INTO email_verification_tokens (credential_id, token_hash, expires_at)
-        values ($1, $2, $3)  
+      INSERT INTO email_verification_tokens (credential_id, token_hash, expires_at)
+      VALUES ($1, $2, $3)
     `,
     [credentialId, tokenHash, new Date(Date.now() + 24 * 60 * 60 * 1000)],
   );
 }
-/**
- * Retrieves an email verification token entry from the database based on the provided token hash.
- *
- * @param token_hash - The hash of the verification token used to look up the corresponding entry in the database.
- * @returns A promise resolving to the email verification token entry if found and valid, or null if not found or expired.
- */
-export async function getVerificationTokenEntryByTokenHash(
-  token_hash: string,
-): Promise<EmailVerificationToken | null> {
-  const result = await pool.query(
-    `
-        SELECT * FROM email_verification_tokens
-        WHERE token_hash = $1 and expires_at > $2
-    `,
-    [token_hash, new Date()],
-  );
-
-  return result.rows[0];
-}
 
 /**
- * Deletes an email verification token from the database based on the provided token hash.
- *
- * @param token_hash - The hash of the verification token to be deleted from the database.
+ * Replaces every outstanding verification token for a credential in one
+ * transaction. The credential lock gives concurrent resends a deterministic
+ * last-writer-wins result and lets verification serialize with replacement.
  */
-export async function deleteVerificationTokenByTokenHash(
-  token_hash: string,
-): Promise<void> {
-  await pool.query(
-    `
-      DELETE FROM email_verification_tokens
-      WHERE token_hash = $1
-    `,
-    [token_hash],
-  );
-}
-
-/**
- * Deletes all email verification tokens associated with a specific credential ID from the database.
- *
- * @param credentialId - The ID of the credential for which all associated email verification tokens should be deleted from the database.
- */
-export async function deleteEmailVerificationTokensByCredentialId(
+export async function replaceVerificationTokenAtomically(
   credentialId: string,
-) {
-  await pool.query(
-    `
-      DELETE FROM email_verification_tokens
-      WHERE credential_id = $1
-    `,
-    [credentialId],
-  );
+  tokenHash: string,
+): Promise<void> {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const credential = await client.query<{ email_verified: boolean }>(
+      "SELECT email_verified FROM credentials WHERE id = $1 FOR UPDATE",
+      [credentialId],
+    );
+    if (credential.rowCount !== 1) throw invalidVerificationTokenError();
+    if (credential.rows[0].email_verified) {
+      throw emailAlreadyVerifiedError();
+    }
+
+    await client.query(
+      "DELETE FROM email_verification_tokens WHERE credential_id = $1",
+      [credentialId],
+    );
+    await client.query(
+      `
+        INSERT INTO email_verification_tokens (credential_id, token_hash, expires_at)
+        VALUES ($1, $2, $3)
+      `,
+      [credentialId, tokenHash, new Date(Date.now() + 24 * 60 * 60 * 1000)],
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the original error when rollback itself cannot complete.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Consumes a valid verification token and marks its credential verified in
+ * one transaction. Both operations lock the credential before token rows so
+ * replacement and consumption cannot deadlock each other.
+ */
+export async function consumeVerificationTokenAtomically(
+  tokenHash: string,
+): Promise<void> {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const candidate = await client.query<{ credential_id: string }>(
+      `
+        SELECT credential_id
+        FROM email_verification_tokens
+        WHERE token_hash = $1 AND expires_at > $2
+      `,
+      [tokenHash, new Date()],
+    );
+    const credentialId = candidate.rows[0]?.credential_id;
+    if (!credentialId) throw invalidVerificationTokenError();
+
+    const credential = await client.query(
+      "SELECT id FROM credentials WHERE id = $1 FOR UPDATE",
+      [credentialId],
+    );
+    if (credential.rowCount !== 1) throw invalidVerificationTokenError();
+
+    const token = await client.query(
+      `
+        SELECT credential_id
+        FROM email_verification_tokens
+        WHERE token_hash = $1 AND expires_at > $2
+        FOR UPDATE
+      `,
+      [tokenHash, new Date()],
+    );
+    if (token.rowCount !== 1) throw invalidVerificationTokenError();
+
+    await client.query(
+      `
+        UPDATE credentials
+        SET email_verified = true, updated_at = now()
+        WHERE id = $1
+      `,
+      [credentialId],
+    );
+
+    const consumed = await client.query(
+      "DELETE FROM email_verification_tokens WHERE credential_id = $1",
+      [credentialId],
+    );
+    if (!consumed.rowCount) throw invalidVerificationTokenError();
+
+    await client.query("COMMIT");
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the original error when rollback itself cannot complete.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }

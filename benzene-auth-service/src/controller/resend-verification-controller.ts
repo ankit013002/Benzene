@@ -2,10 +2,7 @@ import { verifyAccessToken } from "../lib/tokens";
 import { makeOpaqueToken, hashToken } from "../lib/tokens";
 import { sendVerificationEmail } from "../lib/mailer";
 import { retrieveCredentialsByCredentialId } from "../services/credentials.service";
-import {
-  createVerificationToken,
-  deleteEmailVerificationTokensByCredentialId,
-} from "../services/email-verification-token";
+import { replaceVerificationTokenAtomically } from "../services/email-verification-token";
 
 /**
  * Resends the email verification token to the user associated with the provided session token.
@@ -58,12 +55,10 @@ async function resendVerification(data: { session: string }): Promise<void> {
     throw error;
   }
 
-  await deleteEmailVerificationTokensByCredentialId(credentialId);
-
   const rawVerificationToken = makeOpaqueToken();
   const hashedVerificationToken = hashToken(rawVerificationToken);
 
-  await createVerificationToken(credentialId, hashedVerificationToken);
+  await replaceVerificationTokenAtomically(credentialId, hashedVerificationToken);
 
   await sendVerificationEmail(credentials.email, rawVerificationToken);
 }
