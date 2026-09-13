@@ -1,17 +1,18 @@
 /**
  * Cross-service authentication acceptance test.
  *
- * This starts the real auth service, Java gateway, control-plane app and
- * Next.js frontend. It seeds one bcrypt credential (signup sends email through
- * SMTP, which is not a dependency of this boundary test), logs in through the
- * frontend proxy, and proves that a session reaches a user-facing
- * control-plane route with gateway-owned identity headers. Requests without a
- * session are refused at both the gateway and browser-facing frontend.
+ * This starts the real auth service, Java gateway, control-plane app, Next.js
+ * frontend and two node agents. It seeds one bcrypt credential (signup sends
+ * email through SMTP, which is not a dependency of this boundary test), logs
+ * in through the frontend proxy, enrolls agents through the gateway, approves
+ * their pairing codes through Next, and completes a Protected upload whose
+ * bytes travel directly between the caller and the agents.
  *
  * The direct gateway request with spoofed headers remains intentional: it
  * isolates the gateway's identity-header stripping from the frontend proxy.
  *
- * Run from the repository root after building the control plane and frontend:
+ * Run from the repository root after building the control plane, node agent
+ * and frontend:
  *   node scripts/smoke-auth-gateway.mjs
  *
  * Requires a reachable PostgreSQL. Set SMOKE_DATABASE_URL to override.
@@ -21,6 +22,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -34,6 +36,9 @@ const controlPlaneRequire = createRequire(
 );
 const authRequire = createRequire(
   new URL("../benzene-auth-service/package.json", import.meta.url)
+);
+const agentRequire = createRequire(
+  new URL("../benzene-node-agent/package.json", import.meta.url)
 );
 
 const AUTH_SECRET =
@@ -51,6 +56,11 @@ const FRONTEND_PORT = Number.parseInt(
 const LOGIN_EMAIL = `acceptance-${process.pid}@example.com`;
 const LOGIN_PASSWORD = "acceptance-password-123";
 const REQUEST_TIMEOUT_MS = 15_000;
+const AGENT_PORT_BASE = Number.parseInt(
+  process.env.SMOKE_LAN_AGENT_PORT_BASE ?? "7274",
+  10
+);
+const AGENT_ALLOCATED_BYTES = 64 * 1024 * 1024;
 
 let failures = 0;
 function check(label, condition, detail = "") {
@@ -198,9 +208,9 @@ function decodeJwtPayload(token) {
   }
 }
 
-async function listen(app) {
+async function listen(app, port = 0) {
   return new Promise((resolve, reject) => {
-    const server = app.listen(0);
+    const server = app.listen(port);
     server.once("listening", () => resolve(server));
     server.once("error", reject);
   });
@@ -257,6 +267,9 @@ async function main() {
   let gatewayProcess;
   let frontendProcess;
   let storageRoot;
+  let mongo;
+  const agents = [];
+  const transferServers = [];
 
   try {
     const admin = new Client({ connectionString: baseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
@@ -290,13 +303,21 @@ async function main() {
     }
     check("acceptance credential was seeded", typeof credentialId === "string");
 
+    const { MongoMemoryServer } = controlPlaneRequire("mongodb-memory-server");
+    mongo = await MongoMemoryServer.create();
     process.env.DATABASE_URL = databaseUrl;
-    process.env.MONGOOSE_URI = "mongodb://127.0.0.1:27017/benzene-acceptance-unused";
+    process.env.MONGOOSE_URI = mongo.getUri();
     process.env.STORAGE_DRIVER = "local";
     process.env.DEVICE_OFFLINE_AFTER_SECONDS = "120";
     process.env.DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS = "86400";
     storageRoot = await mkdtemp(path.join(tmpdir(), "benzene-auth-gateway-"));
     process.env.LOCAL_STORAGE_DIR = path.join(storageRoot, "control-plane");
+    process.env.TRANSFER_SIGNING_KEY = controlPlaneRequire(
+      "./built/modules/placement/transferGrant.js"
+    ).generateTransferSigningKeys().privateKey;
+
+    const mongoose = controlPlaneRequire("mongoose");
+    await mongoose.connect(mongo.getUri());
 
     const { drizzle } = controlPlaneRequire("drizzle-orm/node-postgres");
     const { migrate } = controlPlaneRequire("drizzle-orm/node-postgres/migrator");
@@ -430,12 +451,222 @@ async function main() {
       `status ${frontendAnonymousResponse.status}, location ${frontendRedirect || "missing"}`
     );
 
-    console.log("\nfrontend proxy, gateway identity boundary and control-plane request passed");
+    console.log("\nreal agents enroll through the gateway and approval goes through Next");
+    const { Agent } = agentRequire("./built/agent.js");
+    const { loadAgentConfig } = agentRequire("./built/config.js");
+    const { ObjectStore } = agentRequire("./built/store.js");
+    const { createTransferServer } = agentRequire("./built/transferServer.js");
+
+    const makeAgent = async (name, port) => {
+      const config = loadAgentConfig({
+        controlPlaneUrl: gatewayUrl,
+        dataDir: path.join(storageRoot, name),
+        storageDir: path.join(storageRoot, name, "storage"),
+        identityFile: path.join(storageRoot, name, "identity.json"),
+        allocatedBytes: AGENT_ALLOCATED_BYTES,
+        deviceName: `LAN Acceptance ${name}`,
+        platform: "linux",
+        advertisedUrl: `http://127.0.0.1:${port}`,
+        port,
+        heartbeatIntervalMs: 0,
+        repairIntervalMs: 0,
+      });
+      const store = new ObjectStore({
+        rootDir: config.storageDir,
+        allocatedBytes: config.allocatedBytes,
+      });
+      const agent = new Agent(config, store);
+      await agent.initialise();
+      agents.push(agent);
+      return { config, store, agent, port };
+    };
+
+    const enrollThroughBrowser = async (device) => {
+      const enrollment = await device.agent.ensureEnrolled();
+      check(`${device.config.deviceName} received a pairing code`, Boolean(enrollment.prompt?.code));
+      let approval;
+      if (enrollment.prompt?.code) {
+        approval = await request(`${frontendUrl}/api/devices/enrollments`, {
+          method: "POST",
+          headers: { Cookie: cookieHeader, "content-type": "application/json" },
+          body: JSON.stringify({
+            code: enrollment.prompt.code,
+            allocatedBytes: AGENT_ALLOCATED_BYTES,
+          }),
+        });
+      }
+      check(
+        `${device.config.deviceName} approval passed through Next`,
+        approval?.status === 201,
+        `status ${approval?.status ?? "not attempted"}`
+      );
+      check(`${device.config.deviceName} became enrolled through the gateway`, await device.agent.pollEnrollment());
+      return device.agent.currentIdentity()?.deviceId;
+    };
+
+    const first = await makeAgent("agent-a", AGENT_PORT_BASE);
+    const second = await makeAgent("agent-b", AGENT_PORT_BASE + 1);
+    const firstId = await enrollThroughBrowser(first);
+    const secondId = await enrollThroughBrowser(second);
+    check("two real agents have distinct device identities", Boolean(firstId && secondId && firstId !== secondId));
+
+    const startTransferServer = async (device) => {
+      const identity = device.agent.currentIdentity();
+      if (!identity?.deviceId || !identity.controlPlanePublicKey) return null;
+      const transferServer = await listen(
+        createTransferServer({
+          store: device.store,
+          deviceId: identity.deviceId,
+          controlPlanePublicKey: identity.controlPlanePublicKey,
+          reportPossession: ({ objectHash, sizeBytes }) =>
+            device.agent.reportPossession(objectHash, sizeBytes),
+        }),
+        device.port
+      );
+      transferServers.push(transferServer);
+      return transferServer;
+    };
+
+    const firstTransfer = await startTransferServer(first);
+    const secondTransfer = await startTransferServer(second);
+    check("first agent transfer server started", Boolean(firstTransfer));
+    check("second agent transfer server started", Boolean(secondTransfer));
+    check("first agent heartbeat is accepted by the gateway", (await first.agent.sendHeartbeat())?.status === "online");
+    check("second agent heartbeat is accepted by the gateway", (await second.agent.sendHeartbeat())?.status === "online");
+
+    console.log("\nbrowser reserves Protected placement; bytes go directly to agents");
+    const fileBody = Buffer.from("authenticated LAN journey payload");
+    const objectHash = createHash("sha256").update(fileBody).digest("hex");
+    const reservationResponse = await request(`${frontendUrl}/api/files/uploads/device`, {
+      method: "POST",
+      headers: { Cookie: cookieHeader, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "lan-journey.txt",
+        path: "lan-journey",
+        size: fileBody.length,
+        contentType: "text/plain",
+        sha256: objectHash,
+      }),
+    });
+    const reservation = (await jsonOrNull(reservationResponse))?.data;
+    check("browser-facing upload reservation succeeded", reservationResponse.status === 201, JSON.stringify(reservation));
+    const targets = Array.isArray(reservation?.placement?.targets)
+      ? reservation.placement.targets
+      : [];
+    check("default Protected policy selected exactly two devices", targets.length === 2);
+    check(
+      "selected devices are the two enrolled agents",
+      targets.length === 2 &&
+        new Set(targets.map((target) => target.deviceId)).size === 2 &&
+        targets.every((target) => target.deviceId === firstId || target.deviceId === secondId),
+      JSON.stringify(targets.map((target) => target.deviceId))
+    );
+    const serviceOrigins = new Set([frontendUrl, gatewayUrl, controlPlaneUrl]);
+    const agentOrigins = new Set([
+      `http://127.0.0.1:${AGENT_PORT_BASE}`,
+      `http://127.0.0.1:${AGENT_PORT_BASE + 1}`,
+    ]);
+    check(
+      "upload targets bypass Next, gateway and control plane",
+      targets.length === 2 &&
+        targets.every((target) => {
+          try {
+            return !serviceOrigins.has(new URL(target.url).origin) &&
+              agentOrigins.has(new URL(target.url).origin);
+          } catch {
+            return false;
+          }
+        }),
+      JSON.stringify(targets.map((target) => target.url))
+    );
+
+    for (const target of targets) {
+      const putResponse = await request(target.url, {
+        method: "PUT",
+        headers: {
+          "X-Transfer-Grant": target.grant,
+          "Content-Type": "application/octet-stream",
+        },
+        body: fileBody,
+      });
+      check(`agent ${target.deviceId} accepted direct bytes`, putResponse.status === 201, `status ${putResponse.status}`);
+    }
+    check("first agent verifies the uploaded bytes", await first.store.verify(objectHash));
+    check("second agent verifies the uploaded bytes", await second.store.verify(objectHash));
+
+    const completeResponse = await request(`${frontendUrl}/api/files/uploads/device/complete`, {
+      method: "POST",
+      headers: { Cookie: cookieHeader, "content-type": "application/json" },
+      body: JSON.stringify({ versionIds: [reservation?.versionId] }),
+    });
+    const completed = (await jsonOrNull(completeResponse))?.data;
+    check("browser-facing completion succeeded", completeResponse.status === 200, JSON.stringify(completed));
+    check(
+      "completion reports healthy Protected protection",
+      completed?.completed?.[0]?.protection?.healthyReplicas === 2 &&
+        completed?.completed?.[0]?.protection?.desiredReplicas === 2,
+      JSON.stringify(completed)
+    );
+
+    const listingResponse = await request(`${frontendUrl}/api/files?path=lan-journey`, {
+      headers: { Cookie: cookieHeader },
+    });
+    const listing = (await jsonOrNull(listingResponse))?.data;
+    check("browser-facing directory listing succeeded", listingResponse.status === 200);
+    check("listing exposes the device-backed object hash", listing?.files?.[0]?.objectHash === objectHash);
+
+    const protectionResponse = await request(`${frontendUrl}/api/protection`, {
+      headers: { Cookie: cookieHeader },
+    });
+    const protection = (await jsonOrNull(protectionResponse))?.data;
+    check(
+      "browser-facing protection summary is healthy",
+      protectionResponse.status === 200 &&
+        protection?.mode === "protected" &&
+        protection?.desiredReplicas === 2 &&
+        protection?.healthyObjects === 1 &&
+        protection?.state === "healthy",
+      JSON.stringify(protection)
+    );
+
+    const downloadPlanResponse = await request(
+      `${frontendUrl}/api/placement/download-targets/${objectHash}`,
+      { headers: { Cookie: cookieHeader } }
+    );
+    const downloadTargets = (await jsonOrNull(downloadPlanResponse))?.data?.targets;
+    check("browser-facing read plan returns both device targets", downloadPlanResponse.status === 200 && downloadTargets?.length === 2);
+    const downloadTarget = Array.isArray(downloadTargets) ? downloadTargets[0] : undefined;
+    if (downloadTarget) {
+      const downloadResponse = await request(downloadTarget.url, {
+        headers: { "X-Transfer-Grant": downloadTarget.grant },
+      });
+      const downloaded = Buffer.from(await downloadResponse.arrayBuffer());
+      check(
+        "direct device download is byte-for-byte identical",
+        downloadResponse.status === 200 && downloaded.equals(fileBody)
+      );
+    } else {
+      check("direct device download is byte-for-byte identical", false, "no device read target");
+    }
+
+    console.log("\nauthenticated LAN MVP journey passed through the browser boundary");
   } finally {
+    for (const agent of agents) agent.stopHeartbeat();
+    for (const transferServer of transferServers) {
+      await cleanupStep("closing agent transfer server", () =>
+        closeServer(transferServer, "agent transfer server")
+      );
+    }
     await cleanupStep("stopping frontend process group", () => stopProcess(frontendProcess));
     await cleanupStep("stopping gateway process group", () => stopProcess(gatewayProcess));
     await cleanupStep("stopping auth process group", () => stopProcess(authProcess));
     await cleanupStep("closing control-plane server", () => closeServer(controlPlaneServer, "control plane"));
+    await cleanupStep("disconnecting control-plane MongoDB", async () => {
+      await controlPlaneRequire("mongoose").disconnect();
+    });
+    await cleanupStep("stopping MongoMemoryServer", async () => {
+      await mongo?.stop();
+    });
     if (storageRoot) await cleanupStep("removing temporary storage", () => rm(storageRoot, { recursive: true, force: true }));
 
     if (databaseUrl) {

@@ -61,6 +61,7 @@ jobs:
               - 'benzene-auth-service/**'
               - 'nebula-gateway/**'
               - 'benzene-control-plane/**'
+              - 'benzene-node-agent/**'
               - 'nebulavault-frontend/**'
               - 'scripts/smoke-auth-gateway.mjs'
               - '.github/workflows/**'
@@ -180,7 +181,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.acceptance == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -207,6 +208,7 @@ jobs:
           cache-dependency-path: |
             benzene-auth-service/package-lock.json
             benzene-control-plane/package-lock.json
+            benzene-node-agent/package-lock.json
             nebulavault-frontend/package-lock.json
       - uses: actions/setup-java@v4
         with:
@@ -219,8 +221,21 @@ jobs:
       - name: Install control-plane dependencies
         working-directory: benzene-control-plane
         run: npm ci --include=dev
+      # The LAN journey starts the real agents and control plane against an
+      # in-memory Mongo instance; cache its first-run MongoDB binary.
+      - name: Cache MongoDB binary
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: ${{ runner.os }}-mongodb-${{ hashFiles('benzene-control-plane/package-lock.json') }}
       - name: Build control plane
         working-directory: benzene-control-plane
+        run: npm run build
+      - name: Install node agent dependencies
+        working-directory: benzene-node-agent
+        run: npm ci --include=dev
+      - name: Build node agent
+        working-directory: benzene-node-agent
         run: npm run build
       - name: Install frontend dependencies
         working-directory: nebulavault-frontend
