@@ -491,8 +491,24 @@ async function main() {
       JSON.stringify(row),
     );
 
-    const anonymousResponse = await request(`${frontendUrl}/api/dev-proxy/user/me`);
-    check("Next profile bridge rejects anonymous requests", anonymousResponse.status === 401);
+    const anonymousResponse = await request(`${frontendUrl}/api/dev-proxy/user/me`, {
+      redirect: "manual",
+    });
+    const anonymousLocation = anonymousResponse.headers.get("location") ?? "";
+    let anonymousRedirect;
+    try {
+      anonymousRedirect = new URL(anonymousLocation, frontendUrl);
+    } catch {
+      anonymousRedirect = null;
+    }
+    check(
+      "Next profile bridge redirects anonymous requests to login",
+      anonymousResponse.status >= 300 &&
+        anonymousResponse.status < 400 &&
+        anonymousRedirect?.origin === frontendUrl &&
+        anonymousRedirect.pathname === "/login",
+      `status ${anonymousResponse.status}, location ${anonymousLocation || "missing"}`,
+    );
     await anonymousResponse.body?.cancel();
     const anonymousGatewayResponse = await request(`${gatewayUrl}/user/me`);
     check("gateway profile route rejects anonymous requests", anonymousGatewayResponse.status === 401);
