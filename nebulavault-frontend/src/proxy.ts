@@ -11,6 +11,8 @@ const isPublic = (p: string) =>
   p === "/" ||
   p === "/login" ||
   p === "/register" ||
+  p === "/forgot-password" ||
+  p === "/reset-password" ||
   p === "/verify-email" ||
   p === "/favicon.ico" ||
   p.startsWith("/auth") ||

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 export default function LoginForm() {
@@ -88,6 +89,12 @@ export default function LoginForm() {
         onChange={(event) => setPassword(event.target.value)}
         required
       />
+
+      <div className="text-right">
+        <Link href="/forgot-password" className="link link-hover text-sm">
+          Forgot password?
+        </Link>
+      </div>
 
       {error && (
         <div className="alert alert-error" role="alert">

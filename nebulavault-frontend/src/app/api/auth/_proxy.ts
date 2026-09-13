@@ -28,7 +28,13 @@ function appendClearingCookies(headers: Headers, names: readonly string[]): void
  * upstream service, so its Set-Cookie headers must be copied explicitly.
  */
 export async function proxyAuthRequest(
-  path: "/auth/login" | "/auth/signup" | "/auth/logout" | "/auth/refresh",
+  path:
+    | "/auth/login"
+    | "/auth/signup"
+    | "/auth/logout"
+    | "/auth/refresh"
+    | "/auth/forgot-password"
+    | "/auth/reset-password",
   request: NextRequest,
 ): Promise<NextResponse> {
   const headers = new Headers({

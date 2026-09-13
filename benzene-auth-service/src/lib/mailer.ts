@@ -59,7 +59,7 @@ export async function sendPasswordResetEmail(
   to: string,
   rawToken: string,
 ): Promise<void> {
-  const link = `${APP_ORIGIN}/reset-password?token=${rawToken}`;
+  const link = `${APP_ORIGIN}/reset-password?token=${encodeURIComponent(rawToken)}`;
   await transporter.sendMail({
     from: FROM,
     to,
