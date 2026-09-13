@@ -3,17 +3,8 @@ import resetPassword from "./reset-password-controller";
 
 // --- Mocks ---
 
-vi.mock("../services/credentials.service", () => ({
-  updatePassword: vi.fn(),
-}));
-
 vi.mock("../services/password-reset-token.service", () => ({
-  getPasswordResetTokenByHashToken: vi.fn(),
-  updatePasswordResetToken: vi.fn(),
-}));
-
-vi.mock("../services/refresh.service", () => ({
-  deleteRefreshTokenWithCredentialId: vi.fn(),
+  resetPasswordAtomically: vi.fn(),
 }));
 
 vi.mock("../lib/tokens", () => ({
@@ -28,25 +19,9 @@ vi.mock("bcrypt", () => ({
 
 // --- Imports after mocks ---
 
-import { updatePassword } from "../services/credentials.service";
-import {
-  getPasswordResetTokenByHashToken,
-  updatePasswordResetToken,
-} from "../services/password-reset-token.service";
-import { deleteRefreshTokenWithCredentialId } from "../services/refresh.service";
+import { resetPasswordAtomically } from "../services/password-reset-token.service";
 import { hashToken } from "../lib/tokens";
 import bcrypt from "bcrypt";
-
-// --- Fixtures ---
-
-const mockPasswordResetToken = {
-  id: "prt-uuid-012",
-  credential_id: "cred-uuid-123",
-  token_hash: "hashed-reset-token",
-  expires_at: new Date(Date.now() + 60 * 60 * 1000),
-  used_at: null,
-  created_at: new Date(),
-};
 
 // --- Tests ---
 
@@ -57,60 +32,25 @@ describe("resetPassword", () => {
 
   it("throws InvalidTokenError when the reset token is not found or expired", async () => {
     vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(getPasswordResetTokenByHashToken).mockResolvedValue(null);
+    const error = new Error("Invalid or expired reset link");
+    error.name = "InvalidTokenError";
+    vi.mocked(resetPasswordAtomically).mockRejectedValue(error);
 
     await expect(
       resetPassword({ token: "raw-token", newPassword: "newpassword123" }),
     ).rejects.toMatchObject({ name: "InvalidTokenError" });
   });
 
-  it("hashes the new password and updates the credentials", async () => {
+  it("hashes the new password and delegates the atomic reset", async () => {
     vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(getPasswordResetTokenByHashToken).mockResolvedValue(
-      mockPasswordResetToken,
-    );
     vi.mocked(bcrypt.hash).mockResolvedValue("new-hashed-password" as never);
-    vi.mocked(updatePassword).mockResolvedValue(undefined);
-    vi.mocked(updatePasswordResetToken).mockResolvedValue(undefined);
-    vi.mocked(deleteRefreshTokenWithCredentialId).mockResolvedValue(undefined);
+    vi.mocked(resetPasswordAtomically).mockResolvedValue(undefined);
 
     await resetPassword({ token: "raw-token", newPassword: "newpassword123" });
 
-    expect(updatePassword).toHaveBeenCalledWith(
-      mockPasswordResetToken.credential_id,
+    expect(resetPasswordAtomically).toHaveBeenCalledWith(
+      "hashed-token",
       "new-hashed-password",
-    );
-  });
-
-  it("marks the reset token as used so it cannot be reused", async () => {
-    vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(getPasswordResetTokenByHashToken).mockResolvedValue(
-      mockPasswordResetToken,
-    );
-    vi.mocked(bcrypt.hash).mockResolvedValue("new-hashed-password" as never);
-    vi.mocked(updatePassword).mockResolvedValue(undefined);
-    vi.mocked(updatePasswordResetToken).mockResolvedValue(undefined);
-    vi.mocked(deleteRefreshTokenWithCredentialId).mockResolvedValue(undefined);
-
-    await resetPassword({ token: "raw-token", newPassword: "newpassword123" });
-
-    expect(updatePasswordResetToken).toHaveBeenCalledWith("hashed-token");
-  });
-
-  it("invalidates all active sessions after a password reset", async () => {
-    vi.mocked(hashToken).mockReturnValue("hashed-token");
-    vi.mocked(getPasswordResetTokenByHashToken).mockResolvedValue(
-      mockPasswordResetToken,
-    );
-    vi.mocked(bcrypt.hash).mockResolvedValue("new-hashed-password" as never);
-    vi.mocked(updatePassword).mockResolvedValue(undefined);
-    vi.mocked(updatePasswordResetToken).mockResolvedValue(undefined);
-    vi.mocked(deleteRefreshTokenWithCredentialId).mockResolvedValue(undefined);
-
-    await resetPassword({ token: "raw-token", newPassword: "newpassword123" });
-
-    expect(deleteRefreshTokenWithCredentialId).toHaveBeenCalledWith(
-      mockPasswordResetToken.credential_id,
     );
   });
 });

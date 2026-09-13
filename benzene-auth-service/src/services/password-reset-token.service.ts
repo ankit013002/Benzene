@@ -1,6 +1,12 @@
 import pool from "../db";
 import { PasswordResetToken } from "../types/database";
 
+function invalidResetTokenError(): Error {
+  const error = new Error("Invalid or expired reset link");
+  error.name = "InvalidTokenError";
+  return error;
+}
+
 /**
  * Deletes all password reset tokens from the database associated with the provided credential ID.
  * This is called before creating a new reset token to ensure only one active token exists per user.
@@ -40,40 +46,66 @@ export async function createPasswordResetToken(
 }
 
 /**
- * Retrieves a password reset token entry from the database based on the provided token hash.
- *
- * @param token_hash - The hash of the reset token used to look up the corresponding entry in the database.
- * @returns A promise resolving to the password reset token entry if found, valid, and unused, or null otherwise.
+ * Applies a password reset as one database transaction. The row lock makes a
+ * concurrent request wait until the first request commits, after which the
+ * used token no longer qualifies as valid.
  */
-export async function getPasswordResetTokenByHashToken(
-  token_hash: string,
-): Promise<PasswordResetToken | null> {
-  const result = await pool.query(
-    `
-      SELECT * FROM password_reset_tokens
-      WHERE token_hash = $1 and expires_at >$2 and used_at IS NULL
-    `,
-    [token_hash, new Date()],
-  );
-
-  return result.rows[0];
-}
-
-/**
- * Marks a password reset token as used by setting its used_at timestamp to the current time.
- * This prevents the token from being used again after a successful password reset.
- *
- * @param token_hash - The hash of the reset token to be marked as used.
- */
-export async function updatePasswordResetToken(
-  token_hash: string,
+export async function resetPasswordAtomically(
+  tokenHash: string,
+  passwordHash: string,
 ): Promise<void> {
-  await pool.query(
-    `
-      UPDATE password_reset_tokens
-      SET used_at = NOW()
-      WHERE token_hash = $1
-    `,
-    [token_hash],
-  );
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const tokenResult = await client.query<Pick<PasswordResetToken, "credential_id">>(
+      `
+        SELECT credential_id
+        FROM password_reset_tokens
+        WHERE token_hash = $1
+          AND expires_at > $2
+          AND used_at IS NULL
+        FOR UPDATE
+      `,
+      [tokenHash, new Date()],
+    );
+    const credentialId = tokenResult.rows[0]?.credential_id;
+    if (!credentialId) throw invalidResetTokenError();
+
+    await client.query(
+      `
+        UPDATE credentials
+        SET password_hash = $1, updated_at = now()
+        WHERE id = $2
+      `,
+      [passwordHash, credentialId],
+    );
+
+    const consumed = await client.query(
+      `
+        UPDATE password_reset_tokens
+        SET used_at = now()
+        WHERE token_hash = $1 AND used_at IS NULL
+      `,
+      [tokenHash],
+    );
+    if (consumed.rowCount !== 1) throw invalidResetTokenError();
+
+    await client.query(
+      "DELETE FROM refresh_tokens WHERE credential_id = $1",
+      [credentialId],
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the original error when rollback itself cannot complete.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
