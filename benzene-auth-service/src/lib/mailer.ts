@@ -35,7 +35,7 @@ export async function sendVerificationEmail(
   to: string,
   rawToken: string,
 ): Promise<void> {
-  const link = `${APP_ORIGIN}/verify-email?token=${rawToken}`;
+  const link = `${APP_ORIGIN}/api/auth/verify-email?token=${encodeURIComponent(rawToken)}`;
   await transporter.sendMail({
     from: FROM,
     to,
