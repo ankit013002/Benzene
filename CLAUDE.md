@@ -418,8 +418,9 @@ vectors and updating both files in the same commit.
   two real node agents. Agents enroll through gateway `/agent`, pairing codes
   are approved through Next `/api/devices/enrollments`, and heartbeats pass
   through the gateway. It signs up through Next, captures and follows the
-  verification email through loopback SMTP, then authenticated Next web routes
-  reserve a default Protected two-device upload, expose
+  verification email through loopback SMTP, renders the pending prompt, proves
+  resend invalidation and replacement verification, then authenticated Next
+  web routes reserve a default Protected two-device upload, expose
   completion/list/protection/read-plan results, and return direct agent URLs;
   the smoke PUTs to those URLs and verifies byte-identical reads from both
   agents. It also covers password-recovery requests and reset completion,
@@ -427,7 +428,7 @@ vectors and updating both files in the same commit.
   is an HTTP route/topology harness, not a browser-runtime test: frontend
   helper execution, CORS, mixed-content and other browser enforcement are not
   covered. Remote/TLS transfer, encryption and garbage collection are outside
-  this 54-assertion LAN smoke. The user service has a separate acceptance. It
+  this 60-assertion LAN smoke. The user service has a separate acceptance. It
   also checks gateway identity header stripping and anonymous rejection.
 
 The separate `scripts/smoke-user-profile.mjs` acceptance starts the real auth
@@ -455,8 +456,8 @@ cross-package smoke has **63 checks**; the
 three-device Protected repair smoke has **40 checks**. These smoke milestones
 were verified by CI run
 `34719594345` at commit `41462e8`.
-The integrated authenticated LAN acceptance has exactly **54 `ok` assertions**
-and was green in CI run `34767541328` at commit `9a61829`. Default Turbopack
+The integrated authenticated LAN acceptance has exactly **60 `ok` assertions**
+and was green in CI run `34788300450`. Default Turbopack
 and Webpack production builds pass, and a live browser check verified that the
 landing page renders without an overlay and navigates to sign-in; that check
 also caught and fixed CSS import ordering and a missing base selector.
@@ -541,10 +542,12 @@ the standard to match.
   injection
 - Signup verification links route through the Next server bridge to a public,
   token-free result page. The authenticated LAN smoke signs up through Next,
-  captures the loopback SMTP message, follows the bridge and checks persisted
-  verification. The bridge itself was verified by CI run `34766377357` at
-  commit `cbaa8df`; the extended signup smoke is green in CI run
-  `34767541328` at commit `9a61829` with exactly 54 `ok` assertions.
+  captures the loopback SMTP message, renders the pending prompt, resends
+  through the same-origin bridge, proves the original link is invalidated,
+  verifies the replacement link and checks persisted verification. The bridge
+  itself was verified by CI run `34766377357` at commit `cbaa8df`; the extended
+  journey is green in CI run `34788300450` with exactly 60 `ok` assertions,
+  including the already-verified resend response.
 - Browser password-recovery pages and same-origin request bridges now exist;
   the same acceptance covers reset requests, reset completion, one-shot token
   rejection, old-password rejection and new-password login.
