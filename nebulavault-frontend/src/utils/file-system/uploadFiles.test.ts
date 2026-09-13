@@ -44,6 +44,28 @@ const reservation = (placement: object) =>
     { status: 200, headers: { "content-type": "application/json" } },
   );
 
+const completion = (options: {
+  desiredReplicas: number;
+  healthyReplicas: number;
+  shortfall: boolean;
+}) =>
+  new Response(
+    JSON.stringify({
+      data: {
+        completed: [
+          {
+            protection: {
+              desiredReplicas: options.desiredReplicas,
+              healthyReplicas: options.healthyReplicas,
+            },
+            shortfall: options.shortfall,
+          },
+        ],
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+
 const target = (deviceId: string, deviceName: string, grant: string) => ({
   deviceId,
   deviceName,
@@ -68,7 +90,7 @@ describe("uploadFiles device orchestration", () => {
         shortfall: false,
         singleCopy: true,
       }),
-      new Response(JSON.stringify({ data: { committed: true } }), { status: 200 }),
+      completion({ desiredReplicas: 1, healthyReplicas: 1, shortfall: false }),
     ]);
     setGlobal("fetch", fetchMock);
 
@@ -99,7 +121,7 @@ describe("uploadFiles device orchestration", () => {
       }),
       new Response(null, { status: 201 }),
       new Response(null, { status: 201 }),
-      new Response(JSON.stringify({ data: { committed: true } }), { status: 200 }),
+      completion({ desiredReplicas: 2, healthyReplicas: 2, shortfall: false }),
     ]);
     setGlobal("fetch", fetchMock);
 
@@ -148,24 +170,52 @@ describe("uploadFiles device orchestration", () => {
     assert.equal(calls.some(([url]) => url === "/api/files/uploads/device/complete"), false);
   });
 
-  test("reports reduced protection after completing with a placement shortfall", async () => {
+  test("reports reduced protection from completion after one planned target fails", async () => {
     const { calls, fetchMock } = createFetchMock([
       reservation({
         alreadyHeldBy: [],
         desiredReplicas: 2,
-        targets: [target("device-a", "Desk", "grant-a")],
-        shortfall: true,
+        targets: [target("device-a", "Desk", "grant-a"), target("device-b", "Laptop", "grant-b")],
+        shortfall: false,
         singleCopy: false,
       }),
       new Response(null, { status: 201 }),
-      new Response(null, { status: 200 }),
+      new TypeError("Laptop is unreachable"),
+      completion({ desiredReplicas: 2, healthyReplicas: 1, shortfall: true }),
     ]);
     setGlobal("fetch", fetchMock);
 
     const result = await uploadFiles("Vault", [fileEntry("one copy")], []);
 
     assert.equal(result.uploaded, 1);
-    assert.deepEqual(result.issues, ["notes.txt has reduced protection: stored on 1 of 2 devices"]);
+    assert.deepEqual(result.issues, [
+      "Laptop: could not be reached",
+      "notes.txt has reduced protection: stored on 1 of 2 devices",
+    ]);
+    assert.equal(calls[3]?.[0], "/api/files/uploads/device/complete");
+  });
+
+  test("does not repeat a stale placement warning when completion reports protection satisfied", async () => {
+    const { calls, fetchMock } = createFetchMock([
+      reservation({
+        alreadyHeldBy: ["device-existing"],
+        desiredReplicas: 2,
+        targets: [target("device-a", "Desk", "grant-a")],
+        shortfall: true,
+        singleCopy: false,
+      }),
+      new Response(null, { status: 201 }),
+      completion({ desiredReplicas: 2, healthyReplicas: 2, shortfall: false }),
+    ]);
+    setGlobal("fetch", fetchMock);
+
+    const result = await uploadFiles("Vault", [fileEntry("restored protection")], []);
+
+    assert.deepEqual(result, {
+      uploaded: 1,
+      bytes: "restored protection".length,
+      issues: [],
+    });
     assert.equal(calls[2]?.[0], "/api/files/uploads/device/complete");
   });
 });

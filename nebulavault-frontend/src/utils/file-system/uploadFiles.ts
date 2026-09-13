@@ -25,6 +25,14 @@ interface DeviceUploadReservation {
   placement: PlacementPlan;
 }
 
+interface DeviceCompletion {
+  protection: {
+    desiredReplicas: number;
+    healthyReplicas: number;
+  };
+  shortfall: boolean;
+}
+
 /**
  * Keeps browser drop paths rooted at the directory the user is viewing.
  * `webkitGetAsEntry` already includes that directory in some browsers, while
@@ -120,7 +128,7 @@ async function reserveDeviceUpload(
   return (payload as { data: DeviceUploadReservation }).data;
 }
 
-async function completeDeviceUpload(versionId: string): Promise<unknown> {
+async function completeDeviceUpload(versionId: string): Promise<DeviceCompletion> {
   const res = await fetch("/api/files/uploads/device/complete", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -130,7 +138,45 @@ async function completeDeviceUpload(versionId: string): Promise<unknown> {
   if (!res.ok) {
     throw new Error(errorMessageFrom(payload, "Could not finish this device upload"));
   }
-  return payload;
+
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    typeof (payload as { data?: unknown }).data !== "object" ||
+    (payload as { data?: unknown }).data === null ||
+    !Array.isArray((payload as { data: { completed?: unknown } }).data.completed)
+  ) {
+    throw new Error("The storage service returned an invalid device completion");
+  }
+
+  const completed = (payload as { data: { completed: unknown[] } }).data.completed[0];
+  if (
+    typeof completed !== "object" ||
+    completed === null ||
+    typeof (completed as { shortfall?: unknown }).shortfall !== "boolean" ||
+    typeof (completed as { protection?: unknown }).protection !== "object" ||
+    (completed as { protection?: unknown }).protection === null
+  ) {
+    throw new Error("The storage service returned an invalid device completion");
+  }
+
+  const protection = (completed as { protection: { desiredReplicas?: unknown; healthyReplicas?: unknown } }).protection;
+  if (
+    typeof protection.desiredReplicas !== "number" ||
+    !Number.isFinite(protection.desiredReplicas) ||
+    typeof protection.healthyReplicas !== "number" ||
+    !Number.isFinite(protection.healthyReplicas)
+  ) {
+    throw new Error("The storage service returned an invalid device completion");
+  }
+
+  return {
+    shortfall: (completed as { shortfall: boolean }).shortfall,
+    protection: {
+      desiredReplicas: protection.desiredReplicas,
+      healthyReplicas: protection.healthyReplicas,
+    },
+  } satisfies DeviceCompletion;
 }
 
 async function uploadOneDeviceBackedFile(
@@ -192,17 +238,17 @@ async function uploadOneDeviceBackedFile(
   }
 
   try {
-    await completeDeviceUpload(reservation.versionId);
+    const completion = await completeDeviceUpload(reservation.versionId);
+    if (completion.shortfall) {
+      issues.push(
+        `${file.name} has reduced protection: stored on ${completion.protection.healthyReplicas} of ${completion.protection.desiredReplicas} devices`,
+      );
+    }
   } catch (error) {
     issues.push(error instanceof Error ? error.message : "Could not finish this device upload");
     return { bytes: 0, issues };
   }
 
-  if (placement.shortfall) {
-    issues.push(
-      `${file.name} has reduced protection: stored on ${storedOn.length} of ${placement.desiredReplicas} devices`,
-    );
-  }
   return { bytes: file.size, issues };
 }
 
