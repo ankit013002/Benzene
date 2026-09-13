@@ -557,7 +557,9 @@ async function main() {
     });
     const signupBody = await jsonOrNull(signupResponse);
     const signupRawCookies = responseSetCookies(signupResponse);
-    const signupCookieNames = responseCookies(signupResponse).map((cookie) => cookie.split("=", 1)[0]);
+    const signupCookies = responseCookies(signupResponse);
+    const signupCookieHeader = signupCookies.join("; ");
+    const signupCookieNames = signupCookies.map((cookie) => cookie.split("=", 1)[0]);
     check("Next signup route created an unverified credential", signupResponse.status === 201 && signupBody?.emailVerified === false, JSON.stringify(signupBody));
     check(
       "Next signup route forwarded httpOnly loopback auth cookies without Secure",
@@ -578,6 +580,16 @@ async function main() {
     const credentialId = signupCredential.rows[0]?.id;
     check("signup persisted the acceptance credential", typeof credentialId === "string" && signupCredential.rows[0]?.email_verified === false);
 
+    const pendingPageResponse = await request(`${frontendUrl}/verify-email?status=pending`);
+    const pendingPage = await pendingPageResponse.text();
+    check(
+      "pending verification page renders consumer guidance and resend action",
+      pendingPageResponse.status === 200 &&
+        pendingPage.includes("Check your inbox") &&
+        pendingPage.includes("Your Benzene account is almost ready.") &&
+        pendingPage.includes("Resend verification email")
+    );
+
     let verificationMessage;
     try {
       verificationMessage = await smtpCapture.waitForMessage();
@@ -590,9 +602,65 @@ async function main() {
       "SMTP verification URL targets the frontend origin",
       verificationUrl?.startsWith(`${frontendUrl}/api/auth/verify-email?token=`) === true
     );
+    let replacementVerificationUrl;
+    if (signupCookieHeader) {
+      const resendResponse = await request(`${frontendUrl}/api/auth/resend-verification`, {
+        method: "POST",
+        headers: { Cookie: signupCookieHeader },
+      });
+      const resendBody = await jsonOrNull(resendResponse);
+      check(
+        "pending verification resend succeeds through the Next bridge without token data",
+        resendResponse.status === 200 &&
+          resendBody?.ok === true &&
+          !Object.prototype.hasOwnProperty.call(resendBody ?? {}, "token")
+      );
+
+      let replacementMessage;
+      try {
+        replacementMessage = await smtpCapture.waitForMessage();
+      } catch (error) {
+        check(
+          "SMTP capture received the replacement verification email",
+          false,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+      replacementVerificationUrl = replacementMessage
+        ? extractVerificationUrl(replacementMessage)
+        : null;
+      check("SMTP capture contained a replacement verification URL", Boolean(replacementVerificationUrl));
+      check(
+        "replacement verification URL targets the frontend origin",
+        replacementVerificationUrl?.startsWith(`${frontendUrl}/api/auth/verify-email?token=`) === true
+      );
+    }
+
+    if (verificationUrl && replacementVerificationUrl) {
+      const originalVerificationResponse = await request(verificationUrl, { redirect: "manual" });
+      const originalLocation = originalVerificationResponse.headers.get("location") ?? "";
+      let originalResultUrl;
+      try {
+        originalResultUrl = new URL(originalLocation, frontendUrl);
+      } catch {
+        originalResultUrl = null;
+      }
+      check(
+        "original verification link is invalidated after resend",
+        originalVerificationResponse.status >= 300 &&
+          originalVerificationResponse.status < 400 &&
+          originalResultUrl !== null &&
+          isLoopbackFrontendOrigin(originalResultUrl) &&
+          originalResultUrl.pathname === "/verify-email" &&
+          originalResultUrl.searchParams.get("status") === "invalid"
+      );
+    } else {
+      check("original verification link is invalidated after resend", false);
+    }
+
     let verificationLocation;
-    if (verificationUrl) {
-      const verificationResponse = await request(verificationUrl, { redirect: "manual" });
+    if (replacementVerificationUrl) {
+      const verificationResponse = await request(replacementVerificationUrl, { redirect: "manual" });
       verificationLocation = verificationResponse.headers.get("location") ?? "";
       let localResultUrl;
       try {
@@ -621,12 +689,30 @@ async function main() {
             resultPage.includes("Your Benzene account is ready.")
         );
       }
+    } else {
+      check("replacement verification link returns the local success result", false);
     }
     const verifiedCredential = await authPool.query(
       "select email_verified from credentials where id = $1",
       [credentialId ?? null]
     );
     check("email verification persisted true", verifiedCredential.rows[0]?.email_verified === true);
+
+    if (signupCookieHeader) {
+      const resendAfterVerificationResponse = await request(
+        `${frontendUrl}/api/auth/resend-verification`,
+        { method: "POST", headers: { Cookie: signupCookieHeader } }
+      );
+      const resendAfterVerificationBody = await jsonOrNull(resendAfterVerificationResponse);
+      check(
+        "resend after verification reports already verified without token data",
+        resendAfterVerificationResponse.status === 400 &&
+          resendAfterVerificationBody?.error === "Email is already verified" &&
+          !Object.prototype.hasOwnProperty.call(resendAfterVerificationBody ?? {}, "token")
+      );
+    } else {
+      check("resend after verification reports already verified without token data", false);
+    }
 
     console.log("\nlogin through the Next.js web route");
     const loginResponse = await request(`${frontendUrl}/api/auth/login`, {
