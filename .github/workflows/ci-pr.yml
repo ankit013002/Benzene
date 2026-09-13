@@ -88,6 +88,8 @@ jobs:
       - name: Install
         run: |
           if [ -f package-lock.json ]; then npm ci --include=dev; else npm i; fi
+      - name: Test
+        run: npm test
       - name: Lint (if present)
         run: npm run lint --if-present
       - name: Typecheck (if present)
