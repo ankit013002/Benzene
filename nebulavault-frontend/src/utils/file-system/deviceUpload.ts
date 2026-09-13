@@ -14,6 +14,11 @@ export interface UploadTarget {
   expiresAt: string;
 }
 
+// A sleeping or unreachable device must not hold the download fallback open
+// indefinitely, while a reachable device must be allowed to stream a large
+// object after its headers arrive.
+const DEVICE_FETCH_HEADER_TIMEOUT_MS = 10_000;
+
 /**
  * SHA-256 of the file, computed in the browser.
  *
@@ -61,10 +66,26 @@ export async function downloadFromDevices(
 
   // Try each holder in turn: the first may be asleep or on another network.
   for (const target of targets) {
+    const controller = new AbortController();
+    let timeoutId: number | undefined;
+    const clearHeaderTimeout = (): void => {
+      if (timeoutId === undefined) return;
+      window.clearTimeout(timeoutId);
+      timeoutId = undefined;
+    };
+
     try {
+      timeoutId = window.setTimeout(
+        () => controller.abort(),
+        DEVICE_FETCH_HEADER_TIMEOUT_MS
+      );
       const objectRes = await fetch(target.url, {
         headers: { "X-Transfer-Grant": target.grant },
+        signal: controller.signal,
       });
+      // Only connection/header establishment is bounded. The body may be a
+      // large file and must not be interrupted by this short-lived timer.
+      clearHeaderTimeout();
       if (!objectRes.ok) continue;
 
       const blob = await objectRes.blob();
@@ -80,6 +101,8 @@ export async function downloadFromDevices(
       return;
     } catch {
       // Unreachable device; fall through to the next holder.
+    } finally {
+      clearHeaderTimeout();
     }
   }
 

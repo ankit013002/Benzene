@@ -74,11 +74,16 @@ function installDownloadDom() {
   const revokeObjectURL = (url: string): void => {
     revoked.push(url);
   };
-  const scheduled: Array<() => void> = [];
+  const scheduled = new Map<number, () => void>();
+  let nextTimerId = 0;
   const windowMock = {
     setTimeout: (callback: () => void, _delay: number): number => {
-      scheduled.push(callback);
-      return scheduled.length;
+      const timerId = ++nextTimerId;
+      scheduled.set(timerId, callback);
+      return timerId;
+    },
+    clearTimeout: (timerId: number): void => {
+      scheduled.delete(timerId);
     },
   };
   setGlobal("document", documentMock);
@@ -89,7 +94,11 @@ function installDownloadDom() {
     created,
     revoked,
     state,
-    runScheduled: () => scheduled.splice(0).forEach((callback) => callback()),
+    runScheduled: () => {
+      const callbacks = [...scheduled.values()];
+      scheduled.clear();
+      callbacks.forEach((callback) => callback());
+    },
   };
 }
 
@@ -108,14 +117,12 @@ describe("downloadFromDevices", () => {
     await downloadFromDevices("object/hash", "report.txt");
 
     assert.equal(calls[0]?.[0], "/api/placement/download-targets/object%2Fhash");
-    assert.deepEqual(calls[1], [
-      "http://sleeping.lan:7070/objects/object-hash",
-      { headers: { "X-Transfer-Grant": "grant-1" } },
-    ]);
-    assert.deepEqual(calls[2], [
-      "http://healthy.lan:7070/objects/object-hash",
-      { headers: { "X-Transfer-Grant": "grant-2" } },
-    ]);
+    assert.equal(calls[1]?.[0], "http://sleeping.lan:7070/objects/object-hash");
+    assert.deepEqual(calls[1]?.[1]?.headers, { "X-Transfer-Grant": "grant-1" });
+    assert.ok(calls[1]?.[1]?.signal instanceof AbortSignal);
+    assert.equal(calls[2]?.[0], "http://healthy.lan:7070/objects/object-hash");
+    assert.deepEqual(calls[2]?.[1]?.headers, { "X-Transfer-Grant": "grant-2" });
+    assert.ok(calls[2]?.[1]?.signal instanceof AbortSignal);
     assert.equal(anchor.download, "report.txt");
     assert.equal(state.clicks, 1);
     assert.equal(state.removals, 1);
@@ -140,5 +147,47 @@ describe("downloadFromDevices", () => {
     assert.deepEqual(revoked, []);
     runScheduled();
     assert.deepEqual(revoked, ["blob:download"]);
+  });
+
+  test("aborts a hanging holder and falls back without waiting for the timeout", async () => {
+    const calls: FetchCall[] = [];
+    let firstHolderStarted: () => void = () => undefined;
+    const firstHolderReady = new Promise<void>((resolve) => {
+      firstHolderStarted = resolve;
+    });
+    const fetchMock: typeof fetch = async (input, init) => {
+      calls.push([input, init]);
+      if (calls.length === 1) {
+        return new Response(
+          JSON.stringify({ data: { targets: [target("sleeping", "grant-1"), target("healthy", "grant-2")] } }),
+          { status: 200 }
+        );
+      }
+      if (input === "http://sleeping.lan:7070/objects/object-hash") {
+        firstHolderStarted();
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("aborted", "AbortError")),
+            { once: true }
+          );
+        });
+      }
+      return new Response(new Blob(["downloaded after fallback"]), { status: 200 });
+    };
+    setGlobal("fetch", fetchMock);
+    const { anchor, state, runScheduled } = installDownloadDom();
+
+    const download = downloadFromDevices("object-hash", "report.txt");
+    await firstHolderReady;
+    runScheduled();
+    await download;
+
+    assert.equal(calls.length, 3);
+    assert.equal(calls[1]?.[1]?.signal?.aborted, true);
+    assert.equal(calls[2]?.[0], "http://healthy.lan:7070/objects/object-hash");
+    assert.equal(anchor.download, "report.txt");
+    assert.equal(state.clicks, 1);
+    assert.equal(state.removals, 1);
   });
 });
