@@ -52,6 +52,7 @@ storage-layer work.
 | `infrastructure/terraform/` | S3 bucket + least-privilege IAM | Terraform |
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
 | `scripts/smoke-protection.mjs` | Three-device Protected repair smoke test | Node |
+| `scripts/smoke-auth-gateway.mjs` | Authenticated frontend-to-control-plane acceptance test | Node |
 | `YAGNI-CODE/` | Notes on removed code. Not built. | — |
 | `simple-flask-server/` | Debug scratch. Not production. | — |
 
@@ -403,6 +404,16 @@ vectors and updating both files in the same commit.
   B to C, verifies restored two-copy health, and reads the bytes back from C to
   prove they are identical. It does not test remote access, encryption,
   garbage collection, or frontend/gateway behavior.
+- `scripts/smoke-auth-gateway.mjs` runs the real authenticated user path over
+  HTTP: the Next.js `/api/auth/login` proxy forwards a real password login and
+  httpOnly session cookie, the Java gateway verifies the JWT and injects the
+  identity, and Next's `/api/vault` reaches the real control plane. The smoke
+  also sends spoofed `X-User-*` headers directly to the gateway and proves they
+  are stripped, then checks direct gateway anonymous `401` and browser-facing
+  Next anonymous rejection. The credential is seeded directly because signup's
+  verification email requires SMTP; signup delivery is not covered. This path
+  does not involve the user service, node transfer, remote/TLS access,
+  encryption, or frontend file operations.
 
 ```bash
 # control plane
@@ -411,6 +422,7 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 # end to end
 node scripts/smoke-agent.mjs
 node scripts/smoke-protection.mjs
+node scripts/smoke-auth-gateway.mjs
 ```
 
 Current counts: control plane **342**, agent **115**, auth **78** when its
@@ -418,6 +430,8 @@ real-Postgres concurrency test is enabled, gateway **18**. The core
 cross-package smoke has **63 checks**; the three-device Protected repair smoke
 has **40 checks**. These smoke milestones were verified by CI run
 `34719594345` at commit `41462e8`.
+The authenticated frontend-to-control-plane acceptance has **11 checks** and
+was verified green by CI run `34720814427` at commit `2a79b1f`.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
@@ -491,6 +505,11 @@ the standard to match.
 
 - Self-contained email/password auth; gateway JWT verification and header
   injection
+- Authenticated user path through the Next.js proxy, Java gateway and control
+  plane: login forwards an httpOnly session/JWT, `/api/vault` returns the
+  caller's vault, spoofed `X-User-*` headers are stripped, direct gateway
+  anonymous access returns `401`, and browser-facing anonymous access is
+  rejected by Next
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
 - Placement engine with protection policies (1/2/3 copies) and health reporting
