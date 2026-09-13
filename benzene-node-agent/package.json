@@ -13,9 +13,9 @@
   },
   "license": "ISC",
   "dependencies": {
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
-    "dotenv": "^17.2.3",
     "zod": "^4.5.4"
   },
   "devDependencies": {
@@ -25,6 +25,6 @@
     "supertest": "^7.1.4",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.0"
+    "vitest": "^4.1.11"
   }
 }
