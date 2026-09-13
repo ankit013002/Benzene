@@ -133,12 +133,12 @@ repository-wide zero.
   profile through the gateway and Next bridge, checks default profile/quota
   fields, and verifies anonymous redirects/401 responses. It has exactly 12
   `ok` assertions and is green in CI run `34768007763` at commit `090c7eb`.
-- Frontend transfer helpers have six deterministic `node:test`/`tsx` tests for
+- Frontend transfer helpers have seven deterministic `node:test`/`tsx` tests for
   hashing and reservation, direct Protected uploads, completion gating,
-  pending/shortfall errors, download fallback and safe DOM cleanup. A live
-  browser check verifies the landing page renders without an overlay and can
-  navigate to sign-in; it also caught and fixed CSS import ordering and a
-  missing base selector.
+  pending/shortfall errors, download fallback, unresponsive-holder
+  timeout/fallback and safe DOM cleanup. A live browser check verifies the
+  landing page renders without an overlay and can navigate to sign-in; it also
+  caught and fixed CSS import ordering and a missing base selector.
 - An atomic, allocation-bounded node object store with restart-safe usage
   accounting.
 - Vault and Devices views plus the current file-management UI.
@@ -224,6 +224,12 @@ Device signatures receive one-shot PostgreSQL replay claims for the exact
 method, path, timestamp and body request; an otherwise valid replay inside the
 timestamp window is rejected. Refresh-token rotation is atomically single-use
 in PostgreSQL, so concurrent uses of one token cannot both succeed.
+
+Email-verification token replacement and consumption are also atomic in
+PostgreSQL: concurrent resends leave one current token, concurrent verification
+allows one consume, and a verified credential has no outstanding verification
+tokens. Password-reset consumption similarly claims one token in a transaction,
+updates the password, and revokes every refresh token together.
 
 Unauthenticated enrollment creation is database-throttled per gateway-observed
 client IP, defaulting to 10 attempts per 60 seconds. The gateway strips any
@@ -441,12 +447,17 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **342** tests, agent **115**, auth **77** when its
-real-Postgres concurrency test is enabled, gateway **18**, frontend transfer
-helpers **6**, user-profile acceptance **12 `ok` assertions**, and **63 smoke
+Verified counts: control plane **342** tests, agent **115**, auth **78** when its
+real-Postgres concurrency tests are enabled, gateway **18**, frontend transfer
+helpers **7**, user-profile acceptance **12 `ok` assertions**, and **63 smoke
 checks**. The integrated authenticated LAN acceptance has exactly **60 `ok`
 assertions** and was green in CI run `34788300450`. Default Turbopack and
 Webpack production builds pass.
+
+CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
+including real-Postgres concurrency regressions for refresh-token rotation,
+password-reset consumption, email-verification replacement, and legacy-token
+consumption.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. It runs the

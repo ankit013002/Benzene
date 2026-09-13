@@ -281,6 +281,12 @@ method, path, timestamp and body request; an otherwise valid replay inside the
 timestamp window is rejected. Refresh-token rotation is atomically single-use
 in PostgreSQL, so concurrent uses of one token cannot both succeed.
 
+Email-verification token replacement and consumption are also atomic in
+PostgreSQL: concurrent resends leave one current token, concurrent verification
+allows one consume, and a verified credential has no outstanding verification
+tokens. Password-reset consumption similarly claims one token in a transaction,
+updates the password, and revokes every refresh token together.
+
 Unauthenticated enrollment creation is database-throttled per gateway-observed
 client IP, defaulting to 10 attempts per 60 seconds. The gateway strips any
 caller-supplied `X-Benzene-Client-Ip` and rewrites it from its observed peer;
@@ -400,9 +406,10 @@ vectors and updating both files in the same commit.
   **4.1.11**, which preserves Node 20 compatibility and resolves the prior
   Vitest advisory.
 - Frontend transfer-helper tests use Node's built-in `node:test` and
-  `node:assert` through `tsx`; six deterministic tests cover reservation
+  `node:assert` through `tsx`; seven deterministic tests cover reservation
   hashing, direct Protected PUTs and grants, completion gating, pending and
-  shortfall errors, download fallback and safe browser download cleanup.
+  shortfall errors, download fallback, unresponsive-holder timeout/fallback,
+  and safe browser download cleanup.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
   plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
   inventory recovery, upload to device, download back, authentication
@@ -449,9 +456,9 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **342**, agent **115**, auth **77** when its
-real-Postgres concurrency test is enabled, gateway **18**, frontend
-transfer-helper **6**, user-profile acceptance **12 `ok` assertions**. The core
+Current counts: control plane **342**, agent **115**, auth **78** when its
+real-Postgres concurrency tests are enabled, gateway **18**, frontend
+transfer-helper **7**, user-profile acceptance **12 `ok` assertions**. The core
 cross-package smoke has **63 checks**; the
 three-device Protected repair smoke has **40 checks**. These smoke milestones
 were verified by CI run
@@ -463,6 +470,11 @@ landing page renders without an overlay and navigates to sign-in; that check
 also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
+
+CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
+including real-Postgres concurrency regressions for refresh-token rotation,
+password-reset consumption, email-verification replacement, and legacy-token
+consumption.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
@@ -579,11 +591,11 @@ the standard to match.
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
-- Frontend transfer helpers have six deterministic `node:test`/`tsx` tests for
+- Frontend transfer helpers have seven deterministic `node:test`/`tsx` tests for
   hashing and reservation, direct Protected uploads, completion gating,
-  pending/shortfall errors, download fallback and safe DOM cleanup. A live
-  browser check also verifies the landing page renders without an overlay and
-  can navigate to sign-in.
+  pending/shortfall errors, download fallback, unresponsive-holder
+  timeout/fallback and safe DOM cleanup. A live browser check also verifies the
+  landing page renders without an overlay and can navigate to sign-in.
 - The user-profile acceptance covers real signup/session, SMTP delivery,
   pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,
   persisted default profile/quota fields, Next anonymous redirect and gateway
