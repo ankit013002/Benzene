@@ -27,6 +27,7 @@ jobs:
       infra: ${{ steps.filter.outputs.infra }}
       smoke: ${{ steps.filter.outputs.smoke }}
       acceptance: ${{ steps.filter.outputs.acceptance }}
+      user_profile_acceptance: ${{ steps.filter.outputs.user_profile_acceptance }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -64,6 +65,13 @@ jobs:
               - 'benzene-node-agent/**'
               - 'nebulavault-frontend/**'
               - 'scripts/smoke-auth-gateway.mjs'
+              - '.github/workflows/**'
+            user_profile_acceptance:
+              - 'benzene-auth-service/**'
+              - 'nebula-gateway/**'
+              - 'nebulavault-frontend/**'
+              - 'nebulavault-user-service/**'
+              - 'scripts/smoke-user-profile.mjs'
               - '.github/workflows/**'
 
   web:
@@ -327,6 +335,66 @@ jobs:
         with:
           name: user-service-jar
           path: nebulavault-user-service/target/*.jar
+
+  user-profile-acceptance:
+    name: User profile acceptance (signup + gateway + Next bridge)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.user_profile_acceptance == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SMOKE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      SMOKE_AUTH_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            benzene-auth-service/package-lock.json
+            nebulavault-frontend/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Install auth service dependencies
+        working-directory: benzene-auth-service
+        run: npm ci --include=dev
+      - name: Install frontend dependencies
+        working-directory: nebulavault-frontend
+        run: npm ci --include=dev
+      - name: Build frontend
+        working-directory: nebulavault-frontend
+        env:
+          AUTH_SECRET: ${{ env.SMOKE_AUTH_SECRET }}
+          APP_BASE_URL: http://127.0.0.1:13100
+          GATEWAY_ORIGIN: http://127.0.0.1:18180
+          NEXT_PUBLIC_GATEWAY_ORIGIN: http://127.0.0.1:18180
+        run: npm run build
+      - name: Package gateway
+        working-directory: nebula-gateway
+        run: ./mvnw -B -ntp -DskipTests package
+      - name: Package user service
+        working-directory: nebulavault-user-service
+        run: ./mvnw -B -ntp -DskipTests package
+      - name: Run user profile acceptance
+        run: node scripts/smoke-user-profile.mjs
 
   infra:
     name: Terraform — format & validate
