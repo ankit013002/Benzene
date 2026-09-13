@@ -18,6 +18,7 @@ import {
   confirmReplica,
   decidePlacement,
   getObjectProtection,
+  getObjectProtectionBatch,
   getPolicy,
   getVaultProtection,
   listUnderProtectedObjects,
@@ -466,6 +467,71 @@ describe("protection health", () => {
       await confirmReplica(OWNER, { objectHash: hash, deviceId });
     }
   }
+
+  it("summarizes distinct hashes together, including hashes with no replicas", async () => {
+    const a = await onlineDevice(OWNER, "batch-a", 100 * GB, 0, "http://batch-a.test");
+    const b = await onlineDevice(OWNER, "batch-b", 100 * GB, 0, "http://batch-b.test");
+    const healthyHash = hashOf("batch healthy");
+    const degradedHash = hashOf("batch degraded");
+    const missingHash = hashOf("batch missing");
+    await place(healthyHash, [a, b]);
+    await place(degradedHash, [a]);
+
+    const protections = await getObjectProtectionBatch(OWNER, [
+      healthyHash,
+      degradedHash,
+      missingHash,
+      healthyHash,
+    ]);
+
+    expect(protections.size).toBe(3);
+    expect(protections.get(healthyHash)).toMatchObject({
+      objectHash: healthyHash,
+      desiredReplicas: 2,
+      healthyReplicas: 2,
+      reachableHealthyReplicas: 2,
+      placingReplicas: 0,
+      state: "healthy",
+      availability: "available",
+    });
+    expect(protections.get(healthyHash)?.deviceIds).toEqual(expect.arrayContaining([a, b]));
+    expect(protections.get(degradedHash)).toMatchObject({
+      objectHash: degradedHash,
+      desiredReplicas: 2,
+      healthyReplicas: 1,
+      reachableHealthyReplicas: 1,
+      placingReplicas: 0,
+      state: "at_risk",
+      availability: "available",
+      deviceIds: [a],
+    });
+    expect(protections.get(missingHash)).toEqual({
+      objectHash: missingHash,
+      desiredReplicas: 2,
+      healthyReplicas: 0,
+      reachableHealthyReplicas: 0,
+      placingReplicas: 0,
+      state: "unprotected",
+      availability: "unavailable",
+      deviceIds: [],
+    });
+  });
+
+  it("returns an empty batch without creating a vault or policy", async () => {
+    const before = await db
+      .select({ id: schema.vaults.id })
+      .from(schema.vaults)
+      .where(eq(schema.vaults.ownerId, OWNER));
+
+    await expect(getObjectProtectionBatch(OWNER, [])).resolves.toEqual(new Map());
+
+    const after = await db
+      .select({ id: schema.vaults.id })
+      .from(schema.vaults)
+      .where(eq(schema.vaults.ownerId, OWNER));
+    expect(before).toHaveLength(0);
+    expect(after).toHaveLength(0);
+  });
 
   it("reports healthy when the policy is met", async () => {
     const a = await onlineDevice(OWNER, "a");

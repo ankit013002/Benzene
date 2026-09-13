@@ -505,11 +505,23 @@ export interface ObjectProtection {
   deviceIds: string[];
 }
 
-/** Protection health for one object, as product §23 presents it. */
-export async function getObjectProtection(
+interface ProtectionReplicaRow {
+  deviceId: string;
+  status: string;
+  deviceStatus: string;
+  lastSeenAt: Date | null;
+  advertisedUrl: string | null;
+}
+
+/** Protection health for several objects, as product §23 presents it. */
+export async function getObjectProtectionBatch(
   ownerId: string,
-  objectHash: string
-): Promise<ObjectProtection> {
+  objectHashes: string[]
+): Promise<Map<string, ObjectProtection>> {
+  const distinctObjectHashes = [...new Set(objectHashes)];
+  const protections = new Map<string, ObjectProtection>();
+  if (distinctObjectHashes.length === 0) return protections;
+
   const vault = await ensureVaultForOwner(ownerId);
   await classifyDeviceOutages(vault.id);
   const policy = await getPolicy(ownerId);
@@ -518,6 +530,7 @@ export async function getObjectProtection(
 
   const rows = await db()
     .select({
+      objectHash: replicas.objectHash,
       deviceId: replicas.deviceId,
       status: replicas.status,
       deviceStatus: devices.status,
@@ -527,9 +540,52 @@ export async function getObjectProtection(
     .from(replicas)
     .innerJoin(devices, eq(devices.id, replicas.deviceId))
     .where(
-      and(eq(replicas.vaultId, vault.id), eq(replicas.objectHash, objectHash))
+      and(
+        eq(replicas.vaultId, vault.id),
+        inArray(replicas.objectHash, distinctObjectHashes)
+      )
     );
 
+  const rowsByObjectHash = new Map<string, ProtectionReplicaRow[]>();
+  for (const row of rows) {
+    const objectRows = rowsByObjectHash.get(row.objectHash) ?? [];
+    objectRows.push(row);
+    rowsByObjectHash.set(row.objectHash, objectRows);
+  }
+
+  for (const objectHash of distinctObjectHashes) {
+    protections.set(
+      objectHash,
+      summarizeObjectProtection(
+        objectHash,
+        rowsByObjectHash.get(objectHash) ?? [],
+        desiredReplicas,
+        offlineAfterMs
+      )
+    );
+  }
+
+  return protections;
+}
+
+/** Protection health for one object, as product §23 presents it. */
+export async function getObjectProtection(
+  ownerId: string,
+  objectHash: string
+): Promise<ObjectProtection> {
+  const protection = (await getObjectProtectionBatch(ownerId, [objectHash])).get(objectHash);
+  if (!protection) {
+    throw new AppError(500, "SERVER", "Object protection could not be loaded");
+  }
+  return protection;
+}
+
+function summarizeObjectProtection(
+  objectHash: string,
+  rows: ProtectionReplicaRow[],
+  desiredReplicas: number,
+  offlineAfterMs: number
+): ObjectProtection {
   // A replica on an offline device still counts as healthy: architecture §41
   // is explicit that offline is not the same as lost, and treating it as lost
   // would trigger pointless repairs every time a laptop closes.

@@ -4,7 +4,10 @@ import DriveNodeModel, { normalizePath } from "../models/driveNode.model.js";
 import FileVersionModel from "../models/fileVersion.model.js";
 import { storage } from "../storage/index.js";
 import { AppError } from "../utils/AppError.js";
-import { getObjectProtection, type ObjectProtection } from "../modules/placement/placement.service.js";
+import {
+  getObjectProtectionBatch,
+  type ObjectProtection,
+} from "../modules/placement/placement.service.js";
 import { ensureFolderChain } from "./uploads.services.js";
 
 export interface ListedFile {
@@ -67,6 +70,16 @@ export async function listDirectory(
   const versionByNode = new Map(
     currentVersions.map((version) => [version.nodeId.toString(), version])
   );
+  const protectionByHash = await getObjectProtectionBatch(
+    ownerId,
+    [
+      ...new Set(
+        currentVersions
+          .map((version) => version.objectHash ?? version.sha256)
+          .filter((hash): hash is string => Boolean(hash))
+      ),
+    ]
+  );
 
   const files: ListedFile[] = [];
   const folders: ListedFolder[] = [];
@@ -84,9 +97,7 @@ export async function listDirectory(
     } else {
       const current = versionByNode.get(node._id.toString());
       const objectHash = current?.objectHash ?? current?.sha256;
-      const protection = objectHash
-        ? await getObjectProtection(ownerId, objectHash)
-        : undefined;
+      const protection = objectHash ? protectionByHash.get(objectHash) : undefined;
       files.push({
         id: node._id.toString(),
         name: node.name,
