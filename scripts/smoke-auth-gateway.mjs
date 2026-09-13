@@ -4,10 +4,11 @@
  * This starts the real auth service, Java gateway, control-plane app, Next.js
  * frontend and two node agents. It signs up a fresh credential through the
  * Next route, captures its verification email through a loopback SMTP server,
- * verifies the link through the Next bridge, logs in through the Next web
- * route, enrolls agents through the gateway, approves their pairing codes
- * through Next, and completes a Protected upload whose bytes travel directly
- * between the caller and the agents.
+ * verifies the link through the Next bridge, exercises password recovery with
+ * the reset email captured through the same SMTP server, logs in through the
+ * Next web route, enrolls agents through the gateway, approves their pairing
+ * codes through Next, and completes a Protected upload whose bytes travel
+ * directly between the caller and the agents.
  *
  * This is an authenticated HTTP web-route/topology acceptance harness, not a
  * browser-runtime test: it does not execute frontend helper code or validate
@@ -58,6 +59,7 @@ const FRONTEND_PORT = Number.parseInt(
 );
 const LOGIN_EMAIL = `acceptance-${process.pid}@example.com`;
 const LOGIN_PASSWORD = "acceptance-password-123";
+const RESET_PASSWORD = "acceptance-password-reset-456";
 const REQUEST_TIMEOUT_MS = 15_000;
 const MONGO_START_TIMEOUT_MS = 120_000;
 const MONGO_CONNECT_TIMEOUT_MS = 15_000;
@@ -351,6 +353,14 @@ function extractVerificationUrl(message) {
   return match?.[0] ?? null;
 }
 
+function extractPasswordResetUrl(message) {
+  const decodedMessage = decodeQuotedPrintable(message);
+  const match = decodedMessage.match(
+    /https?:\/\/[^\s"'<>]+\/reset-password\?token=[^\s"'<>]+/
+  );
+  return match?.[0] ?? null;
+}
+
 function isLoopbackFrontendOrigin(url) {
   return (
     url.protocol === "http:" &&
@@ -638,6 +648,122 @@ async function main() {
     );
     check("Next login route session JWT identifies the created credential", claims?.sub === credentialId);
     check("Next login route session JWT carries the login email", claims?.email === LOGIN_EMAIL);
+
+    console.log("\nrequest a password reset through the Next.js web route");
+    const unknownForgotResponse = await request(`${frontendUrl}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: `unknown-${process.pid}@example.com` }),
+    });
+    const unknownForgotBody = await jsonOrNull(unknownForgotResponse);
+    check(
+      "forgot-password keeps unknown addresses indistinguishable",
+      unknownForgotResponse.status === 200 && unknownForgotBody?.ok === true,
+      JSON.stringify(unknownForgotBody)
+    );
+
+    const forgotResponse = await request(`${frontendUrl}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: LOGIN_EMAIL }),
+    });
+    const forgotBody = await jsonOrNull(forgotResponse);
+    check(
+      "forgot-password accepted the verified address",
+      forgotResponse.status === 200 && forgotBody?.ok === true,
+      JSON.stringify(forgotBody)
+    );
+    check(
+      "forgot-password preserves the anti-enumeration response shape",
+      unknownForgotResponse.status === forgotResponse.status &&
+        unknownForgotBody?.ok === forgotBody?.ok
+    );
+
+    let resetMessage;
+    try {
+      resetMessage = await smtpCapture.waitForMessage();
+    } catch (error) {
+      check(
+        "SMTP capture received the password reset email",
+        false,
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+    const resetUrlText = resetMessage ? extractPasswordResetUrl(resetMessage) : null;
+    check("SMTP capture contained a password reset URL", Boolean(resetUrlText));
+
+    let resetUrl;
+    try {
+      resetUrl = resetUrlText ? new URL(resetUrlText) : null;
+    } catch {
+      resetUrl = null;
+    }
+    const resetToken = resetUrl?.searchParams.get("token") ?? null;
+    const resetUrlIsExactLocalRoute =
+      resetUrl?.origin === frontendUrl &&
+      resetUrl.pathname === "/reset-password" &&
+      Boolean(resetToken);
+    check(
+      "password reset URL uses the exact local frontend origin and route",
+      resetUrlIsExactLocalRoute
+    );
+
+    let resetResponse;
+    let resetBody;
+    if (resetUrlIsExactLocalRoute) {
+      resetResponse = await request(`${frontendUrl}/api/auth/reset-password`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: resetToken, newPassword: RESET_PASSWORD }),
+      });
+      resetBody = await jsonOrNull(resetResponse);
+    }
+    check(
+      "password reset completed through the Next reset bridge",
+      resetResponse?.status === 200 && resetBody?.ok === true,
+      resetResponse ? JSON.stringify(resetBody) : "reset URL was not usable"
+    );
+
+    let reusedResetResponse;
+    let reusedResetBody;
+    if (resetToken) {
+      reusedResetResponse = await request(`${frontendUrl}/api/auth/reset-password`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: resetToken, newPassword: `${RESET_PASSWORD}-again` }),
+      });
+      reusedResetBody = await jsonOrNull(reusedResetResponse);
+    }
+    check(
+      "password reset token cannot be reused",
+      reusedResetResponse?.status === 400 &&
+        reusedResetBody?.error === "Invalid or expired reset link",
+      reusedResetResponse ? JSON.stringify(reusedResetBody) : "reset token was unavailable"
+    );
+
+    const oldPasswordLogin = await request(`${frontendUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: LOGIN_EMAIL, password: LOGIN_PASSWORD }),
+    });
+    const oldPasswordBody = await jsonOrNull(oldPasswordLogin);
+    check(
+      "old password is rejected after reset",
+      oldPasswordLogin.status === 401,
+      JSON.stringify(oldPasswordBody)
+    );
+
+    const newPasswordLogin = await request(`${frontendUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: LOGIN_EMAIL, password: RESET_PASSWORD }),
+    });
+    const newPasswordBody = await jsonOrNull(newPasswordLogin);
+    check(
+      "new password succeeds after reset",
+      newPasswordLogin.status === 200 && newPasswordBody?.ok === true,
+      JSON.stringify(newPasswordBody)
+    );
 
     const cookieHeader = cookies.join("; ");
     const webVaultResponse = await request(`${frontendUrl}/api/vault`, {
