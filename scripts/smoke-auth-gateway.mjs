@@ -2,11 +2,12 @@
  * Cross-service authentication acceptance test.
  *
  * This starts the real auth service, Java gateway, control-plane app, Next.js
- * frontend and two node agents. It seeds one bcrypt credential (signup sends
- * email through SMTP, which is not a dependency of this boundary test), logs
- * in through the Next web route, enrolls agents through the gateway, approves
- * their pairing codes through Next, and completes a Protected upload whose
- * bytes travel directly between the caller and the agents.
+ * frontend and two node agents. It signs up a fresh credential through the
+ * Next route, captures its verification email through a loopback SMTP server,
+ * verifies the link through the Next bridge, logs in through the Next web
+ * route, enrolls agents through the gateway, approves their pairing codes
+ * through Next, and completes a Protected upload whose bytes travel directly
+ * between the caller and the agents.
  *
  * This is an authenticated HTTP web-route/topology acceptance harness, not a
  * browser-runtime test: it does not execute frontend helper code or validate
@@ -27,6 +28,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -37,9 +39,6 @@ const frontendDir = path.join(repoRoot, "nebulavault-frontend");
 
 const controlPlaneRequire = createRequire(
   new URL("../benzene-control-plane/package.json", import.meta.url)
-);
-const authRequire = createRequire(
-  new URL("../benzene-auth-service/package.json", import.meta.url)
 );
 const agentRequire = createRequire(
   new URL("../benzene-node-agent/package.json", import.meta.url)
@@ -239,6 +238,119 @@ async function listen(app, port = 0) {
   });
 }
 
+async function startSmtpCapture() {
+  const messages = [];
+  const waiters = [];
+  const sockets = new Set();
+  const server = createNetServer((socket) => {
+    sockets.add(socket);
+    let input = "";
+    let dataLines = null;
+
+    const send = (response) => socket.write(`${response}\r\n`);
+    send("220 benzene-smoke.local ESMTP ready");
+
+    socket.on("data", (chunk) => {
+      input += chunk.toString("utf8");
+      while (true) {
+        const end = input.indexOf("\r\n");
+        if (end < 0) break;
+        const line = input.slice(0, end);
+        input = input.slice(end + 2);
+
+        if (dataLines) {
+          if (line === ".") {
+            const message = dataLines.join("\r\n");
+            dataLines = null;
+            messages.push(message);
+            const waiter = waiters.shift();
+            if (waiter) {
+              clearTimeout(waiter.timer);
+              waiter.resolve(message);
+            }
+            send("250 2.0.0 queued");
+          } else {
+            dataLines.push(line.startsWith("..") ? line.slice(1) : line);
+          }
+          continue;
+        }
+
+        const command = line.toUpperCase();
+        if (command.startsWith("EHLO") || command.startsWith("HELO")) {
+          socket.write(
+            "250-benzene-smoke.local\r\n250-SIZE 10485760\r\n250-8BITMIME\r\n250 OK\r\n"
+          );
+        } else if (command.startsWith("MAIL FROM") || command.startsWith("RCPT TO")) {
+          send("250 2.1.0 accepted");
+        } else if (command === "DATA") {
+          dataLines = [];
+          send("354 End data with <CR><LF>.<CR><LF>");
+        } else if (command === "RSET") {
+          send("250 2.0.0 reset");
+        } else if (command === "QUIT") {
+          send("221 2.0.0 closing");
+          socket.end();
+        } else {
+          send("250 2.0.0 accepted");
+        }
+      }
+    });
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => sockets.delete(socket));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once("listening", resolve);
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1");
+  });
+
+  return {
+    port: server.address().port,
+    waitForMessage(timeoutMs = REQUEST_TIMEOUT_MS) {
+      const message = messages.shift();
+      if (message) return Promise.resolve(message);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          const index = waiters.findIndex((waiter) => waiter.resolve === resolve);
+          if (index >= 0) waiters.splice(index, 1);
+          reject(new Error(`SMTP capture timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        waiters.push({ resolve, reject, timer });
+      });
+    },
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => {
+        if (!server.listening) {
+          resolve();
+          return;
+        }
+        server.close(resolve);
+      });
+      for (const waiter of waiters.splice(0)) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error("SMTP capture closed"));
+      }
+    },
+  };
+}
+
+function decodeQuotedPrintable(value) {
+  return value
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9a-f]{2})/gi, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replaceAll("&amp;", "&");
+}
+
+function extractVerificationUrl(message) {
+  const decodedMessage = decodeQuotedPrintable(message);
+  const match = decodedMessage.match(
+    /https?:\/\/[^\s"'<>]+\/api\/auth\/verify-email\?token=[^\s"'<>]+/
+  );
+  return match?.[0] ?? null;
+}
+
 async function closeServer(server, label) {
   if (!server) return;
   console.log(`cleanup: closing ${label}`);
@@ -289,6 +401,8 @@ async function main() {
   let authProcess;
   let gatewayProcess;
   let frontendProcess;
+  let authPool;
+  let smtpCapture;
   let storageRoot;
   let mongo;
   const agents = [];
@@ -304,27 +418,12 @@ async function main() {
     dbUrl.pathname = `/${dbName}`;
     databaseUrl = dbUrl.toString();
 
-    const authPool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
-    let credentialId;
-    try {
-      const authMigration = await readFile(
-        path.join(authDir, "src/db/migrations/001_initial.sql"),
-        "utf8"
-      );
-      await authPool.query(authMigration);
-
-      const bcrypt = authRequire("bcrypt");
-      const passwordHash = await bcrypt.hash(LOGIN_PASSWORD, 4);
-      const credential = await authPool.query(
-        `insert into credentials (email, password_hash, email_verified)
-         values ($1, $2, true) returning id`,
-        [LOGIN_EMAIL, passwordHash]
-      );
-      credentialId = credential.rows[0]?.id;
-    } finally {
-      await authPool.end();
-    }
-    check("acceptance credential was seeded", typeof credentialId === "string");
+    authPool = new Pool({ connectionString: databaseUrl, connectionTimeoutMillis: 5_000, query_timeout: 5_000 });
+    const authMigration = await readFile(
+      path.join(authDir, "src/db/migrations/001_initial.sql"),
+      "utf8"
+    );
+    await authPool.query(authMigration);
 
     const { MongoMemoryServer } = controlPlaneRequire("mongodb-memory-server");
     mongo = await withTimeout(
@@ -372,6 +471,8 @@ async function main() {
     const controlPlaneUrl = `http://127.0.0.1:${controlPlaneServer.address().port}`;
     console.log(`\ncontrol plane listening on ${controlPlaneUrl}`);
 
+    smtpCapture = await startSmtpCapture();
+    const frontendOrigin = `http://127.0.0.1:${FRONTEND_PORT}`;
     authProcess = startProcess(
       "npm",
       ["run", "start"],
@@ -381,6 +482,10 @@ async function main() {
         DATABASE_URL: databaseUrl,
         NODE_ENV: "test",
         PORT: String(AUTH_PORT),
+        APP_ORIGIN: frontendOrigin,
+        SMTP_HOST: "127.0.0.1",
+        SMTP_PORT: String(smtpCapture.port),
+        SMTP_SECURE: "false",
       }
     );
     await waitForHttp(`http://127.0.0.1:${AUTH_PORT}/api/health`, authProcess, "auth service");
@@ -423,8 +528,86 @@ async function main() {
       frontendProcess,
       "Next.js frontend"
     );
-    const frontendUrl = `http://127.0.0.1:${FRONTEND_PORT}`;
+    const frontendUrl = frontendOrigin;
     console.log(`frontend listening on ${frontendUrl}`);
+
+    console.log("\nsign up through the Next.js web route and verify through its SMTP link");
+    const signupResponse = await request(`${frontendUrl}/api/auth/signup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: LOGIN_EMAIL, password: LOGIN_PASSWORD }),
+    });
+    const signupBody = await jsonOrNull(signupResponse);
+    const signupRawCookies = responseSetCookies(signupResponse);
+    const signupCookieNames = responseCookies(signupResponse).map((cookie) => cookie.split("=", 1)[0]);
+    check("Next signup route created an unverified credential", signupResponse.status === 201 && signupBody?.emailVerified === false, JSON.stringify(signupBody));
+    check(
+      "Next signup route forwarded httpOnly loopback auth cookies without Secure",
+      ["session", "refresh_token"].every((name) =>
+        signupRawCookies.some(
+          (cookie) =>
+            cookie.trimStart().startsWith(`${name}=`) &&
+            /;\s*HttpOnly(?:;|$)/i.test(cookie) &&
+            !/;\s*Secure(?:;|$)/i.test(cookie)
+        )
+      ) && signupCookieNames.includes("session") && signupCookieNames.includes("refresh_token")
+    );
+
+    const signupCredential = await authPool.query(
+      "select id, email_verified from credentials where email = $1",
+      [LOGIN_EMAIL]
+    );
+    const credentialId = signupCredential.rows[0]?.id;
+    check("signup persisted the acceptance credential", typeof credentialId === "string" && signupCredential.rows[0]?.email_verified === false);
+
+    let verificationMessage;
+    try {
+      verificationMessage = await smtpCapture.waitForMessage();
+    } catch (error) {
+      check("SMTP capture received the verification email", false, error instanceof Error ? error.message : String(error));
+    }
+    const verificationUrl = verificationMessage ? extractVerificationUrl(verificationMessage) : null;
+    check("SMTP capture contained a verification URL", Boolean(verificationUrl));
+    check(
+      "SMTP verification URL targets the frontend origin",
+      verificationUrl?.startsWith(`${frontendUrl}/api/auth/verify-email?token=`) === true
+    );
+    let verificationLocation;
+    if (verificationUrl) {
+      const verificationResponse = await request(verificationUrl, { redirect: "manual" });
+      verificationLocation = verificationResponse.headers.get("location") ?? "";
+      let localResultUrl;
+      try {
+        localResultUrl = new URL(verificationLocation, frontendUrl);
+      } catch {
+        localResultUrl = null;
+      }
+      const hasExpectedResult =
+        verificationResponse.status >= 300 && verificationResponse.status < 400 &&
+        localResultUrl?.origin === frontendUrl &&
+        localResultUrl.pathname === "/verify-email" &&
+        localResultUrl.searchParams.get("status") === "success";
+      check(
+        "Next verification bridge returned the local success result",
+        hasExpectedResult,
+        `status ${verificationResponse.status}, location ${verificationLocation || "missing"}`
+      );
+      if (hasExpectedResult) {
+        const resultPageResponse = await request(localResultUrl, { redirect: "manual" });
+        const resultPage = await resultPageResponse.text();
+        check(
+          "public verification result page rendered",
+          resultPageResponse.status === 200 &&
+            resultPage.includes("Email verified") &&
+            resultPage.includes("Your Benzene account is ready.")
+        );
+      }
+    }
+    const verifiedCredential = await authPool.query(
+      "select email_verified from credentials where id = $1",
+      [credentialId ?? null]
+    );
+    check("email verification persisted true", verifiedCredential.rows[0]?.email_verified === true);
 
     console.log("\nlogin through the Next.js web route");
     const loginResponse = await request(`${frontendUrl}/api/auth/login`, {
@@ -444,7 +627,7 @@ async function main() {
         session.length > 0 &&
         rawCookies.some((cookie) => /^\s*session=/.test(cookie) && /;\s*HttpOnly(?:;|$)/i.test(cookie))
     );
-    check("Next login route session JWT identifies the seeded credential", claims?.sub === credentialId);
+    check("Next login route session JWT identifies the created credential", claims?.sub === credentialId);
     check("Next login route session JWT carries the login email", claims?.email === LOGIN_EMAIL);
 
     const cookieHeader = cookies.join("; ");
@@ -720,6 +903,8 @@ async function main() {
     await cleanupStep("stopping frontend process group", () => stopProcess(frontendProcess));
     await cleanupStep("stopping gateway process group", () => stopProcess(gatewayProcess));
     await cleanupStep("stopping auth process group", () => stopProcess(authProcess));
+    await cleanupStep("closing SMTP capture server", () => smtpCapture?.close());
+    await cleanupStep("closing auth database pool", () => authPool?.end());
     await cleanupStep("closing control-plane server", () => closeServer(controlPlaneServer, "control plane"));
     await cleanupStep("disconnecting control-plane MongoDB", async () => {
       await controlPlaneRequire("mongoose").disconnect();
