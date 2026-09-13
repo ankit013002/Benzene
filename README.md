@@ -46,12 +46,15 @@ enrollment and uses Ed25519 request signatures instead.
 
 | Component | Stack | Port | Current role |
 | --- | --- | ---: | --- |
-| `nebulavault-frontend` | Next.js 15, React 19, TypeScript | 3000 | Web UI and browser-side hashing/transfers |
+| `nebulavault-frontend` | Next.js 16.3.5, React/react-dom 19.3.0, TypeScript | 3000 | Web UI and browser-side hashing/transfers; routing guard in `src/proxy.ts` |
 | `nebula-gateway` | Java 21, Spring Cloud Gateway | 8080 | Session verification and routing |
 | `benzene-auth-service` | Node 20, Express 5, TypeScript, PostgreSQL | 4000 | Email/password auth and cookies |
 | `benzene-control-plane` | Node 20, Express 5, TypeScript, PostgreSQL + MongoDB | 5000 | Vaults, devices, placement and file metadata |
 | `benzene-node-agent` | Node 20, Express 5, TypeScript | 7070 | Device identity, heartbeat and LAN object store |
 | `nebulavault-user-service` | Java 21, Spring Boot, PostgreSQL | 8082 | User profile bootstrap and quota fields |
+
+The frontend requires Node **20.9 or newer**. The former Next.js middleware
+request guard now lives in `src/proxy.ts`.
 
 The frontend, auth service, gateway, control plane and user service have
 production Dockerfiles and are published by the release workflow. The node
@@ -63,14 +66,21 @@ committed `.env.example`; its runtime stage contains only `public`, Next
 standalone, and `.next/static` artifacts. The frontend, auth-service, gateway,
 control-plane and user-service production runtime images run as dedicated
 non-root `benzene` users. The node agent remains a host/LAN process. The
-verified auth-service production-only dependency audit
-(`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
-repository-wide audit.
+Full `npm audit` reports 0 vulnerabilities for the frontend, node-agent and
+auth-service; the frontend's production-only (`npm audit --omit=dev`) audit
+also reports 0, and the control-plane's production-only audit reports 0. The
+control-plane full audit still reports four moderate, dev-only `esbuild`
+findings through `drizzle-kit`; the only offered forced fix is a breaking
+downgrade, so these package-specific results must not be summarized as a
+repository-wide zero.
 
 ## What works today
 
 - Email/password signup, login, logout, refresh, email verification and
   password reset through the self-contained auth service.
+- Signup verification links route through the Next server bridge to a public,
+  token-free result page. CI run `34766377357` verified the change at commit
+  `cbaa8df`.
 - Vault creation and device enrollment with a pairing code and explicit user
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
@@ -110,6 +120,12 @@ repository-wide audit.
   execution, CORS/mixed-content/browser enforcement, remote/TLS transfer,
   encryption, garbage collection, SMTP signup delivery and the user service
   remain outside this acceptance.
+- Frontend transfer helpers have six deterministic `node:test`/`tsx` tests for
+  hashing and reservation, direct Protected uploads, completion gating,
+  pending/shortfall errors, download fallback and safe DOM cleanup. A live
+  browser check verifies the landing page renders without an overlay and can
+  navigate to sign-in; it also caught and fixed CSS import ordering and a
+  missing base selector.
 - An atomic, allocation-bounded node object store with restart-safe usage
   accounting.
 - Vault and Devices views plus the current file-management UI.
@@ -372,6 +388,11 @@ the real control plane and node agent itself and talks directly to the control
 plane; it requires a reachable PostgreSQL instance, built packages and
 MongoMemoryServer, and is not a mocked unit test.
 
+The control-plane, node-agent and auth-service test suites use Vitest **4.1.11**
+to preserve Node 20 compatibility and resolve the prior Vitest advisory. The
+frontend transfer-helper tests use Node's built-in `node:test` and `node:assert`
+through `tsx`.
+
 The authenticated LAN acceptance (`node scripts/smoke-auth-gateway.mjs`) starts
 the real auth service, control plane, Java gateway, Next server and two node
 agents. It exercises authenticated Next web routes and direct LAN device
@@ -383,9 +404,11 @@ browser enforcement. Remote/TLS transfer, encryption, garbage collection,
 SMTP signup delivery, and the user service are not covered.
 
 Verified counts: control plane **342** tests, agent **115**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway **18**, and **63 smoke
-checks**. The integrated authenticated LAN acceptance has **38 runtime checks**
-and was verified green by CI run `34733026052` at commit `54582ae`.
+real-Postgres concurrency test is enabled, gateway **18**, frontend transfer
+helpers **6**, and **63 smoke checks**. The integrated authenticated LAN
+acceptance has **38 runtime checks** and was verified green by CI run
+`34766126414` at commit `99059c7`. Default Turbopack and Webpack production
+builds pass.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. It runs the

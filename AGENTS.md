@@ -47,7 +47,7 @@ storage-layer work.
 | `benzene-node-agent/` | Runs on a user's computer; contributes storage | Node 20, Express 5, TypeScript (strict) |
 | `benzene-auth-service/` | Email/password auth, JWT issuance | Node 20, Express 5, TypeScript, PostgreSQL |
 | `nebula-gateway/` | Edge: verifies JWTs, injects identity headers, routes | **Java 21**, Spring Cloud Gateway |
-| `nebulavault-frontend/` | Web app | Next.js 15, React 19, TypeScript, Tailwind + DaisyUI |
+| `nebulavault-frontend/` | Web app | Next.js 16.3.5, React/react-dom 19.3.0, TypeScript, Tailwind + DaisyUI; routing guard in `src/proxy.ts` |
 | `nebulavault-user-service/` | User profiles, quota fields | Java 21, Spring Boot |
 | `infrastructure/terraform/` | S3 bucket + least-privilege IAM | Terraform |
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
@@ -93,6 +93,8 @@ npm install && npm run dev
 # frontend
 cd nebulavault-frontend
 npm install && npm run dev
+# Requires Node >=20.9. The former Next.js middleware request guard now lives
+# in `src/proxy.ts`.
 
 # gateway — see the JDK note below
 cd nebula-gateway && ./mvnw test
@@ -391,9 +393,15 @@ vectors and updating both files in the same commit.
 - Control-plane tests use a **real PostgreSQL**, one throwaway database per test
   file. The behaviour under test lives largely *in* the database — partial
   unique indexes, `for update` locking, aggregate filters — and a fake that
-  disagrees with Postgres is worse than no test. Per-file databases because
-  Vitest runs files in parallel and a shared one has each file truncating
-  another's fixtures mid-run.
+  disagrees with Postgres is worse than no test. Per-file databases keep each
+  file isolated when the test runner runs files in parallel.
+- The control-plane, node-agent and auth-service test suites use Vitest
+  **4.1.11**, which preserves Node 20 compatibility and resolves the prior
+  Vitest advisory.
+- Frontend transfer-helper tests use Node's built-in `node:test` and
+  `node:assert` through `tsx`; six deterministic tests cover reservation
+  hashing, direct Protected PUTs and grants, completion gating, pending and
+  shortfall errors, download fallback and safe browser download cleanup.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
   plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
   inventory recovery, upload to device, download back, authentication
@@ -429,25 +437,33 @@ node scripts/smoke-auth-gateway.mjs
 ```
 
 Current counts: control plane **342**, agent **115**, auth **78** when its
-real-Postgres concurrency test is enabled, gateway **18**. The core
-cross-package smoke has **63 checks**; the three-device Protected repair smoke
-has **40 checks**. These smoke milestones were verified by CI run
+real-Postgres concurrency test is enabled, gateway **18**, frontend
+transfer-helper **6**. The core cross-package smoke has **63 checks**; the
+three-device Protected repair smoke has **40 checks**. These smoke milestones
+were verified by CI run
 `34719594345` at commit `41462e8`.
 The integrated authenticated LAN acceptance has **38 runtime checks** and was
-verified green by CI run `34733026052` at commit `54582ae`.
+verified green by CI run `34766126414` at commit `99059c7`. Default Turbopack
+and Webpack production builds pass, and a live browser check verified that the
+landing page renders without an overlay and navigates to sign-in; that check
+also caught and fixed CSS import ordering and a missing base selector.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
 a host/LAN process. The frontend Docker context
 excludes local `.env*` files while allowing the committed `.env.example`; its
 runtime stage contains only `public`, Next standalone, and `.next/static`
-artifacts. The verified auth-service production-only dependency
-audit (`npm audit --omit=dev`) reported 0 vulnerabilities; this is not a
-repository-wide audit. Logout clears browser credentials even when upstream
-revocation is unavailable; the protected client leaves the session UI and keeps
-that revocation failure observable. File and folder removal asks for
-confirmation, and folder removal explicitly warns that descendants are
-included.
+artifacts. Full `npm audit` reports 0 vulnerabilities for the frontend,
+node-agent and auth-service; the frontend's production-only
+(`npm audit --omit=dev`) audit also reports 0, and the control-plane's
+production-only audit reports 0. The control-plane full audit still reports
+four moderate, dev-only `esbuild` findings through `drizzle-kit`; the only
+offered forced fix is a breaking downgrade, so these package-specific results
+must not be summarized as a repository-wide zero. Logout clears browser
+credentials even when upstream revocation is unavailable; the protected client
+leaves the session UI and keeps that revocation failure observable. File and
+folder removal asks for confirmation, and folder removal explicitly warns that
+descendants are included.
 
 ### Testing conventions
 
@@ -508,6 +524,9 @@ the standard to match.
 
 - Self-contained email/password auth; gateway JWT verification and header
   injection
+- Signup verification links route through the Next server bridge to a public,
+  token-free result page. CI run `34766377357` verified the change at commit
+  `cbaa8df`.
 - Authenticated LAN web-route and topology acceptance through Next.js, the
   Java gateway, auth/control plane and two real node agents: enrollment and
   approval, heartbeats, a default Protected two-device upload, completion,
@@ -536,6 +555,11 @@ the standard to match.
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - **Uploads route to devices end to end**, with downloads reading back
+- Frontend transfer helpers have six deterministic `node:test`/`tsx` tests for
+  hashing and reservation, direct Protected uploads, completion gating,
+  pending/shortfall errors, download fallback and safe DOM cleanup. A live
+  browser check also verifies the landing page renders without an overlay and
+  can navigate to sign-in.
 - Devices screen and vault summary in the web app
 - File and folder removal confirmation, including an explicit recursive-folder
   warning
