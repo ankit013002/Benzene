@@ -351,6 +351,14 @@ function extractVerificationUrl(message) {
   return match?.[0] ?? null;
 }
 
+function isLoopbackFrontendOrigin(url) {
+  return (
+    url.protocol === "http:" &&
+    url.port === String(FRONTEND_PORT) &&
+    (url.hostname === "127.0.0.1" || url.hostname === "localhost")
+  );
+}
+
 async function closeServer(server, label) {
   if (!server) return;
   console.log(`cleanup: closing ${label}`);
@@ -584,7 +592,8 @@ async function main() {
       }
       const hasExpectedResult =
         verificationResponse.status >= 300 && verificationResponse.status < 400 &&
-        localResultUrl?.origin === frontendUrl &&
+        localResultUrl !== null &&
+        isLoopbackFrontendOrigin(localResultUrl) &&
         localResultUrl.pathname === "/verify-email" &&
         localResultUrl.searchParams.get("status") === "success";
       check(
