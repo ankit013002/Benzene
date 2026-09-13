@@ -2,6 +2,7 @@
 
 import React, { useId, useState } from "react";
 import { useRouter } from "next/navigation";
+import { authDestination } from "@/utils/auth/authDestination";
 
 export default function RegisterForm() {
   const router = useRouter();
@@ -43,15 +44,15 @@ export default function RegisterForm() {
         }),
       });
 
+      const body = (await response.json().catch(() => null)) as
+        | { message?: string; error?: string; emailVerified?: boolean }
+        | null;
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { message?: string; error?: string }
-          | null;
         setError(body?.message ?? body?.error ?? "Unable to create your account.");
         return;
       }
 
-      router.replace("/dashboard");
+      router.replace(authDestination(body?.emailVerified));
       router.refresh();
     } catch {
       setError("Unable to reach Benzene. Please try again.");

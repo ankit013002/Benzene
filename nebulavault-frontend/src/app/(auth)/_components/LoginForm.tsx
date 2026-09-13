@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { authDestination } from "@/utils/auth/authDestination";
 
 export default function LoginForm() {
   const router = useRouter();
@@ -34,10 +35,10 @@ export default function LoginForm() {
         body: JSON.stringify({ email: normalizedEmail, password }),
       });
 
+      const body = (await response.json().catch(() => null)) as
+        | { message?: string; error?: string; emailVerified?: boolean }
+        | null;
       if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as
-          | { message?: string; error?: string }
-          | null;
         setError(body?.message ?? body?.error ?? "Unable to sign in.");
         return;
       }
@@ -45,11 +46,7 @@ export default function LoginForm() {
       const destination = new URLSearchParams(window.location.search).get(
         "next",
       );
-      router.replace(
-        destination?.startsWith("/") && !destination.startsWith("//")
-          ? destination
-          : "/dashboard",
-      );
+      router.replace(authDestination(body?.emailVerified, destination));
       router.refresh();
     } catch {
       setError("Unable to reach Benzene. Please try again.");

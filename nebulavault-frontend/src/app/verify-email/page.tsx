@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { CircleAlert, CircleCheck } from "lucide-react";
+import { CircleAlert, CircleCheck, Mail, type LucideIcon } from "lucide-react";
 
 import AuthShell from "../(auth)/_components/AuthShell";
+import VerificationPendingActions from "../(auth)/_components/VerificationPendingActions";
 
-type VerificationStatus = "success" | "missing" | "invalid";
+type VerificationStatus = "success" | "pending" | "missing" | "invalid";
 
 type VerifyEmailPageProps = {
   searchParams: Promise<{ status?: string | string[] }>;
@@ -15,7 +16,7 @@ const CONTENT: Record<
     title: string;
     subtitle: string;
     detail: string;
-    icon: typeof CircleCheck;
+    icon: LucideIcon;
     iconClassName: string;
   }
 > = {
@@ -25,6 +26,14 @@ const CONTENT: Record<
     detail: "Your email address has been confirmed. Sign in to open your Vault.",
     icon: CircleCheck,
     iconClassName: "text-bz-success",
+  },
+  pending: {
+    title: "Check your inbox",
+    subtitle: "Your Benzene account is almost ready.",
+    detail:
+      "We sent a verification link to your email address. Confirm it to keep your Vault secure, then sign in.",
+    icon: Mail,
+    iconClassName: "text-bz-primary",
   },
   missing: {
     title: "Verification link incomplete",
@@ -44,7 +53,11 @@ const CONTENT: Record<
 
 function normalizeStatus(value: string | string[] | undefined): VerificationStatus {
   const status = Array.isArray(value) ? value[0] : value;
-  return status === "success" || status === "missing" ? status : "invalid";
+  return status === "success" ||
+    status === "pending" ||
+    status === "missing"
+    ? status
+    : "invalid";
 }
 
 export const metadata = {
@@ -56,7 +69,8 @@ export default async function VerifyEmailPage({
   searchParams,
 }: VerifyEmailPageProps) {
   const params = await searchParams;
-  const content = CONTENT[normalizeStatus(params.status)];
+  const status = normalizeStatus(params.status);
+  const content = CONTENT[status];
   const Icon = content.icon;
 
   return (
@@ -69,9 +83,13 @@ export default async function VerifyEmailPage({
           <p className="pt-1 text-sm leading-6 text-bz-muted">{content.detail}</p>
         </div>
 
-        <Link href="/login" className="btn btn-neutral w-full">
-          Continue to sign in
-        </Link>
+        {status === "pending" ? (
+          <VerificationPendingActions />
+        ) : (
+          <Link href="/login" className="btn btn-neutral w-full">
+            Continue to sign in
+          </Link>
+        )}
       </div>
     </AuthShell>
   );

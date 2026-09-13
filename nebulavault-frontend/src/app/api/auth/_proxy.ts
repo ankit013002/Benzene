@@ -33,6 +33,7 @@ export async function proxyAuthRequest(
     | "/auth/signup"
     | "/auth/logout"
     | "/auth/refresh"
+    | "/auth/resend-verification"
     | "/auth/forgot-password"
     | "/auth/reset-password",
   request: NextRequest,
@@ -49,7 +50,9 @@ export async function proxyAuthRequest(
       method: "POST",
       headers,
       body:
-        path === "/auth/logout" || path === "/auth/refresh"
+        path === "/auth/logout" ||
+        path === "/auth/refresh" ||
+        path === "/auth/resend-verification"
           ? undefined
           : await request.text(),
       cache: "no-store",
