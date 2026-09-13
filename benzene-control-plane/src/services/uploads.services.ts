@@ -4,7 +4,7 @@ import type { Types } from "mongoose";
 
 import { config } from "../config/env.js";
 import DriveNodeModel, { normalizePath, type DriveNodeDocument } from "../models/driveNode.model.js";
-import FileVersionModel from "../models/fileVersion.model.js";
+import FileVersionModel, { type FileVersionDocument } from "../models/fileVersion.model.js";
 import { storage } from "../storage/index.js";
 import type { UploadTarget } from "../storage/types.js";
 import { AppError } from "../utils/AppError.js";
@@ -171,20 +171,22 @@ export async function presignUploads(
       throw AppError.conflict(`"${file.name}" already exists as a folder`);
     }
 
-    const version = await nextVersionFor(node._id);
-    const key = buildObjectKey({ ownerId, nodeId: node._id.toString(), version });
-
-    const versionDoc = await FileVersionModel.create({
-      nodeId: node._id,
-      ownerId,
-      version,
-      bytes: file.size,
-      contentType,
-      storage: { driver: driver.name, bucket: driver.bucket, key },
-      status: "pending",
-      uploadedBy: ownerId,
-      isCurrent: false,
+    const versionDoc = await reserveVersion(node._id, async (version) => {
+      const key = buildObjectKey({ ownerId, nodeId: node._id.toString(), version });
+      return FileVersionModel.create({
+        nodeId: node._id,
+        ownerId,
+        version,
+        bytes: file.size,
+        contentType,
+        storage: { driver: driver.name, bucket: driver.bucket, key },
+        status: "pending",
+        uploadedBy: ownerId,
+        isCurrent: false,
+      });
     });
+    const version = versionDoc.version;
+    const key = buildObjectKey({ ownerId, nodeId: node._id.toString(), version });
 
     const upload = await driver.createUploadTarget({
       key,
@@ -250,19 +252,21 @@ export async function reserveDeviceUpload(
   }
 
   const objectHash = input.sha256.toLowerCase();
-  const version = await nextVersionFor(node._id);
-  const versionDoc = await FileVersionModel.create({
-    nodeId: node._id,
-    ownerId,
-    version,
-    bytes: input.size,
-    contentType,
-    sha256: objectHash,
-    objectHash,
-    status: "pending",
-    uploadedBy: ownerId,
-    isCurrent: false,
-  });
+  const versionDoc = await reserveVersion(node._id, (version) =>
+    FileVersionModel.create({
+      nodeId: node._id,
+      ownerId,
+      version,
+      bytes: input.size,
+      contentType,
+      sha256: objectHash,
+      objectHash,
+      status: "pending",
+      uploadedBy: ownerId,
+      isCurrent: false,
+    })
+  );
+  const version = versionDoc.version;
 
   let placement: UploadPlan;
   try {
@@ -292,6 +296,49 @@ async function nextVersionFor(nodeId: Types.ObjectId): Promise<number> {
     .select("version")
     .lean();
   return (latest?.version ?? 0) + 1;
+}
+
+const VERSION_RESERVATION_MAX_ATTEMPTS = 32;
+
+/**
+ * Reserves an immutable version number at the unique Mongo index boundary.
+ *
+ * Mongo does not provide a row lock for the read-then-insert sequence used by
+ * the legacy version schema. Concurrent reservations can therefore select the
+ * same next number; one wins the unique (nodeId, version) index and the others
+ * retry from a fresh read. The bound keeps a hot file from retrying forever.
+ */
+async function reserveVersion(
+  nodeId: Types.ObjectId,
+  create: (version: number) => Promise<FileVersionDocument>
+): Promise<FileVersionDocument> {
+  for (let attempt = 0; attempt < VERSION_RESERVATION_MAX_ATTEMPTS; attempt += 1) {
+    const version = await nextVersionFor(nodeId);
+    try {
+      return await create(version);
+    } catch (error) {
+      if (!isVersionCollision(error) || attempt === VERSION_RESERVATION_MAX_ATTEMPTS - 1) {
+        throw error;
+      }
+    }
+  }
+
+  // The loop always returns or throws; retain an explicit guard for strict
+  // control-flow checking if the attempt policy changes later.
+  throw new Error("Version reservation retry limit reached");
+}
+
+function isVersionCollision(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const duplicate = error as {
+    code?: unknown;
+    keyPattern?: Record<string, unknown>;
+    keyValue?: Record<string, unknown>;
+  };
+  return (
+    duplicate.code === 11000 &&
+    (duplicate.keyPattern?.version !== undefined || duplicate.keyValue?.version !== undefined)
+  );
 }
 
 const PROMOTION_LOCK_TTL_MS = 30_000;

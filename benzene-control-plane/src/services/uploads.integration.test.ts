@@ -12,6 +12,7 @@ import FileVersionModel from "../models/fileVersion.model.js";
 import { LocalStorageDriver } from "../storage/local.driver.js";
 import { setStorageDriver } from "../storage/index.js";
 import * as placementService from "../modules/placement/placement.service.js";
+import * as uploadTargetsService from "../modules/placement/uploadTargets.service.js";
 import {
   createFolders,
   deleteNode,
@@ -22,6 +23,7 @@ import {
   completeDeviceUploads,
   completeUploads,
   presignUploads,
+  reserveDeviceUpload,
 } from "./uploads.services.js";
 
 const OWNER = "user-alpha";
@@ -300,6 +302,139 @@ describe("upload lifecycle", () => {
 });
 
 describe("versioning", () => {
+  it("allocates distinct legacy versions when reservations race and promotes the highest completion", async () => {
+    const node = await DriveNodeModel.create({
+      ownerId: OWNER,
+      type: "file",
+      name: "racing-legacy.txt",
+      nameLower: "racing-legacy.txt",
+      path: "",
+      parentId: null,
+      ancestors: [],
+      createdBy: OWNER,
+    });
+    const reservationCount = 16;
+
+    const batches = await Promise.all(
+      Array.from({ length: reservationCount }, () =>
+        presignUploads(OWNER, {
+          path: "",
+          files: [{ name: node.name, size: 1 }],
+        })
+      )
+    );
+    const reservations = batches.map((batch) => batch[0]!);
+    const highest = reservations.reduce((winner, reservation) =>
+      reservation.version > winner.version ? reservation : winner
+    );
+
+    expect(reservations.map((upload) => upload.nodeId)).toEqual(
+      Array(reservationCount).fill(node._id.toString())
+    );
+    expect(reservations.map((upload) => upload.version).sort((a, b) => a - b)).toEqual(
+      Array.from({ length: reservationCount }, (_, index) => index + 1)
+    );
+
+    for (const reservation of [...reservations].sort((a, b) => b.version - a.version)) {
+      await uploadBytes(reservation.key, "x".repeat(reservation.version));
+      await completeUploads(OWNER, [reservation.versionId]);
+    }
+
+    const versions = await FileVersionModel.find({ nodeId: node._id }).sort({ version: 1 }).lean();
+    expect(versions.map((version) => [version.version, version.status, version.isCurrent])).toEqual(
+      Array.from({ length: reservationCount }, (_, index) => [index + 1, "committed", index + 1 === reservationCount])
+    );
+    await expect(DriveNodeModel.findById(node._id).lean()).resolves.toMatchObject({
+      bytes: highest.version,
+      versionsCount: reservationCount,
+    });
+  });
+
+  it("allocates distinct device versions when reservations race and promotes the highest completion", async () => {
+    const node = await DriveNodeModel.create({
+      ownerId: OWNER,
+      type: "file",
+      name: "racing-device.bin",
+      nameLower: "racing-device.bin",
+      path: "",
+      parentId: null,
+      ancestors: [],
+      createdBy: OWNER,
+    });
+    const reservationCount = 16;
+    const placementSpy = vi
+      .spyOn(uploadTargetsService, "planUpload")
+      .mockImplementation(async (_ownerId, input) => ({
+        objectHash: input.objectHash,
+        sizeBytes: input.sizeBytes,
+        desiredReplicas: 1,
+        alreadyHeldBy: [],
+        targets: [],
+        shortfall: false,
+        singleCopy: true,
+      }));
+    const protectionSpy = vi
+      .spyOn(placementService, "getObjectProtection")
+      .mockImplementation(async (_ownerId, objectHash) => ({
+        objectHash,
+        desiredReplicas: 1,
+        healthyReplicas: 1,
+        reachableHealthyReplicas: 1,
+        placingReplicas: 0,
+        state: "healthy",
+        availability: "available",
+        deviceIds: ["device-for-test"],
+      }));
+
+    try {
+      const reservations = await Promise.all(
+        Array.from({ length: reservationCount }, (_, index) =>
+          reserveDeviceUpload(OWNER, {
+            name: node.name,
+            path: "",
+            size: index + 1,
+            sha256: index.toString(16).padStart(64, "0"),
+          })
+        )
+      );
+
+      expect(reservations.map((upload) => upload.nodeId)).toEqual(
+        Array(reservationCount).fill(node._id.toString())
+      );
+      expect(reservations.map((upload) => upload.version).sort((a, b) => a - b)).toEqual(
+        Array.from({ length: reservationCount }, (_, index) => index + 1)
+      );
+
+      for (const reservation of [...reservations].sort((a, b) => b.version - a.version)) {
+        await completeDeviceUploads(OWNER, [reservation.versionId]);
+      }
+
+      const highest = reservations.reduce((winner, reservation) =>
+        reservation.version > winner.version ? reservation : winner
+      );
+      expect(highest.version).toBe(reservationCount);
+
+      const versions = await FileVersionModel.find({ nodeId: node._id })
+        .sort({ version: 1 })
+        .lean();
+      expect(
+        versions.map((version) => [version.version, version.status, version.isCurrent])
+      ).toEqual(
+        Array.from(
+          { length: reservationCount },
+          (_, index) => [index + 1, "committed", index + 1 === reservationCount]
+        )
+      );
+      await expect(DriveNodeModel.findById(node._id).lean()).resolves.toMatchObject({
+        bytes: highest.sizeBytes,
+        versionsCount: reservationCount,
+      });
+    } finally {
+      placementSpy.mockRestore();
+      protectionSpy.mockRestore();
+    }
+  });
+
   it("keeps one current version while retaining history", async () => {
     const upload = async (body: string): Promise<void> => {
       const [presigned] = await presignUploads(OWNER, {
