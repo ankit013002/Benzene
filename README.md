@@ -76,11 +76,16 @@ repository-wide zero.
 
 ## What works today
 
-- Email/password signup, login, logout, refresh, email verification and
-  password reset through the self-contained auth service.
+- Email/password signup, login, logout, refresh and email verification through
+  the self-contained auth service.
 - Signup verification links route through the Next server bridge to a public,
-  token-free result page. CI run `34766377357` verified the change at commit
-  `cbaa8df`.
+  token-free result page. The authenticated LAN smoke now signs up through
+  Next, captures the loopback SMTP message, follows the verification bridge and
+  checks the persisted verification state. CI run `34767541328` at commit
+  `9a61829` is green with exactly 54 integrated acceptance `ok` assertions.
+- Browser password-recovery pages and same-origin request bridges now exist.
+  The same acceptance covers reset requests, reset completion, one-shot token
+  rejection, old-password rejection and new-password login.
 - Vault creation and device enrollment with a pairing code and explicit user
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
@@ -116,10 +121,16 @@ repository-wide zero.
   gateway, auth/control plane and two real node agents: enrollment and
   approval, heartbeats, a default Protected two-device upload, completion,
   listing, protection/read planning and byte-identical reads from both agents
-  are verified in CI. This is not a browser-runtime test; frontend helper
-  execution, CORS/mixed-content/browser enforcement, remote/TLS transfer,
-  encryption, garbage collection, SMTP signup delivery and the user service
-  remain outside this acceptance.
+  are verified in CI. The current harness also exercises signup and email
+  verification through loopback SMTP. This is not a browser-runtime test;
+  frontend helper execution, CORS/mixed-content/browser enforcement,
+  remote/TLS transfer, encryption and garbage collection remain outside this
+  54-assertion LAN acceptance; the user service has a separate acceptance below.
+- The user-profile acceptance signs up through Next, captures SMTP delivery,
+  verifies pre-bootstrap 404 behavior, bootstraps and reads the persisted
+  profile through the gateway and Next bridge, checks default profile/quota
+  fields, and verifies anonymous redirects/401 responses. It has exactly 12
+  `ok` assertions and is green in CI run `34768007763` at commit `090c7eb`.
 - Frontend transfer helpers have six deterministic `node:test`/`tsx` tests for
   hashing and reservation, direct Protected uploads, completion gating,
   pending/shortfall errors, download fallback and safe DOM cleanup. A live
@@ -178,6 +189,17 @@ repository-wide zero.
   Device and placement graph is in PostgreSQL.
 - Node-agent private keys are protected as `0600` files rather than native
   Keychain/DPAPI/Keystore storage.
+
+### Device-first MVP and commercial blockers
+
+The architecture's earliest commercially testable MVP includes desktop, mobile
+and web clients, with optional cloud protection. This branch validates the
+control plane, node agent and web/LAN device-first slice; it is not yet that
+commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
+access, encryption and key recovery, cloud-protection policy and billing,
+rebalancing, chunking, garbage collection, sharing and search remain blockers.
+Availability, single-copy policy and key recovery remain open product
+questions; this status does not resolve them.
 
 ## Security model
 
@@ -378,6 +400,10 @@ cd benzene-auth-service && npm ci && npm run test:run
 cd benzene-control-plane && npm ci && npm run typecheck && npm test
 cd benzene-node-agent && npm ci && npm run typecheck && npm test
 cd nebula-gateway && ./mvnw -B -ntp test
+
+# acceptance (after building the required services)
+node scripts/smoke-auth-gateway.mjs
+node scripts/smoke-user-profile.mjs
 ```
 
 Control-plane tests use real PostgreSQL and create throwaway databases per test
@@ -396,19 +422,29 @@ through `tsx`.
 The authenticated LAN acceptance (`node scripts/smoke-auth-gateway.mjs`) starts
 the real auth service, control plane, Java gateway, Next server and two node
 agents. It exercises authenticated Next web routes and direct LAN device
-transfers, including pairing approval, heartbeats, Protected upload,
-completion/list/protection/read planning, and byte-identical reads from both
-agents. It is an HTTP route/topology harness, not a browser-runtime test: it
-does not execute frontend helpers or validate CORS, mixed-content, or other
-browser enforcement. Remote/TLS transfer, encryption, garbage collection,
-SMTP signup delivery, and the user service are not covered.
+transfers, including signup and email verification through loopback SMTP,
+pairing approval, heartbeats, Protected upload, completion/list/protection/read
+planning, and byte-identical reads from both agents. It also covers password
+recovery requests and reset completion, one-shot token rejection, old-password
+rejection and new-password login. It is an HTTP route/topology harness, not a
+browser-runtime test: it does not execute frontend helpers or validate CORS,
+mixed-content, or other browser enforcement. Remote/TLS transfer, encryption
+and garbage collection are not covered by this 54-assertion LAN harness; the
+user service has a separate 12-assertion acceptance.
 
-Verified counts: control plane **342** tests, agent **115**, auth **78** when its
+The user-profile acceptance (`node scripts/smoke-user-profile.mjs`) starts the
+real auth service, gateway, user service and Next frontend. It covers real
+signup/session, SMTP delivery, pre-bootstrap 404, profile bootstrap and reads
+through the gateway and Next bridge, persisted default profile/quota fields,
+Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
+assertions and was green in CI run `34768007763` at commit `090c7eb`.
+
+Verified counts: control plane **342** tests, agent **115**, auth **77** when its
 real-Postgres concurrency test is enabled, gateway **18**, frontend transfer
-helpers **6**, and **63 smoke checks**. The integrated authenticated LAN
-acceptance has **38 runtime checks** and was verified green by CI run
-`34766126414` at commit `99059c7`. Default Turbopack and Webpack production
-builds pass.
+helpers **6**, user-profile acceptance **12 `ok` assertions**, and **63 smoke
+checks**. The integrated authenticated LAN acceptance has exactly **54 `ok`
+assertions** and was green in CI run `34767541328` at commit `9a61829`. Default
+Turbopack and Webpack production builds pass.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. It runs the
@@ -436,6 +472,8 @@ infrastructure/terraform/    Optional S3 Cloud Protection infrastructure
 scripts/smoke-agent.mjs      Cross-package HTTP smoke test
 scripts/smoke-auth-gateway.mjs
                               Authenticated LAN web-route/topology acceptance
+scripts/smoke-user-profile.mjs
+                              Authenticated user-profile bootstrap acceptance
 ```
 
 ## Roadmap

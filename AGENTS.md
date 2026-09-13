@@ -53,6 +53,7 @@ storage-layer work.
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
 | `scripts/smoke-protection.mjs` | Three-device Protected repair smoke test | Node |
 | `scripts/smoke-auth-gateway.mjs` | Authenticated LAN web-route and topology acceptance | Node |
+| `scripts/smoke-user-profile.mjs` | Authenticated user-profile bootstrap acceptance | Node |
 | `YAGNI-CODE/` | Notes on removed code. Not built. | — |
 | `simple-flask-server/` | Debug scratch. Not production. | — |
 
@@ -416,15 +417,25 @@ vectors and updating both files in the same commit.
   starts the real auth service, control plane, Java gateway, Next server and
   two real node agents. Agents enroll through gateway `/agent`, pairing codes
   are approved through Next `/api/devices/enrollments`, and heartbeats pass
-  through the gateway. Authenticated Next web routes reserve a default
-  Protected two-device upload, expose completion/list/protection/read-plan
-  results, and return direct agent URLs; the smoke PUTs to those URLs and
-  verifies byte-identical reads from both agents. It is an HTTP route/topology
-  harness, not a browser-runtime test: frontend helper execution, CORS,
-  mixed-content and other browser enforcement are not covered. Remote/TLS
-  transfer, encryption, garbage collection, SMTP signup delivery, and the
-  user service are also outside this smoke. It also checks gateway identity
-  header stripping and anonymous rejection.
+  through the gateway. It signs up through Next, captures and follows the
+  verification email through loopback SMTP, then authenticated Next web routes
+  reserve a default Protected two-device upload, expose
+  completion/list/protection/read-plan results, and return direct agent URLs;
+  the smoke PUTs to those URLs and verifies byte-identical reads from both
+  agents. It also covers password-recovery requests and reset completion,
+  one-shot token rejection, old-password rejection and new-password login. It
+  is an HTTP route/topology harness, not a browser-runtime test: frontend
+  helper execution, CORS, mixed-content and other browser enforcement are not
+  covered. Remote/TLS transfer, encryption and garbage collection are outside
+  this 54-assertion LAN smoke. The user service has a separate acceptance. It
+  also checks gateway identity header stripping and anonymous rejection.
+
+The separate `scripts/smoke-user-profile.mjs` acceptance starts the real auth
+service, gateway, user service and Next frontend. It covers real signup/session,
+SMTP delivery, pre-bootstrap 404, profile bootstrap and reads through the
+gateway and Next bridge, persisted default profile/quota fields, Next anonymous
+redirect and gateway anonymous 401 in exactly 12 `ok` assertions. It was green
+in CI run `34768007763` at commit `090c7eb`.
 
 ```bash
 # control plane
@@ -434,19 +445,23 @@ TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres npm test
 node scripts/smoke-agent.mjs
 node scripts/smoke-protection.mjs
 node scripts/smoke-auth-gateway.mjs
+node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **342**, agent **115**, auth **78** when its
+Current counts: control plane **342**, agent **115**, auth **77** when its
 real-Postgres concurrency test is enabled, gateway **18**, frontend
-transfer-helper **6**. The core cross-package smoke has **63 checks**; the
+transfer-helper **6**, user-profile acceptance **12 `ok` assertions**. The core
+cross-package smoke has **63 checks**; the
 three-device Protected repair smoke has **40 checks**. These smoke milestones
 were verified by CI run
 `34719594345` at commit `41462e8`.
-The integrated authenticated LAN acceptance has **38 runtime checks** and was
-verified green by CI run `34766126414` at commit `99059c7`. Default Turbopack
+The integrated authenticated LAN acceptance has exactly **54 `ok` assertions**
+and was green in CI run `34767541328` at commit `9a61829`. Default Turbopack
 and Webpack production builds pass, and a live browser check verified that the
 landing page renders without an overlay and navigates to sign-in; that check
 also caught and fixed CSS import ordering and a missing base selector.
+The separate user-profile acceptance has exactly **12 `ok` assertions** and was
+green in CI run `34768007763` at commit `090c7eb`.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
@@ -525,17 +540,23 @@ the standard to match.
 - Self-contained email/password auth; gateway JWT verification and header
   injection
 - Signup verification links route through the Next server bridge to a public,
-  token-free result page. CI run `34766377357` verified the change at commit
-  `cbaa8df`.
+  token-free result page. The authenticated LAN smoke signs up through Next,
+  captures the loopback SMTP message, follows the bridge and checks persisted
+  verification. The bridge itself was verified by CI run `34766377357` at
+  commit `cbaa8df`; the extended signup smoke is green in CI run
+  `34767541328` at commit `9a61829` with exactly 54 `ok` assertions.
+- Browser password-recovery pages and same-origin request bridges now exist;
+  the same acceptance covers reset requests, reset completion, one-shot token
+  rejection, old-password rejection and new-password login.
 - Authenticated LAN web-route and topology acceptance through Next.js, the
   Java gateway, auth/control plane and two real node agents: enrollment and
   approval, heartbeats, a default Protected two-device upload, completion,
   listing, protection/read planning and byte-identical reads from both agents
   are verified in CI. This is not browser-runtime coverage; frontend helper
   execution, CORS/mixed-content/browser enforcement, remote/TLS transfer,
-  encryption, garbage collection, SMTP signup delivery and the user service
-  remain outside it. Gateway identity-header stripping and anonymous rejection
-  are also covered.
+  encryption and garbage collection remain outside it. The user service has a
+  separate acceptance described above.
+  Gateway identity-header stripping and anonymous rejection are also covered.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
 - Placement engine with protection policies (1/2/3 copies) and health reporting
@@ -560,6 +581,10 @@ the standard to match.
   pending/shortfall errors, download fallback and safe DOM cleanup. A live
   browser check also verifies the landing page renders without an overlay and
   can navigate to sign-in.
+- The user-profile acceptance covers real signup/session, SMTP delivery,
+  pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,
+  persisted default profile/quota fields, Next anonymous redirect and gateway
+  anonymous 401 in exactly 12 `ok` assertions.
 - Devices screen and vault summary in the web app
 - File and folder removal confirmation, including an explicit recursive-folder
   warning
@@ -597,6 +622,17 @@ the standard to match.
   manual migration before enrolling such a store
 - Desktop and mobile apps, filesystem mount, sharing, search, billing
 - File metadata still in MongoDB, not yet migrated to Postgres
+
+### Device-first MVP and commercial blockers
+
+The architecture's earliest commercially testable MVP includes desktop, mobile
+and web clients, with optional cloud protection. This branch validates the
+control plane, node agent and web/LAN device-first slice; it is not yet that
+commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
+access, encryption and key recovery, cloud-protection policy and billing,
+rebalancing, chunking, garbage collection, sharing and search remain blockers.
+Availability, single-copy policy and key recovery remain open product
+questions; this status does not resolve them.
 
 ### Known limits worth repeating
 
