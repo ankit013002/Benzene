@@ -456,7 +456,7 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **344**, agent **115**, auth **78** when its
+Current counts: control plane **346**, agent **115**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The core
@@ -472,12 +472,13 @@ also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
 
-CI run `34789553908` is fully green and verifies exactly **344/344
+CI run `34790007104` is fully green and verifies exactly **346/346
 control-plane tests**, including concurrent legacy/device-backed version
-reservation and reverse-order completion regressions. Those regressions prove
-that each reservation receives a distinct immutable version number and that
-completing versions in reverse order leaves the highest committed version
-current with matching node metadata.
+reservation, reverse-order completion, and directory-listing protection
+batching regressions. The versioning regressions prove that each reservation
+receives a distinct immutable version number and that completing versions in
+reverse order leaves the highest committed version current with matching node
+metadata.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -603,6 +604,10 @@ the standard to match.
   and device-backed reservations: concurrent requests receive distinct
   immutable version numbers, and reverse-order completion leaves the highest
   committed version current with matching node metadata.
+- Directory listings batch protection for all distinct current file hashes:
+  one outage classification, policy load and replica/device query replaces
+  per-file N+1 work. Zero-replica hashes still receive summaries, while empty
+  input returns without creating vault or policy state.
 - Frontend transfer helpers have eight deterministic `node:test`/`tsx` tests
   (five upload and three download) for hashing and reservation, direct
   Protected uploads, completion gating, pending/shortfall errors, download
