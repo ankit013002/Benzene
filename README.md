@@ -102,6 +102,14 @@ repository-wide audit.
   entries, and removing the device from the Vault.
 - Browser-to-device upload and download over a LAN, with SHA-256 content
   addressing and device-side integrity checks.
+- Authenticated LAN web-route/topology acceptance through Next.js, the Java
+  gateway, auth/control plane and two real node agents: enrollment and
+  approval, heartbeats, a default Protected two-device upload, completion,
+  listing, protection/read planning and byte-identical reads from both agents
+  are verified in CI. This is not a browser-runtime test; frontend helper
+  execution, CORS/mixed-content/browser enforcement, remote/TLS transfer,
+  encryption, garbage collection, SMTP signup delivery and the user service
+  remain outside this acceptance.
 - An atomic, allocation-bounded node object store with restart-safe usage
   accounting.
 - Vault and Devices views plus the current file-management UI.
@@ -364,9 +372,20 @@ the real control plane and node agent itself and talks directly to the control
 plane; it requires a reachable PostgreSQL instance, built packages and
 MongoMemoryServer, and is not a mocked unit test.
 
+The authenticated LAN acceptance (`node scripts/smoke-auth-gateway.mjs`) starts
+the real auth service, control plane, Java gateway, Next server and two node
+agents. It exercises authenticated Next web routes and direct LAN device
+transfers, including pairing approval, heartbeats, Protected upload,
+completion/list/protection/read planning, and byte-identical reads from both
+agents. It is an HTTP route/topology harness, not a browser-runtime test: it
+does not execute frontend helpers or validate CORS, mixed-content, or other
+browser enforcement. Remote/TLS transfer, encryption, garbage collection,
+SMTP signup delivery, and the user service are not covered.
+
 Verified counts: control plane **342** tests, agent **115**, auth **78** when its
 real-Postgres concurrency test is enabled, gateway **18**, and **63 smoke
-checks**.
+checks**. The integrated authenticated LAN acceptance has **38 runtime checks**
+and was verified green by CI run `34733026052` at commit `54582ae`.
 
 GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
 control plane, node agent, Terraform and the guide files. It runs the
@@ -392,6 +411,8 @@ nebulavault-frontend/        Next.js web application
 nebulavault-user-service/    User profile bootstrap and quota fields
 infrastructure/terraform/    Optional S3 Cloud Protection infrastructure
 scripts/smoke-agent.mjs      Cross-package HTTP smoke test
+scripts/smoke-auth-gateway.mjs
+                              Authenticated LAN web-route/topology acceptance
 ```
 
 ## Roadmap

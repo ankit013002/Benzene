@@ -52,7 +52,7 @@ storage-layer work.
 | `infrastructure/terraform/` | S3 bucket + least-privilege IAM | Terraform |
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
 | `scripts/smoke-protection.mjs` | Three-device Protected repair smoke test | Node |
-| `scripts/smoke-auth-gateway.mjs` | Authenticated frontend-to-control-plane acceptance test | Node |
+| `scripts/smoke-auth-gateway.mjs` | Authenticated LAN web-route and topology acceptance | Node |
 | `YAGNI-CODE/` | Notes on removed code. Not built. | — |
 | `simple-flask-server/` | Debug scratch. Not production. | — |
 
@@ -404,16 +404,19 @@ vectors and updating both files in the same commit.
   B to C, verifies restored two-copy health, and reads the bytes back from C to
   prove they are identical. It does not test remote access, encryption,
   garbage collection, or frontend/gateway behavior.
-- `scripts/smoke-auth-gateway.mjs` runs the real authenticated user path over
-  HTTP: the Next.js `/api/auth/login` proxy forwards a real password login and
-  httpOnly session cookie, the Java gateway verifies the JWT and injects the
-  identity, and Next's `/api/vault` reaches the real control plane. The smoke
-  also sends spoofed `X-User-*` headers directly to the gateway and proves they
-  are stripped, then checks direct gateway anonymous `401` and browser-facing
-  Next anonymous rejection. The credential is seeded directly because signup's
-  verification email requires SMTP; signup delivery is not covered. This path
-  does not involve the user service, node transfer, remote/TLS access,
-  encryption, or frontend file operations.
+- `scripts/smoke-auth-gateway.mjs` is the authenticated LAN acceptance: it
+  starts the real auth service, control plane, Java gateway, Next server and
+  two real node agents. Agents enroll through gateway `/agent`, pairing codes
+  are approved through Next `/api/devices/enrollments`, and heartbeats pass
+  through the gateway. Authenticated Next web routes reserve a default
+  Protected two-device upload, expose completion/list/protection/read-plan
+  results, and return direct agent URLs; the smoke PUTs to those URLs and
+  verifies byte-identical reads from both agents. It is an HTTP route/topology
+  harness, not a browser-runtime test: frontend helper execution, CORS,
+  mixed-content and other browser enforcement are not covered. Remote/TLS
+  transfer, encryption, garbage collection, SMTP signup delivery, and the
+  user service are also outside this smoke. It also checks gateway identity
+  header stripping and anonymous rejection.
 
 ```bash
 # control plane
@@ -430,8 +433,8 @@ real-Postgres concurrency test is enabled, gateway **18**. The core
 cross-package smoke has **63 checks**; the three-device Protected repair smoke
 has **40 checks**. These smoke milestones were verified by CI run
 `34719594345` at commit `41462e8`.
-The authenticated frontend-to-control-plane acceptance has **11 checks** and
-was verified green by CI run `34720814427` at commit `2a79b1f`.
+The integrated authenticated LAN acceptance has **38 runtime checks** and was
+verified green by CI run `34733026052` at commit `54582ae`.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
@@ -505,11 +508,15 @@ the standard to match.
 
 - Self-contained email/password auth; gateway JWT verification and header
   injection
-- Authenticated user path through the Next.js proxy, Java gateway and control
-  plane: login forwards an httpOnly session/JWT, `/api/vault` returns the
-  caller's vault, spoofed `X-User-*` headers are stripped, direct gateway
-  anonymous access returns `401`, and browser-facing anonymous access is
-  rejected by Next
+- Authenticated LAN web-route and topology acceptance through Next.js, the
+  Java gateway, auth/control plane and two real node agents: enrollment and
+  approval, heartbeats, a default Protected two-device upload, completion,
+  listing, protection/read planning and byte-identical reads from both agents
+  are verified in CI. This is not browser-runtime coverage; frontend helper
+  execution, CORS/mixed-content/browser enforcement, remote/TLS transfer,
+  encryption, garbage collection, SMTP signup delivery and the user service
+  remain outside it. Gateway identity-header stripping and anonymous rejection
+  are also covered.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
 - Placement engine with protection policies (1/2/3 copies) and health reporting
