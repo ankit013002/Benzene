@@ -14,8 +14,8 @@ web path can enroll devices, place and repair whole-file replicas, and upload
 and download directly on a development LAN.
 
 The commercial MVP still requires remote/HTTPS transfers, encryption and a key
-recovery design, garbage collection, rebalancing, desktop and mobile clients,
-and the other blockers listed in §9. Do not describe the application as
+recovery design, rebalancing, desktop and mobile clients, and the other blockers
+listed in §9. Do not describe the application as
 complete, MVP-complete or production-ready until those capabilities and the
 open product decisions are resolved and verified.
 
@@ -368,6 +368,16 @@ Possession confirmation and repair/source-failure transitions serialize on the
 replica row, so stale device possession cannot resurrect a failed repair
 reservation.
 
+Device-backed versions register conservative PostgreSQL object references
+before placement is returned. Explicit purge removes the MongoDB version and
+releases its reference; agents then pull one durable deletion assignment per
+heartbeat, delete idempotently and acknowledge the exact assignment before
+replica metadata is retired. Multi-device sweeps retain collection markers and
+suppress repair until every copy acknowledges. A new reference cancels
+remaining work and repairs any copy already deleted. Legacy MongoDB versions
+are checked and backfilled before collection, while stale leaked references are
+pruned only after 24 hours and an exact MongoDB version check.
+
 Vault online-device counts and online capacity use the same last-heartbeat
 liveness cutoff as device views. Raw capacity remains owned capacity, even when
 a device is stale or offline.
@@ -454,8 +464,8 @@ vectors and updating both files in the same commit.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
   plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
   inventory recovery, upload to device, download back, authentication
-  rejection and device removal. Needs both packages built and a reachable
-  Postgres.
+  rejection, explicit purge, heartbeat-driven garbage collection and device
+  removal. Needs both packages built and a reachable Postgres.
 - `scripts/smoke-protection.mjs` runs a three-device local protection smoke:
   it uploads to devices A and B, marks A presumed lost, repairs directly from
   B to C, verifies restored two-copy health, and reads the bytes back from C to
@@ -497,14 +507,13 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **353**, agent **115**, auth **78** when its
+Current counts: control plane **362**, agent **119**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The core
-cross-package smoke has **63 checks**; the
+cross-package smoke has **68 checks**; the
 three-device Protected repair smoke has **40 checks**. These smoke milestones
-were verified by CI run
-`34719594345` at commit `41462e8`.
+were verified by CI run `34838085638`.
 The integrated authenticated LAN acceptance has exactly **60 `ok` assertions**
 and was green in CI run `34788300450`. Default Turbopack
 and Webpack production builds pass, and a live browser check verified that the
@@ -513,14 +522,14 @@ also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
 
-CI run `34834010480` is fully green and verifies exactly **353/353
-control-plane tests**, including non-overlapping scheduled outage sweeps,
-concurrent legacy/device-backed version reservation, reverse-order completion,
-and directory-listing protection batching regressions. The scheduler tests
-cover startup, interval cadence, failure containment and graceful shutdown. The
-versioning regressions prove that each reservation receives a distinct immutable
-version number and that completing versions in reverse order leaves the highest
-committed version current with matching node metadata.
+CI run `34838085638` is fully green and verifies exactly **362/362
+control-plane tests**, **119/119 node-agent tests**, the **68-check** core smoke
+and the **40-check** Protected repair smoke. Nine real-database garbage
+collection regressions cover live and deduplicated references, durable exact
+acknowledgement, deletion/placement races, legacy backfill, explicit purge,
+multi-device completion, revived references and references arriving during an
+in-flight deletion. The same run retains the scheduled-outage, concurrent
+versioning and directory-listing batching coverage.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -637,6 +646,12 @@ the standard to match.
   healthy-peer transfer, with hash verification before recording the new replica
   and serialized possession-versus-repair transitions that reject stale device
   confirmations
+- Reference-safe whole-file garbage collection follows explicit version purge:
+  durable per-device assignments retry across lost acknowledgements, local
+  deletion is idempotent, replica metadata remains until every holder confirms,
+  and revived references cancel pending work and restore deleted copies through
+  normal repair. Legacy MongoDB references are conservatively backfilled before
+  collection.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -695,7 +710,6 @@ the standard to match.
   without a migration, but the key hierarchy and recovery story (§33) are
   undesigned. **Design this before real user data lands.**
 - **Remote access / NAT traversal / relay** — LAN only
-- **Garbage collection (GC)** for unreferenced stored objects
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -710,7 +724,7 @@ and web clients, with optional cloud protection. This branch validates the
 control plane, node agent and web/LAN device-first slice; it is not yet that
 commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
 access, encryption and key recovery, cloud-protection policy and billing,
-rebalancing, chunking, garbage collection, sharing and search remain blockers.
+rebalancing, chunking, sharing and search remain blockers.
 Availability, single-copy policy and key recovery remain open product
 questions; this status does not resolve them.
 
