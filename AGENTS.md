@@ -10,12 +10,12 @@ are byte-identical and CI enforces that — edit one, copy it to the other.
 **Benzene is not fully complete, is not the architecture §105 commercial MVP,
 and is not production-ready for real user data.** What is verified is a
 device-first **local/LAN development slice**: the control plane, node agent and
-web path can enroll devices, place and repair whole-file replicas, and upload
-and download directly on a development LAN.
+web path can enroll devices, place, repair, garbage-collect and rebalance
+whole-file replicas, and upload and download directly on a development LAN.
 
 The commercial MVP still requires remote/HTTPS transfers, encryption and a key
-recovery design, rebalancing, desktop and mobile clients, and the other blockers
-listed in §9. Do not describe the application as
+recovery design, desktop and mobile clients, and the other blockers listed in
+§9. Do not describe the application as
 complete, MVP-complete or production-ready until those capabilities and the
 open product decisions are resolved and verified.
 
@@ -378,6 +378,16 @@ remaining work and repairs any copy already deleted. Legacy MongoDB versions
 are checked and backfilled before collection, while stale leaked references are
 pruned only after 24 hours and an exact MongoDB version check.
 
+Automatic whole-file rebalancing follows architecture §45 without weakening
+protection. Once every referenced object satisfies policy and no repair, GC or
+other move is active, an online target may claim one move that reduces the
+proportional-capacity gap by at least 10 percentage points. The target copies
+directly from the source and reports a hash-verified replica before the source
+receives a durable deletion assignment. Copy and delete retries reuse the exact
+nonce; GC, inventory recovery and device drain serialize with the same object
+state. At most one move starts per Vault every five minutes by default. This is
+deliberately conservative whole-file balancing, not bandwidth-aware scheduling.
+
 Vault online-device counts and online capacity use the same last-heartbeat
 liveness cutoff as device views. Raw capacity remains owned capacity, even when
 a device is stale or offline.
@@ -507,13 +517,12 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **362**, agent **119**, auth **78** when its
+Current counts: control plane **372**, agent **122**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The core
 cross-package smoke has **68 checks**; the
-three-device Protected repair smoke has **40 checks**. These smoke milestones
-were verified by CI run `34838085638`.
+three-device Protected repair and rebalance smoke has **50 checks**.
 The integrated authenticated LAN acceptance has exactly **60 `ok` assertions**
 and was green in CI run `34788300450`. Default Turbopack
 and Webpack production builds pass, and a live browser check verified that the
@@ -522,14 +531,14 @@ also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
 
-CI run `34838085638` is fully green and verifies exactly **362/362
-control-plane tests**, **119/119 node-agent tests**, the **68-check** core smoke
-and the **40-check** Protected repair smoke. Nine real-database garbage
-collection regressions cover live and deduplicated references, durable exact
-acknowledgement, deletion/placement races, legacy backfill, explicit purge,
-multi-device completion, revived references and references arriving during an
-in-flight deletion. The same run retains the scheduled-outage, concurrent
-versioning and directory-listing batching coverage.
+CI run `34909640992` is fully green and verifies exactly **372/372
+control-plane tests**, **122/122 node-agent tests**, both TypeScript production
+builds, the **68-check** core smoke and the **50-check** Protected
+repair/rebalance smoke. Six real-database rebalancing regressions cover
+copy-before-delete, retry identity, Vault-wide rate limiting, protection
+priority, GC exclusion, corrupt sources and draining targets. Nine
+garbage-collection regressions retain live and deduplicated reference, durable
+acknowledgement and cross-operation race coverage.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -652,6 +661,12 @@ the standard to match.
   and revived references cancel pending work and restore deleted copies through
   normal repair. Legacy MongoDB references are conservatively backfilled before
   collection.
+- Automatic, rate-limited whole-file rebalancing redistributes referenced
+  replicas between online devices when proportional usage is materially skewed.
+  Protection and repair take priority; replacement bytes are transferred
+  directly, hash-verified and recorded before the old source receives a durable,
+  retry-safe deletion assignment. The three-device smoke proves the bytes move
+  and subsequent reads name only the new holder.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -688,22 +703,9 @@ the standard to match.
 
 ### Not built
 
-- **Rebalancing** — background and on-demand offline/extended-offline
-  classification is implemented, and suspected-loss classification is opt-in
-  via `DEVICE_SUSPECTED_LOST_AFTER_SECONDS`. Offline
-  and extended-offline replicas remain durable healthy protection, but cannot
-  serve downloads or repair while their device is not online; suspected-lost
-  devices are quarantined, excluded from protection counts, and retain replica
-  metadata. A signed heartbeat alone does not restore them: the returning node
-  must complete a fresh usage heartbeat and locally hash-verified inventory
-  reconciliation (one request, at most 8,000 whole-file objects). Known
-  hash/size matches return to healthy, omissions and mismatches become missing,
-  and unknown hashes are ignored; the authenticated report is not independent
-  proof against a compromised device. Repair currently acts on recorded
-  replica shortfalls and can use a draining source, but it does not proactively
-  redistribute healthy copies for balance. Final drain detach and device-row
-  removal are implemented only after protection is restored and the node
-  completes its signed removal handshake
+- **Advanced balancing controls** — the implemented rebalancer deliberately
+  moves one whole file per Vault cooldown. It has no power awareness, bandwidth
+  budget, user schedule, multi-object work queue or chunk-level resumption yet.
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later
@@ -724,7 +726,7 @@ and web clients, with optional cloud protection. This branch validates the
 control plane, node agent and web/LAN device-first slice; it is not yet that
 commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
 access, encryption and key recovery, cloud-protection policy and billing,
-rebalancing, chunking, sharing and search remain blockers.
+chunking, sharing and search remain blockers.
 Availability, single-copy policy and key recovery remain open product
 questions; this status does not resolve them.
 
