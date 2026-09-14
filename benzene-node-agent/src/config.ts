@@ -24,6 +24,8 @@ export interface AgentConfig {
   heartbeatIntervalMs: number;
   /** Minimum interval between bounded repair polls. */
   repairIntervalMs: number;
+  /** Minimum interval between bounded rebalance polls. */
+  rebalanceIntervalMs: number;
   deviceName: string;
   platform: "macos" | "windows" | "linux" | "other";
 }
@@ -76,6 +78,8 @@ export function loadAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConf
       overrides.heartbeatIntervalMs ?? intFromEnv("BENZENE_HEARTBEAT_MS", 30_000),
     repairIntervalMs:
       overrides.repairIntervalMs ?? intFromEnv("BENZENE_REPAIR_MS", 60_000),
+    rebalanceIntervalMs:
+      overrides.rebalanceIntervalMs ?? intFromEnv("BENZENE_REBALANCE_MS", 60_000),
     deviceName:
       overrides.deviceName ?? process.env["BENZENE_DEVICE_NAME"] ?? defaultDeviceName(),
     platform: overrides.platform ?? detectPlatform(),

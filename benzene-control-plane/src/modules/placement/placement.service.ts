@@ -360,6 +360,8 @@ export async function reservePlacement(
           verifiedAt: null,
           repairSourceDeviceId: null,
           repairAssignmentId: null,
+          rebalanceAssignmentId: null,
+          rebalancePeerDeviceId: null,
           updatedAt: new Date(),
         })
         .where(eq(replicas.id, row.id))
@@ -407,6 +409,8 @@ export async function confirmReplica(
       updatedAt: now,
       repairSourceDeviceId: null,
       repairAssignmentId: null,
+      rebalanceAssignmentId: null,
+      rebalancePeerDeviceId: null,
       ...(typeof input.sizeBytes === "number" ? { sizeBytes: input.sizeBytes } : {}),
     })
     .where(
@@ -454,6 +458,10 @@ export async function confirmReplicaForDevice(
       throw AppError.conflict("A presumed-lost device must reconcile its inventory before possession reports");
     }
 
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtext(${`${knownDevice.vaultId}:${input.objectHash}`}))`
+    );
+
     // The failure report and possession report race on the same durable row.
     // Lock it before deciding which state may be acknowledged: otherwise a
     // stale possession can select `placing`, wait behind a failure report that
@@ -490,10 +498,37 @@ export async function confirmReplicaForDevice(
         updatedAt: now,
         repairSourceDeviceId: null,
         repairAssignmentId: null,
+        rebalanceAssignmentId: null,
+        rebalancePeerDeviceId: null,
       })
       .where(and(eq(replicas.id, replica.id), eq(replicas.status, "placing")))
       .returning();
-    if (updated) return updated;
+    if (updated) {
+      if (replica.rebalanceAssignmentId && replica.rebalancePeerDeviceId) {
+        // Copy first, then retire the old source. Marking it non-healthy before
+        // the node deletes bytes keeps protection/read plans honest and makes
+        // the exact deletion retryable after a lost response.
+        await tx
+          .update(replicas)
+          .set({
+            status: "deleting",
+            repairSourceDeviceId: null,
+            repairAssignmentId: null,
+            rebalanceAssignmentId: replica.rebalanceAssignmentId,
+            rebalancePeerDeviceId: deviceId,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(replicas.vaultId, knownDevice.vaultId),
+              eq(replicas.objectHash, input.objectHash),
+              eq(replicas.deviceId, replica.rebalancePeerDeviceId),
+              eq(replicas.status, "healthy")
+            )
+          );
+      }
+      return updated;
+    }
 
     // The row lock should make this unreachable, but retain a typed failure if
     // the database reports that another state transition won unexpectedly.

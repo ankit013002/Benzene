@@ -131,6 +131,8 @@ export async function reportRepairSourceFailure(
         status: "missing",
         repairSourceDeviceId: null,
         repairAssignmentId: null,
+        rebalanceAssignmentId: null,
+        rebalancePeerDeviceId: null,
         updatedAt: new Date(),
       })
       .where(eq(replicas.id, targetReplica.id));

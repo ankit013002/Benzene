@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, inArray, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
 
 import { db } from "../../db/client.js";
 import { devices, objectReferences, replicas, vaults } from "../../db/schema.js";
@@ -209,6 +209,15 @@ export async function pollGarbageCollection(
           select 1 from ${objectReferences}
           where ${objectReferences.vaultId} = ${replicas.vaultId}
             and ${objectReferences.objectHash} = ${replicas.objectHash}
+        )`,
+        sql`not exists (
+          select 1 from ${replicas} as ${sql.identifier("active_rebalance")}
+          where ${sql.identifier("active_rebalance")}.${sql.identifier("vault_id")}
+              = ${replicas.vaultId}
+            and ${sql.identifier("active_rebalance")}.${sql.identifier("object_hash")}
+              = ${replicas.objectHash}
+            and ${sql.identifier("active_rebalance")}.${sql.identifier("rebalance_assignment_id")}
+              is not null
         )`
       )
     )
@@ -239,6 +248,19 @@ export async function pollGarbageCollection(
         )
         .limit(1);
       if (referenced) return null;
+
+      const [rebalancing] = await tx
+        .select({ id: replicas.id })
+        .from(replicas)
+        .where(
+          and(
+            eq(replicas.vaultId, device.vaultId),
+            eq(replicas.objectHash, candidate.objectHash),
+            isNotNull(replicas.rebalanceAssignmentId)
+          )
+        )
+        .limit(1);
+      if (rebalancing) return null;
 
       const assignmentId = randomUUID();
       const [updated] = await tx

@@ -12,6 +12,7 @@ import {
   ControlPlaneClient,
   ControlPlaneError,
   type GarbageCollectionAssignment,
+  type RebalanceAssignment,
   type RepairAssignment,
   type RemovalCompletion,
   type RemovalDirective,
@@ -48,6 +49,10 @@ class FakeControlPlane extends ControlPlaneClient {
   garbageCollectionAssignment: GarbageCollectionAssignment | null = null;
   garbageCollectionCompletions: GarbageCollectionAssignment[] = [];
   garbageCollectionCompletionError: Error | undefined;
+  rebalancingPolls = 0;
+  rebalancingAssignment: RebalanceAssignment | null = null;
+  rebalancingCompletions: Array<{ objectHash: string; assignmentId: string }> = [];
+  rebalancingCompletionError: Error | undefined;
   possessionReports: Array<{ objectHash: string; sizeBytes: number }> = [];
   repairFailures: Array<{
     objectHash: string;
@@ -139,6 +144,24 @@ class FakeControlPlane extends ControlPlaneClient {
     return { status: "deleted" };
   }
 
+  override async pollRebalancing(): Promise<RebalanceAssignment | null> {
+    this.rebalancingPolls += 1;
+    return this.rebalancingAssignment;
+  }
+
+  override async completeRebalancing(input: {
+    objectHash: string;
+    assignmentId: string;
+  }): Promise<{ status: "deleted" }> {
+    if (this.rebalancingCompletionError) throw this.rebalancingCompletionError;
+    this.rebalancingCompletions.push({
+      objectHash: input.objectHash,
+      assignmentId: input.assignmentId,
+    });
+    this.rebalancingAssignment = null;
+    return { status: "deleted" };
+  }
+
   override async reportPossession(input: {
     objectHash: string;
     sizeBytes: number;
@@ -185,6 +208,7 @@ function config(): AgentConfig {
     deviceName: "Test Device",
     platform: "linux",
     heartbeatIntervalMs: 50,
+    rebalanceIntervalMs: 0,
   });
 }
 
@@ -725,6 +749,77 @@ describe("repair", () => {
     expect(plane.repairFailures).toEqual([]);
     expect(plane.possessionReports).toEqual([]);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("rebalancing", () => {
+  it("copies and verifies an object before the control plane can retire its source", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const body = "balanced bytes";
+    const objectHash = createHash("sha256").update(body).digest("hex");
+    plane.rebalancingAssignment = {
+      action: "copy",
+      objectHash,
+      sizeBytes: body.length,
+      assignmentId: "44444444-4444-4444-8444-444444444444",
+      source: {
+        deviceId: "source-device",
+        deviceName: "Source",
+        url: `http://source.invalid/objects/${objectHash}`,
+        grant: "grant",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
+
+    await expect(agent.attemptRebalancing()).resolves.toBe(true);
+    expect(await agent.store.verify(objectHash)).toBe(true);
+    expect(plane.possessionReports).toEqual([{ objectHash, sizeBytes: body.length }]);
+    expect(plane.rebalancingCompletions).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it("retries a lost acknowledgement after idempotently deleting the old source", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    const stored = await agent.store.put(Readable.from([Buffer.from("old source") ]));
+    const assignment = {
+      action: "delete" as const,
+      objectHash: stored.hash,
+      assignmentId: "55555555-5555-4555-8555-555555555555",
+    };
+    plane.rebalancingAssignment = assignment;
+    plane.rebalancingCompletionError = new Error("response lost");
+
+    await expect(agent.attemptRebalancing()).rejects.toThrow(/response lost/);
+    expect(await agent.store.has(stored.hash)).toBe(false);
+    plane.rebalancingCompletionError = undefined;
+    await expect(agent.attemptRebalancing()).resolves.toBe(true);
+
+    expect(await agent.store.has(stored.hash)).toBe(false);
+    expect(plane.rebalancingPolls).toBe(2);
+    expect(plane.rebalancingCompletions).toEqual([
+      { objectHash: stored.hash, assignmentId: assignment.assignmentId },
+    ]);
+  });
+
+  it("does not poll while presumed-lost inventory recovery is pending", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    plane.heartbeatStatus = "suspected_lost";
+    plane.inventoryError = new Error("inventory unavailable");
+
+    await expect(agent.sendHeartbeat()).rejects.toThrow(/inventory unavailable/);
+    await expect(agent.attemptRebalancing()).resolves.toBe(false);
+    expect(plane.rebalancingPolls).toBe(0);
   });
 });
 

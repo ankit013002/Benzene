@@ -62,6 +62,8 @@ export const vaults = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
+    /** Last whole-file move admitted by the vault-wide rebalance limiter. */
+    lastRebalancedAt: timestamp("last_rebalanced_at", { withTimezone: true }),
   },
   (table) => [
     // One vault per owner for now; family vaults will relax this into a
@@ -329,6 +331,12 @@ export const replicas = pgTable(
     }),
     /** Opaque per-attempt nonce preventing replay of an old source report. */
     repairAssignmentId: uuid("repair_assignment_id"),
+    /** Stable nonce for one copy-then-delete rebalance operation. */
+    rebalanceAssignmentId: uuid("rebalance_assignment_id"),
+    /** Source while placing; destination while retiring the old source. */
+    rebalancePeerDeviceId: uuid("rebalance_peer_device_id").references(() => devices.id, {
+      onDelete: "set null",
+    }),
     /** Stable nonce for retrying one idempotent local object deletion. */
     garbageCollectionAssignmentId: uuid("garbage_collection_assignment_id"),
     garbageCollectionAssignedAt: timestamp("garbage_collection_assigned_at", {

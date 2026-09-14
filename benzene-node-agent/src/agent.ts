@@ -40,9 +40,11 @@ export class Agent {
   private identity: DeviceIdentity | undefined;
   private repairInFlight = false;
   private garbageCollectionInFlight = false;
+  private rebalancingInFlight = false;
   private removalInFlight = false;
   private transferServingAllowed = true;
   private lastRepairAttemptAt = 0;
+  private lastRebalanceAttemptAt = 0;
   private inventoryReconciliationInFlight: Promise<void> | undefined;
   private inventoryReconciled = false;
   private inventoryRecoveryRequired = false;
@@ -304,9 +306,9 @@ export class Agent {
    * Performs at most one whole-file LAN repair when work is available.
    *
    * The source streams directly into this agent; neither the browser nor the
-   * control plane sees object bytes. A failed transfer leaves the durable
-   * An integrity failure consumes the `placing` reservation into a missing
-   * state so a later bounded poll can assign a fresh source and nonce;
+   * control plane sees object bytes. An integrity failure consumes the
+   * `placing` reservation into a missing state so a later bounded poll can
+   * assign a fresh source and nonce;
    * transport failures remain retryable against the existing assignment.
    */
   async attemptRepair(): Promise<boolean> {
@@ -315,6 +317,7 @@ export class Agent {
       !identity.deviceId ||
       this.repairInFlight ||
       this.garbageCollectionInFlight ||
+      this.rebalancingInFlight ||
       this.removalInFlight ||
       this.inventoryRecoveryRequired ||
       this.inventoryReconciliationInFlight
@@ -390,6 +393,7 @@ export class Agent {
       !identity.deviceId ||
       this.garbageCollectionInFlight ||
       this.repairInFlight ||
+      this.rebalancingInFlight ||
       this.removalInFlight ||
       this.inventoryRecoveryRequired ||
       this.inventoryReconciliationInFlight
@@ -421,6 +425,92 @@ export class Agent {
     }
   }
 
+  /** Performs at most one rate-limited whole-file copy or source retirement. */
+  async attemptRebalancing(): Promise<boolean> {
+    const identity = this.requireIdentity();
+    if (
+      !identity.deviceId ||
+      this.rebalancingInFlight ||
+      this.repairInFlight ||
+      this.garbageCollectionInFlight ||
+      this.removalInFlight ||
+      this.inventoryRecoveryRequired ||
+      this.inventoryReconciliationInFlight
+    ) {
+      return false;
+    }
+
+    const now = Date.now();
+    if (now - this.lastRebalanceAttemptAt < this.config.rebalanceIntervalMs) {
+      return false;
+    }
+    this.lastRebalanceAttemptAt = now;
+    this.rebalancingInFlight = true;
+
+    try {
+      const assignment = await this.client.pollRebalancing({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+      });
+      if (!assignment) return false;
+
+      if (assignment.action === "delete") {
+        await this.store.delete(assignment.objectHash);
+        await this.client.completeRebalancing({
+          deviceId: identity.deviceId,
+          privateKey: identity.privateKey,
+          objectHash: assignment.objectHash,
+          assignmentId: assignment.assignmentId,
+        });
+        return true;
+      }
+
+      const response = await fetch(assignment.source.url, {
+        method: "GET",
+        headers: { "X-Transfer-Grant": assignment.source.grant },
+        signal: AbortSignal.timeout(REPAIR_FETCH_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        if (response.status === 422) {
+          await this.client.reportRepairFailure({
+            deviceId: identity.deviceId,
+            privateKey: identity.privateKey,
+            objectHash: assignment.objectHash,
+            sourceDeviceId: assignment.source.deviceId,
+            repairAssignmentId: assignment.assignmentId,
+          });
+        }
+        throw new Error(
+          `Rebalance source ${assignment.source.deviceName} refused the object (${response.status})`
+        );
+      }
+      if (!response.body) throw new Error("Rebalance source returned no body");
+
+      let stored: StoredObject;
+      try {
+        stored = await this.store.put(
+          Readable.fromWeb(response.body as ReadableStream<Uint8Array>),
+          { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes }
+        );
+      } catch (err) {
+        if (err instanceof IntegrityError) {
+          await this.client.reportRepairFailure({
+            deviceId: identity.deviceId,
+            privateKey: identity.privateKey,
+            objectHash: assignment.objectHash,
+            sourceDeviceId: assignment.source.deviceId,
+            repairAssignmentId: assignment.assignmentId,
+          });
+        }
+        throw err;
+      }
+      await this.reportPossession(stored.hash, stored.size);
+      return true;
+    } finally {
+      this.rebalancingInFlight = false;
+    }
+  }
+
   /**
    * Begins reporting presence on a timer.
    *
@@ -440,7 +530,8 @@ export class Agent {
           if (removed || this.removalInFlight) return false;
           return this.sendHeartbeat().then(async () => {
             await this.attemptGarbageCollection();
-            return this.attemptRepair();
+            const repaired = await this.attemptRepair();
+            return repaired ? true : this.attemptRebalancing();
           });
         })
         .catch((err: unknown) => {

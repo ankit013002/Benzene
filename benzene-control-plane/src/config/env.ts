@@ -35,6 +35,10 @@ export interface AppConfig {
   deviceSuspectedLostAfterSeconds: number | undefined;
   /** How often the control plane persists device outage transitions. */
   deviceOutageSweepIntervalSeconds: number;
+  /** Minimum delay between whole-file rebalance assignments in one vault. */
+  rebalanceIntervalSeconds: number;
+  /** Minimum utilization gap required before moving an object. */
+  rebalanceMinUsageDeltaPercent: number;
   /**
    * Ed25519 private key (base64 PKCS8) the control plane signs transfer grants
    * with. Read lazily: only upload paths need it, so a deployment that has not
@@ -150,6 +154,11 @@ export function loadConfig(): AppConfig {
     deviceOutageSweepIntervalSeconds: intFromEnv(
       "DEVICE_OUTAGE_SWEEP_INTERVAL_SECONDS",
       60
+    ),
+    rebalanceIntervalSeconds: intFromEnv("REBALANCE_INTERVAL_SECONDS", 300),
+    rebalanceMinUsageDeltaPercent: intFromEnv(
+      "REBALANCE_MIN_USAGE_DELTA_PERCENT",
+      10
     ),
     transferSigningKey: optional("TRANSFER_SIGNING_KEY"),
     transferGrantTtlSeconds: intFromEnv("TRANSFER_GRANT_TTL_SECONDS", 300),

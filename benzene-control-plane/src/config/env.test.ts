@@ -25,6 +25,8 @@ describe("device lifecycle thresholds", () => {
     expect(config.deviceExtendedOfflineAfterSeconds).toBe(86400);
     expect(config.deviceSuspectedLostAfterSeconds).toBeUndefined();
     expect(config.deviceOutageSweepIntervalSeconds).toBe(60);
+    expect(config.rebalanceIntervalSeconds).toBe(300);
+    expect(config.rebalanceMinUsageDeltaPercent).toBe(10);
   });
 
   it("requires extended offline to be longer than ordinary offline", () => {
@@ -55,5 +57,11 @@ describe("device lifecycle thresholds", () => {
     vi.stubEnv("DEVICE_OUTAGE_SWEEP_INTERVAL_SECONDS", "0");
 
     expect(() => loadConfig()).toThrow(/OUTAGE_SWEEP_INTERVAL_SECONDS.*positive/);
+  });
+
+  it("requires a positive vault rebalance interval", () => {
+    vi.stubEnv("REBALANCE_INTERVAL_SECONDS", "0");
+
+    expect(() => loadConfig()).toThrow(/REBALANCE_INTERVAL_SECONDS.*positive/);
   });
 });

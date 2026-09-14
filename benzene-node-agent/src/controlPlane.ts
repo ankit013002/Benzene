@@ -52,6 +52,34 @@ export interface GarbageCollectionCompletion {
   status: "deleted";
 }
 
+export interface RebalanceCopyAssignment {
+  action: "copy";
+  objectHash: string;
+  sizeBytes: number;
+  assignmentId: string;
+  source: {
+    deviceId: string;
+    deviceName: string;
+    url: string;
+    grant: string;
+    expiresAt: string;
+  };
+}
+
+export interface RebalanceDeleteAssignment {
+  action: "delete";
+  objectHash: string;
+  assignmentId: string;
+}
+
+export type RebalanceAssignment =
+  | RebalanceCopyAssignment
+  | RebalanceDeleteAssignment;
+
+export interface RebalanceCompletion {
+  status: "deleted";
+}
+
 export interface RemovalDirective {
   status: "erase" | "removed";
 }
@@ -359,6 +387,70 @@ export class ControlPlaneClient {
     }
 
     const payload = (await res.json()) as { data: GarbageCollectionCompletion };
+    return payload.data;
+  }
+
+  /** Polls for one copy or old-source deletion in a rate-limited move. */
+  async pollRebalancing(input: {
+    deviceId: string;
+    privateKey: string;
+  }): Promise<RebalanceAssignment | null> {
+    const path = "/agent/rebalancing";
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: {
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "GET",
+          path,
+          body: "",
+        }),
+      },
+    });
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Rebalancing poll rejected")
+      );
+    }
+    const payload = (await res.json()) as { data: RebalanceAssignment | null };
+    return payload.data;
+  }
+
+  /** Acknowledges deletion of the old source for the exact move. */
+  async completeRebalancing(input: {
+    deviceId: string;
+    privateKey: string;
+    objectHash: string;
+    assignmentId: string;
+  }): Promise<RebalanceCompletion> {
+    const path = "/agent/rebalancing/complete";
+    const body = JSON.stringify({
+      objectHash: input.objectHash,
+      assignmentId: input.assignmentId,
+    });
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "POST",
+          path,
+          body,
+        }),
+      },
+      body,
+    });
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Rebalancing completion rejected")
+      );
+    }
+    const payload = (await res.json()) as { data: RebalanceCompletion };
     return payload.data;
   }
 

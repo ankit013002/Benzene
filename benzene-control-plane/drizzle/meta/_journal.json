@@ -64,6 +64,13 @@
       "when": 1789384147261,
       "tag": "0008_faulty_gambit",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789428287044,
+      "tag": "0009_lively_the_stranger",
+      "breakpoints": true
     }
   ]
 }

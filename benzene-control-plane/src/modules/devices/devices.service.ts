@@ -542,6 +542,8 @@ export async function completeDeviceRemoval(
         verifiedAt: null,
         repairSourceDeviceId: null,
         repairAssignmentId: null,
+        rebalanceAssignmentId: null,
+        rebalancePeerDeviceId: null,
         updatedAt: now,
       })
       .where(
@@ -705,6 +707,18 @@ export async function beginDeviceRemoval(
       .where(eq(devices.vaultId, vault.id))
       .orderBy(asc(deviceStorageAllocations.deviceId))
       .for("update");
+
+    // A target that is about to drain must not finish becoming the destination
+    // of an ordinary balance move. The source remains healthy and untouched.
+    await tx
+      .delete(replicas)
+      .where(
+        and(
+          eq(replicas.deviceId, deviceId),
+          eq(replicas.status, "placing"),
+          sql`${replicas.rebalanceAssignmentId} is not null`
+        )
+      );
 
     await ensureRemovalCapacity(vault.id, deviceId, tx);
 

@@ -106,7 +106,9 @@ export async function reconcileDeviceInventory(
         id: replicas.id,
         objectHash: replicas.objectHash,
         sizeBytes: replicas.sizeBytes,
+        status: replicas.status,
         garbageCollectionAssignmentId: replicas.garbageCollectionAssignmentId,
+        rebalanceAssignmentId: replicas.rebalanceAssignmentId,
       })
       .from(replicas)
       .where(eq(replicas.deviceId, deviceId))
@@ -134,11 +136,16 @@ export async function reconcileDeviceInventory(
       const reportedSize = reportedByHash.get(replica.objectHash.toLowerCase());
       const present =
         reportedSize !== undefined && Number(replica.sizeBytes) === reportedSize;
+      const deletionPending =
+        replica.status === "deleting" &&
+        Boolean(
+          replica.garbageCollectionAssignmentId || replica.rebalanceAssignmentId
+        );
 
       await tx
         .update(replicas)
         .set({
-          status: replica.garbageCollectionAssignmentId
+          status: deletionPending
             ? "deleting"
             : present
               ? "healthy"
@@ -146,6 +153,12 @@ export async function reconcileDeviceInventory(
           verifiedAt: present ? allocation.usageReportedAt : null,
           repairSourceDeviceId: null,
           repairAssignmentId: null,
+          ...(deletionPending
+            ? {}
+            : {
+                rebalanceAssignmentId: null,
+                rebalancePeerDeviceId: null,
+              }),
           updatedAt: now,
         })
         .where(and(eq(replicas.id, replica.id), eq(replicas.deviceId, deviceId)));
@@ -173,6 +186,8 @@ export async function reconcileDeviceInventory(
             status: "missing",
             repairSourceDeviceId: null,
             repairAssignmentId: null,
+            rebalanceAssignmentId: null,
+            rebalancePeerDeviceId: null,
             updatedAt: now,
           })
           .where(eq(replicas.id, target.id));

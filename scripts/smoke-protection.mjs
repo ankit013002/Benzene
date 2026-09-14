@@ -5,7 +5,8 @@
  * places exactly two copies. A then becomes suspected lost while B continues
  * heartbeating. C comes online afterwards and performs the real agent repair,
  * streaming bytes directly from B and reporting possession with its device
- * signature.
+ * signature. The same agents then move a second object from a deliberately
+ * fuller B to emptier C and retire B's old copy only after C verifies it.
  *
  * Run from the repo root, with both packages built:
  *   node scripts/smoke-protection.mjs
@@ -90,6 +91,7 @@ async function main() {
     process.env.DEVICE_OFFLINE_AFTER_SECONDS = "1";
     process.env.DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS = "2";
     process.env.DEVICE_SUSPECTED_LOST_AFTER_SECONDS = "3";
+    process.env.REBALANCE_INTERVAL_SECONDS = "1";
 
     const { generateTransferSigningKeys } = controlPlaneRequire(
       "./built/modules/placement/transferGrant.js"
@@ -135,6 +137,7 @@ async function main() {
         port,
         heartbeatIntervalMs: 0,
         repairIntervalMs: 0,
+        rebalanceIntervalMs: 0,
       });
       const store = new ObjectStore({
         rootDir: config.storageDir,
@@ -385,6 +388,117 @@ async function main() {
     } else {
       check("download from C is byte-for-byte identical", false, "no C download target");
     }
+
+    console.log("\ncapacity skew triggers a verified B-to-C rebalance");
+    const policyRes = await fetch(`${controlPlaneUrl}/placement/policy`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", "X-User-Id": OWNER },
+      body: JSON.stringify({ mode: "maximum_capacity" }),
+    });
+    check("Maximum Capacity policy accepted for rebalance", policyRes.status === 200);
+
+    const planeClient = new ControlPlaneClient(controlPlaneUrl);
+    const bIdentity = b.agent.currentIdentity();
+    if (bIdentity?.deviceId) {
+      await planeClient.heartbeat({
+        deviceId: bIdentity.deviceId,
+        privateKey: bIdentity.privateKey,
+        usedBytes: 0,
+        availableBytes: ALLOCATED,
+        appVersion: "smoke",
+        advertisedUrl: b.config.advertisedUrl,
+      });
+    }
+    if (cIdentity?.deviceId) {
+      await planeClient.heartbeat({
+        deviceId: cIdentity.deviceId,
+        privateKey: cIdentity.privateKey,
+        usedBytes: 48 * 1024 * 1024,
+        availableBytes: 16 * 1024 * 1024,
+        appVersion: "smoke",
+        advertisedUrl: c.config.advertisedUrl,
+      });
+    }
+
+    const balanceBody = Buffer.from("whole-file rebalance smoke payload");
+    const balanceHash = createHash("sha256").update(balanceBody).digest("hex");
+    const balanceReserveRes = await fetch(`${controlPlaneUrl}/files/uploads/device`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-User-Id": OWNER },
+      body: JSON.stringify({
+        name: "balanced.txt",
+        path: "protection-smoke",
+        size: balanceBody.length,
+        contentType: "text/plain",
+        sha256: balanceHash,
+      }),
+    });
+    const balanceReservation = (await jsonOrNull(balanceReserveRes))?.data;
+    const balanceTargets = Array.isArray(balanceReservation?.placement?.targets)
+      ? balanceReservation.placement.targets
+      : [];
+    check("rebalance fixture upload reserved one copy", balanceTargets.length === 1);
+    check("fixture initially chooses emptier B", balanceTargets[0]?.deviceId === bId);
+    if (balanceTargets[0]) {
+      const putRes = await fetch(balanceTargets[0].url, {
+        method: "PUT",
+        headers: {
+          "X-Transfer-Grant": balanceTargets[0].grant,
+          "Content-Type": "application/octet-stream",
+        },
+        body: balanceBody,
+      });
+      check("B accepted the rebalance fixture bytes", putRes.status === 201);
+    } else {
+      check("B accepted the rebalance fixture bytes", false, "no upload target");
+    }
+    const balanceCompleteRes = await fetch(
+      `${controlPlaneUrl}/files/uploads/device/complete`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-User-Id": OWNER },
+        body: JSON.stringify({ versionIds: [balanceReservation?.versionId] }),
+      }
+    );
+    check("rebalance fixture committed", balanceCompleteRes.status === 200);
+
+    if (bIdentity?.deviceId) {
+      await planeClient.heartbeat({
+        deviceId: bIdentity.deviceId,
+        privateKey: bIdentity.privateKey,
+        usedBytes: 48 * 1024 * 1024,
+        availableBytes: 16 * 1024 * 1024,
+        appVersion: "smoke",
+        advertisedUrl: b.config.advertisedUrl,
+      });
+    }
+    if (cIdentity?.deviceId) {
+      await planeClient.heartbeat({
+        deviceId: cIdentity.deviceId,
+        privateKey: cIdentity.privateKey,
+        usedBytes: 0,
+        availableBytes: ALLOCATED,
+        appVersion: "smoke",
+        advertisedUrl: c.config.advertisedUrl,
+      });
+    }
+
+    check("C completed the rebalance copy", await c.agent.attemptRebalancing());
+    check("C verifies the rebalanced bytes", await c.store.verify(balanceHash));
+    check("B retired the old source copy", await b.agent.attemptRebalancing());
+    check("B no longer stores the rebalanced object", !(await b.store.has(balanceHash)));
+    const balancedTargetsRes = await fetch(
+      `${controlPlaneUrl}/placement/download-targets/${balanceHash}`,
+      { headers: { "X-User-Id": OWNER } }
+    );
+    const balancedTargets = (await jsonOrNull(balancedTargetsRes))?.data?.targets;
+    check(
+      "download planning now names only C",
+      Array.isArray(balancedTargets) &&
+        balancedTargets.length === 1 &&
+        balancedTargets[0]?.deviceId === cId,
+      JSON.stringify(balancedTargets)
+    );
   } finally {
     for (const agent of agents) agent.stopHeartbeat();
     for (const transferServer of transferServers) {

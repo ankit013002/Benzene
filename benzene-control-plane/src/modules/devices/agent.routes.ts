@@ -18,6 +18,10 @@ import {
   pollGarbageCollection,
 } from "../placement/garbageCollection.service.js";
 import {
+  completeRebalancingDeletion,
+  pollRebalancingForDevice,
+} from "../placement/rebalancing.service.js";
+import {
   MAX_INVENTORY_OBJECTS,
   reconcileDeviceInventory,
 } from "./inventory.service.js";
@@ -69,6 +73,14 @@ const repairFailureSchema = z.object({
 });
 
 const garbageCollectionCompletionSchema = z.object({
+  objectHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest")
+    .transform((value) => value.toLowerCase()),
+  assignmentId: z.string().uuid(),
+});
+
+const rebalancingCompletionSchema = z.object({
   objectHash: z
     .string()
     .regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest")
@@ -223,6 +235,29 @@ router.post(
     if (!req.deviceId) throw AppError.unauthorized();
     res.status(200).json({
       data: await completeGarbageCollection(req.deviceId, body),
+    });
+  })
+);
+
+/** Returns at most one rate-limited copy or source-retirement assignment. */
+router.get(
+  "/rebalancing",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await pollRebalancingForDevice(req.deviceId) });
+  })
+);
+
+/** Acknowledges the exact source deletion after the replacement is healthy. */
+router.post(
+  "/rebalancing/complete",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    const body = parse(rebalancingCompletionSchema, req.body);
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({
+      data: await completeRebalancingDeletion(req.deviceId, body),
     });
   })
 );
