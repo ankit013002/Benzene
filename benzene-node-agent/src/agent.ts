@@ -39,6 +39,7 @@ export class Agent {
   private heartbeatTimer: NodeJS.Timeout | undefined;
   private identity: DeviceIdentity | undefined;
   private repairInFlight = false;
+  private garbageCollectionInFlight = false;
   private removalInFlight = false;
   private transferServingAllowed = true;
   private lastRepairAttemptAt = 0;
@@ -313,6 +314,7 @@ export class Agent {
     if (
       !identity.deviceId ||
       this.repairInFlight ||
+      this.garbageCollectionInFlight ||
       this.removalInFlight ||
       this.inventoryRecoveryRequired ||
       this.inventoryReconciliationInFlight
@@ -381,6 +383,44 @@ export class Agent {
     }
   }
 
+  /** Deletes at most one unreferenced object through a retry-safe handshake. */
+  async attemptGarbageCollection(): Promise<boolean> {
+    const identity = this.requireIdentity();
+    if (
+      !identity.deviceId ||
+      this.garbageCollectionInFlight ||
+      this.repairInFlight ||
+      this.removalInFlight ||
+      this.inventoryRecoveryRequired ||
+      this.inventoryReconciliationInFlight
+    ) {
+      return false;
+    }
+
+    this.garbageCollectionInFlight = true;
+    try {
+      const assignment = await this.client.pollGarbageCollection({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+      });
+      if (!assignment) return false;
+
+      // ObjectStore.delete is idempotent. If the completion response is lost,
+      // the control plane returns the same durable assignment and this retry
+      // remains safe even though the bytes are already absent.
+      await this.store.delete(assignment.objectHash);
+      await this.client.completeGarbageCollection({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+        objectHash: assignment.objectHash,
+        assignmentId: assignment.assignmentId,
+      });
+      return true;
+    } finally {
+      this.garbageCollectionInFlight = false;
+    }
+  }
+
   /**
    * Begins reporting presence on a timer.
    *
@@ -398,7 +438,10 @@ export class Agent {
       void this.pollRemoval()
         .then((removed) => {
           if (removed || this.removalInFlight) return false;
-          return this.sendHeartbeat().then(() => this.attemptRepair());
+          return this.sendHeartbeat().then(async () => {
+            await this.attemptGarbageCollection();
+            return this.attemptRepair();
+          });
         })
         .catch((err: unknown) => {
           this.events.onError?.(err);

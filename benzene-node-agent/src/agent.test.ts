@@ -11,6 +11,7 @@ import { loadAgentConfig, type AgentConfig } from "./config.js";
 import {
   ControlPlaneClient,
   ControlPlaneError,
+  type GarbageCollectionAssignment,
   type RepairAssignment,
   type RemovalCompletion,
   type RemovalDirective,
@@ -43,6 +44,10 @@ class FakeControlPlane extends ControlPlaneClient {
   statusError: ControlPlaneError | undefined;
   repairPolls = 0;
   repairAssignment: RepairAssignment | null = null;
+  garbageCollectionPolls = 0;
+  garbageCollectionAssignment: GarbageCollectionAssignment | null = null;
+  garbageCollectionCompletions: GarbageCollectionAssignment[] = [];
+  garbageCollectionCompletionError: Error | undefined;
   possessionReports: Array<{ objectHash: string; sizeBytes: number }> = [];
   repairFailures: Array<{
     objectHash: string;
@@ -113,6 +118,25 @@ class FakeControlPlane extends ControlPlaneClient {
   override async pollRepair(): Promise<RepairAssignment | null> {
     this.repairPolls += 1;
     return this.repairAssignment;
+  }
+
+  override async pollGarbageCollection(): Promise<GarbageCollectionAssignment | null> {
+    this.garbageCollectionPolls += 1;
+    return this.garbageCollectionAssignment;
+  }
+
+  override async completeGarbageCollection(
+    input: GarbageCollectionAssignment & { deviceId: string; privateKey: string }
+  ): Promise<{ status: "deleted" }> {
+    if (this.garbageCollectionCompletionError) {
+      throw this.garbageCollectionCompletionError;
+    }
+    this.garbageCollectionCompletions.push({
+      objectHash: input.objectHash,
+      assignmentId: input.assignmentId,
+    });
+    this.garbageCollectionAssignment = null;
+    return { status: "deleted" };
   }
 
   override async reportPossession(input: {
@@ -492,6 +516,79 @@ describe("heartbeat", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
 
     expect(plane.heartbeats.length).toBe(seen);
+  });
+});
+
+describe("garbage collection", () => {
+  it("deletes one assigned object before acknowledging completion", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    const stored = await agent.store.put(Readable.from([Buffer.from("discard me")]));
+    const assignment = {
+      objectHash: stored.hash,
+      assignmentId: "11111111-1111-4111-8111-111111111111",
+    };
+    plane.garbageCollectionAssignment = assignment;
+
+    await expect(agent.attemptGarbageCollection()).resolves.toBe(true);
+
+    expect(await agent.store.has(stored.hash)).toBe(false);
+    expect(plane.garbageCollectionCompletions).toEqual([assignment]);
+  });
+
+  it("safely retries when acknowledgement fails after local deletion", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    const stored = await agent.store.put(Readable.from([Buffer.from("retry deletion")]));
+    const assignment = {
+      objectHash: stored.hash,
+      assignmentId: "22222222-2222-4222-8222-222222222222",
+    };
+    plane.garbageCollectionAssignment = assignment;
+    plane.garbageCollectionCompletionError = new Error("response lost");
+
+    await expect(agent.attemptGarbageCollection()).rejects.toThrow(/response lost/);
+    expect(await agent.store.has(stored.hash)).toBe(false);
+
+    plane.garbageCollectionCompletionError = undefined;
+    await expect(agent.attemptGarbageCollection()).resolves.toBe(true);
+    expect(plane.garbageCollectionPolls).toBe(2);
+    expect(plane.garbageCollectionCompletions).toEqual([assignment]);
+  });
+
+  it("does not poll while presumed-lost inventory recovery is pending", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    plane.heartbeatStatus = "suspected_lost";
+    plane.inventoryError = new Error("inventory unavailable");
+
+    await expect(agent.sendHeartbeat()).rejects.toThrow(/inventory unavailable/);
+    await expect(agent.attemptGarbageCollection()).resolves.toBe(false);
+    expect(plane.garbageCollectionPolls).toBe(0);
+  });
+
+  it("performs bounded cleanup from the normal heartbeat loop", async () => {
+    const { agent, plane } = await makeAgent();
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    const assignment = {
+      objectHash: createHash("sha256").update("already absent").digest("hex"),
+      assignmentId: "33333333-3333-4333-8333-333333333333",
+    };
+    plane.garbageCollectionAssignment = assignment;
+
+    agent.startHeartbeat();
+    await vi.waitFor(() =>
+      expect(plane.garbageCollectionCompletions).toEqual([assignment])
+    );
+    agent.stopHeartbeat();
   });
 });
 

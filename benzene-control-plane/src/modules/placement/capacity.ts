@@ -30,7 +30,7 @@ export function occupiedBytesSql(
       select sum(${replica("size_bytes")})
       from ${replicas} as ${sql.identifier("occupied_replica")}
       where ${replica("device_id")} = ${allocation("device_id")}
-        and ${replica("status")} in ('healthy', 'corrupt', 'degraded')
+        and ${replica("status")} in ('healthy', 'corrupt', 'degraded', 'deleting')
         and ${replica("verified_at")} is not null
         and (
           ${allocation("usage_reported_at")} is null

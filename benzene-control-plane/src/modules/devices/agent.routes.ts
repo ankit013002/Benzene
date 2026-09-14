@@ -14,6 +14,10 @@ import {
   reportRepairSourceFailure,
 } from "../placement/repair.service.js";
 import {
+  completeGarbageCollection,
+  pollGarbageCollection,
+} from "../placement/garbageCollection.service.js";
+import {
   MAX_INVENTORY_OBJECTS,
   reconcileDeviceInventory,
 } from "./inventory.service.js";
@@ -62,6 +66,14 @@ const repairFailureSchema = z.object({
   sourceDeviceId: z.string().uuid(),
   repairAssignmentId: z.string().uuid(),
   reason: z.literal("integrity"),
+});
+
+const garbageCollectionCompletionSchema = z.object({
+  objectHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/i, "must be a SHA-256 hex digest")
+    .transform((value) => value.toLowerCase()),
+  assignmentId: z.string().uuid(),
 });
 
 const inventoryObjectSchema = z.object({
@@ -188,6 +200,29 @@ router.post(
     if (!req.deviceId) throw AppError.unauthorized();
     res.status(200).json({
       data: await reportRepairSourceFailure(req.deviceId, body),
+    });
+  })
+);
+
+/** Returns at most one retryable deletion for an unreferenced local object. */
+router.get(
+  "/garbage-collection",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await pollGarbageCollection(req.deviceId) });
+  })
+);
+
+/** Removes replica metadata only after the node confirms local deletion. */
+router.post(
+  "/garbage-collection/complete",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    const body = parse(garbageCollectionCompletionSchema, req.body);
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({
+      data: await completeGarbageCollection(req.deviceId, body),
     });
   })
 );

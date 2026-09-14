@@ -193,6 +193,9 @@ export async function pollRepairForDevice(
   const objects = await db()
     .select({
       objectHash: replicas.objectHash,
+      garbageCollectionInProgress: sql<boolean>`bool_or(
+        ${replicas.garbageCollectionAssignmentId} is not null
+      )`,
     })
     .from(replicas)
     .where(eq(replicas.vaultId, target.vaultId))
@@ -200,6 +203,7 @@ export async function pollRepairForDevice(
     .orderBy(asc(replicas.objectHash));
 
   for (const object of objects) {
+    if (object.garbageCollectionInProgress) continue;
     const assignment = await db().transaction(async (tx) => {
       // Device lifecycle must be checked under the same lock as the
       // reservation. A drain that wins this lock cannot race a new repair
@@ -282,6 +286,7 @@ export async function pollRepairForDevice(
         )
         .limit(1);
       if (targetReplica?.status === "healthy") return null;
+      if (targetReplica?.status === "deleting") return null;
       // A failed/corrupt row is not an active reservation. It may only be
       // reopened when the object still needs protection; only an existing
       // placing row is retryable when active work already satisfies policy.

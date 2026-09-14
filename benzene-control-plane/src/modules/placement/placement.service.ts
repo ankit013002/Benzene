@@ -315,6 +315,12 @@ export async function reservePlacement(
       )
       .for("update");
     const existingDevices = new Set(existingRows.map((row) => row.deviceId));
+    if (existingRows.some((row) => row.status === "deleting")) {
+      throw AppError.conflict(
+        "Object cleanup is still finishing on one or more target devices",
+        { reason: "garbage_collection_in_progress" }
+      );
+    }
     const reusableExistingDevices = new Set(
       existingRows
         .filter((row) => row.status === "healthy" || row.status === "placing")
@@ -407,7 +413,8 @@ export async function confirmReplica(
       and(
         eq(replicas.vaultId, vault.id),
         eq(replicas.objectHash, input.objectHash),
-        eq(replicas.deviceId, input.deviceId)
+        eq(replicas.deviceId, input.deviceId),
+        eq(replicas.status, "placing")
       )
     )
     .returning();

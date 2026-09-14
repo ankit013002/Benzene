@@ -94,6 +94,7 @@ export async function truncateAll(
     sql`truncate table
       ${schema.deviceRequestReplays},
       ${schema.enrollmentRateLimitAttempts},
+      ${schema.objectReferences},
       ${schema.replicas},
       ${schema.storagePolicies},
       ${schema.deviceEnrollments},

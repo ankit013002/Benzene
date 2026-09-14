@@ -43,6 +43,15 @@ export interface RepairFailureResult {
   status: "corrupt";
 }
 
+export interface GarbageCollectionAssignment {
+  objectHash: string;
+  assignmentId: string;
+}
+
+export interface GarbageCollectionCompletion {
+  status: "deleted";
+}
+
 export interface RemovalDirective {
   status: "erase" | "removed";
 }
@@ -280,6 +289,76 @@ export class ControlPlaneClient {
     }
 
     const payload = (await res.json()) as { data: RepairAssignment | null };
+    return payload.data;
+  }
+
+  /** Polls for one durable deletion of an unreferenced local object. */
+  async pollGarbageCollection(input: {
+    deviceId: string;
+    privateKey: string;
+  }): Promise<GarbageCollectionAssignment | null> {
+    const path = "/agent/garbage-collection";
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: {
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "GET",
+          path,
+          body: "",
+        }),
+      },
+    });
+
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Garbage-collection poll rejected")
+      );
+    }
+
+    const payload = (await res.json()) as {
+      data: GarbageCollectionAssignment | null;
+    };
+    return payload.data;
+  }
+
+  /** Acknowledges local deletion for the exact durable assignment. */
+  async completeGarbageCollection(input: {
+    deviceId: string;
+    privateKey: string;
+    objectHash: string;
+    assignmentId: string;
+  }): Promise<GarbageCollectionCompletion> {
+    const path = "/agent/garbage-collection/complete";
+    const body = JSON.stringify({
+      objectHash: input.objectHash,
+      assignmentId: input.assignmentId,
+    });
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "POST",
+          path,
+          body,
+        }),
+      },
+      body,
+    });
+
+    if (!res.ok) {
+      throw new ControlPlaneError(
+        res.status,
+        await readError(res, "Garbage-collection completion rejected")
+      );
+    }
+
+    const payload = (await res.json()) as { data: GarbageCollectionCompletion };
     return payload.data;
   }
 

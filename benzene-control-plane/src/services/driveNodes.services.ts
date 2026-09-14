@@ -2,6 +2,7 @@ import type { Types } from "mongoose";
 
 import DriveNodeModel, { normalizePath } from "../models/driveNode.model.js";
 import FileVersionModel from "../models/fileVersion.model.js";
+import { releaseObjectReferences } from "../modules/placement/garbageCollection.service.js";
 import { storage } from "../storage/index.js";
 import { AppError } from "../utils/AppError.js";
 import {
@@ -224,11 +225,12 @@ export async function deleteNode(
       nodeId: { $in: affectedIds },
       ownerId,
     })
-      .select("storage.key")
+      .select("_id objectHash storage.key")
       .lean();
 
     // Device-backed versions intentionally have no legacy storage key. Their
-    // bytes remain on devices until reference-counted GC exists.
+    // references are released below so enrolled nodes can delete them through
+    // the retry-safe garbage-collection handshake.
     const keys = versions
       .map((v) => v.storage?.key)
       .filter((key): key is string => Boolean(key));
@@ -237,6 +239,15 @@ export async function deleteNode(
       purgedObjects = keys.length;
     }
     await FileVersionModel.deleteMany({ nodeId: { $in: affectedIds }, ownerId });
+    const deviceVersions = versions.flatMap((version) =>
+      version.objectHash
+        ? [{ versionId: version._id.toString(), objectHash: version.objectHash }]
+        : []
+    );
+    await releaseObjectReferences(
+      ownerId,
+      deviceVersions.map((version) => version.versionId)
+    );
   }
 
   return { deletedNodes: affectedIds.length, purgedObjects };

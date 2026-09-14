@@ -280,6 +280,29 @@ export const storagePolicies = pgTable(
 );
 
 /**
+ * Conservative logical references to device-backed objects.
+ *
+ * A reference is inserted before device placement is returned. A crash can
+ * leak a reference and postpone deletion, while the GC path also checks Mongo
+ * metadata before assigning work so a missing or legacy reference cannot expose
+ * live bytes to deletion.
+ */
+export const objectReferences = pgTable(
+  "object_references",
+  {
+    versionId: text("version_id").primaryKey(),
+    vaultId: uuid("vault_id")
+      .notNull()
+      .references(() => vaults.id, { onDelete: "cascade" }),
+    objectHash: text("object_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (table) => [index("object_references_object_idx").on(table.vaultId, table.objectHash)]
+);
+
+/**
  * A physical copy of an object on one device.
  *
  * Objects are identified by content hash, so a replica row is the join between
@@ -306,6 +329,11 @@ export const replicas = pgTable(
     }),
     /** Opaque per-attempt nonce preventing replay of an old source report. */
     repairAssignmentId: uuid("repair_assignment_id"),
+    /** Stable nonce for retrying one idempotent local object deletion. */
+    garbageCollectionAssignmentId: uuid("garbage_collection_assignment_id"),
+    garbageCollectionAssignedAt: timestamp("garbage_collection_assigned_at", {
+      withTimezone: true,
+    }),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull().default(0),
     status: text("status").notNull().default("placing"),
     /** Last time the device confirmed the bytes still hash correctly (§48). */
@@ -335,5 +363,6 @@ export type NewDevice = typeof devices.$inferInsert;
 export type DeviceStorageAllocation = typeof deviceStorageAllocations.$inferSelect;
 export type DeviceEnrollment = typeof deviceEnrollments.$inferSelect;
 export type StoragePolicy = typeof storagePolicies.$inferSelect;
+export type ObjectReference = typeof objectReferences.$inferSelect;
 export type Replica = typeof replicas.$inferSelect;
 export type NewReplica = typeof replicas.$inferInsert;

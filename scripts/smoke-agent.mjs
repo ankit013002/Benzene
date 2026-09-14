@@ -548,6 +548,37 @@ async function main() {
       finalProtection?.healthyReplicas === 1,
       JSON.stringify(finalProtection)
     );
+
+    console.log("\nreference-safe garbage collection");
+    const purgeRes = reservation?.nodeId
+      ? await fetch(`${controlPlaneUrl}/drive-nodes/${reservation.nodeId}?purge=true`, {
+          method: "DELETE",
+          headers: { "X-User-Id": OWNER },
+        })
+      : undefined;
+    check(
+      "explicit purge removes the logical device-backed version",
+      purgeRes?.status === 200,
+      `status ${purgeRes?.status ?? "not attempted"}`
+    );
+    const collected = await returningAgent.attemptGarbageCollection();
+    check("agent accepted one bounded GC assignment", collected === true);
+    check("GC removed the unreferenced local bytes", !(await store.has(objectHash)));
+    check(
+      "completed GC has no duplicate work",
+      (await returningAgent.attemptGarbageCollection()) === false
+    );
+    const collectedProtectionRes = await fetch(
+      `${controlPlaneUrl}/placement/protection/${objectHash}`,
+      { headers: { "X-User-Id": OWNER } }
+    );
+    const collectedProtection = (await jsonOrNull(collectedProtectionRes))?.data;
+    check(
+      "GC removes the final physical replica record",
+      collectedProtection?.healthyReplicas === 0 &&
+        collectedProtection?.deviceIds?.length === 0,
+      JSON.stringify(collectedProtection)
+    );
     missingAgent.stopHeartbeat();
     returningAgent.stopHeartbeat();
 

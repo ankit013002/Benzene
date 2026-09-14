@@ -106,6 +106,7 @@ export async function reconcileDeviceInventory(
         id: replicas.id,
         objectHash: replicas.objectHash,
         sizeBytes: replicas.sizeBytes,
+        garbageCollectionAssignmentId: replicas.garbageCollectionAssignmentId,
       })
       .from(replicas)
       .where(eq(replicas.deviceId, deviceId))
@@ -137,7 +138,11 @@ export async function reconcileDeviceInventory(
       await tx
         .update(replicas)
         .set({
-          status: present ? "healthy" : "missing",
+          status: replica.garbageCollectionAssignmentId
+            ? "deleting"
+            : present
+              ? "healthy"
+              : "missing",
           verifiedAt: present ? allocation.usageReportedAt : null,
           repairSourceDeviceId: null,
           repairAssignmentId: null,

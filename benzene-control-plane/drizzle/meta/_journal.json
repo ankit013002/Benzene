@@ -57,6 +57,13 @@
       "when": 1789159251525,
       "tag": "0007_sudden_rick_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789384147261,
+      "tag": "0008_faulty_gambit",
+      "breakpoints": true
     }
   ]
 }

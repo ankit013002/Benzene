@@ -12,6 +12,7 @@ import {
   reservePlacement,
 } from "./placement.service.js";
 import { issueTransferGrant, publicKeyFor } from "./transferGrant.js";
+import { registerObjectReference } from "./garbageCollection.service.js";
 
 /**
  * Turns a placement decision into somewhere the browser can actually PUT.
@@ -71,10 +72,18 @@ export function transferPublicKey(): string {
  */
 export async function planUpload(
   ownerId: string,
-  input: { objectHash: string; sizeBytes: number }
+  input: { objectHash: string; sizeBytes: number; versionId?: string }
 ): Promise<UploadPlan> {
   const key = signingKey();
   const vault = await ensureVaultForOwner(ownerId);
+  if (input.versionId) {
+    // Mongo metadata is also checked before GC assignment for crash recovery;
+    // this durable reference is the fast, transactional guard for normal work.
+    await registerObjectReference(ownerId, {
+      versionId: input.versionId,
+      objectHash: input.objectHash,
+    });
+  }
   await classifyDeviceOutages(vault.id);
 
   // Reachability is part of upload placement, not a post-selection filter. A

@@ -270,7 +270,11 @@ export async function reserveDeviceUpload(
 
   let placement: UploadPlan;
   try {
-    placement = await planUpload(ownerId, { objectHash, sizeBytes: input.size });
+    placement = await planUpload(ownerId, {
+      objectHash,
+      sizeBytes: input.size,
+      versionId: versionDoc._id.toString(),
+    });
   } catch (error) {
     // Metadata is intentionally retained as pending so a transient placement
     // or configuration failure cannot make an untracked logical file.
