@@ -8,10 +8,9 @@ import { deriveDeviceStatus as deriveStatus } from "./liveness.js";
 /**
  * Persists lifecycle classification without making elapsed time destructive.
  * A presumed-lost device is quarantined, while its replica rows remain intact
- * for a later inventory reconciliation when the device returns. Classification
- * is intentionally opportunistic: active repair polls and user-facing reads
- * call this function, so this slice does not add a scheduler or recovery
- * protocol.
+ * for a later inventory reconciliation when the device returns. The background
+ * outage scheduler calls this globally; active repair polls and user-facing
+ * reads also call it for fresh, vault-scoped results.
  */
 export async function classifyDeviceOutages(
   vaultId?: string,

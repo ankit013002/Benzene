@@ -33,6 +33,8 @@ export interface AppConfig {
   deviceExtendedOfflineAfterSeconds: number;
   /** Silence after which an extended-offline device is presumed lost, if enabled. */
   deviceSuspectedLostAfterSeconds: number | undefined;
+  /** How often the control plane persists device outage transitions. */
+  deviceOutageSweepIntervalSeconds: number;
   /**
    * Ed25519 private key (base64 PKCS8) the control plane signs transfer grants
    * with. Read lazily: only upload paths need it, so a deployment that has not
@@ -145,6 +147,10 @@ export function loadConfig(): AppConfig {
     deviceOfflineAfterSeconds,
     deviceExtendedOfflineAfterSeconds,
     deviceSuspectedLostAfterSeconds,
+    deviceOutageSweepIntervalSeconds: intFromEnv(
+      "DEVICE_OUTAGE_SWEEP_INTERVAL_SECONDS",
+      60
+    ),
     transferSigningKey: optional("TRANSFER_SIGNING_KEY"),
     transferGrantTtlSeconds: intFromEnv("TRANSFER_GRANT_TTL_SECONDS", 300),
     storageDriver,
