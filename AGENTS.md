@@ -5,6 +5,20 @@
 Context for AI coding agents working in this repo. `CLAUDE.md` and `AGENTS.md`
 are byte-identical and CI enforces that — edit one, copy it to the other.
 
+## Project status — read this first
+
+**Benzene is not fully complete, is not the architecture §105 commercial MVP,
+and is not production-ready for real user data.** What is verified is a
+device-first **local/LAN development slice**: the control plane, node agent and
+web path can enroll devices, place and repair whole-file replicas, and upload
+and download directly on a development LAN.
+
+The commercial MVP still requires remote/HTTPS transfers, encryption and a key
+recovery design, garbage collection, rebalancing, desktop and mobile clients,
+and the other blockers listed in §9. Do not describe the application as
+complete, MVP-complete or production-ready until those capabilities and the
+open product decisions are resolved and verified.
+
 ---
 
 ## 1. What Benzene is
