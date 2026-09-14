@@ -19,6 +19,30 @@ and the other blockers listed in §9. Do not describe the application as
 complete, MVP-complete or production-ready until those capabilities and the
 open product decisions are resolved and verified.
 
+### Completion gate
+
+The status above may change only when all of the following are true and backed
+by end-to-end evidence, not merely scaffolding or unit tests:
+
+- Files can be uploaded, repaired and retrieved securely outside the local LAN,
+  including the chosen NAT/firewall fallback, without accidentally turning the
+  control plane into the normal byte path.
+- Data is encrypted before permanent storage, with an implemented key lifecycle
+  and a tested recovery design. Plaintext-era object compatibility and migration
+  are explicit.
+- Reference-safe garbage collection and automatic, rate-limited rebalancing are
+  implemented and tested against interruption, offline devices and retries.
+- Installable desktop and mobile clients complete the intended Vault journey;
+  web-only development behavior is not treated as equivalent client coverage.
+- Cloud Protection, availability expectations, billing boundaries and the
+  single-copy policy have documented product decisions and matching behavior.
+- Control-plane metadata has a tested backup/restore story, and the remaining
+  legacy MongoDB file metadata is either migrated to PostgreSQL or deliberately
+  accepted as a supported production dependency.
+- Production security, deployment and recovery paths have been exercised with
+  representative data. A green local/LAN smoke suite alone does not satisfy
+  this gate.
+
 ---
 
 ## 1. What Benzene is
