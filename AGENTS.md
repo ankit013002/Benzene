@@ -373,10 +373,13 @@ liveness cutoff as device views. Raw capacity remains owned capacity, even when
 a device is stale or offline.
 
 Outage classification uses 120 seconds as the offline default and 24 hours as
-the extended-offline default. Suspected-loss classification is disabled unless
-`DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly configured and strictly
-later than the extended-offline threshold. Classification is opportunistic from
-active repair and user-facing paths, not a standalone scheduler. Offline and
+the extended-offline default. A process-local, non-overlapping background sweep
+persists transitions every 60 seconds by default; database row locks make
+concurrent control-plane instances safe, and active repair and user-facing paths
+also classify on demand for fresh results. Configure the interval with
+`DEVICE_OUTAGE_SWEEP_INTERVAL_SECONDS`. Suspected-loss classification is
+disabled unless `DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly configured
+and strictly later than the extended-offline threshold. Offline and
 extended-offline replicas remain durable healthy protection, but cannot serve
 downloads or repair while their device is not online. Suspected-lost devices
 are quarantined and excluded from protection counts while their replica metadata
@@ -494,7 +497,7 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **346**, agent **115**, auth **78** when its
+Current counts: control plane **353**, agent **115**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The core
@@ -510,13 +513,14 @@ also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
 
-CI run `34790007104` is fully green and verifies exactly **346/346
-control-plane tests**, including concurrent legacy/device-backed version
-reservation, reverse-order completion, and directory-listing protection
-batching regressions. The versioning regressions prove that each reservation
-receives a distinct immutable version number and that completing versions in
-reverse order leaves the highest committed version current with matching node
-metadata.
+CI run `34834010480` is fully green and verifies exactly **353/353
+control-plane tests**, including non-overlapping scheduled outage sweeps,
+concurrent legacy/device-backed version reservation, reverse-order completion,
+and directory-listing protection batching regressions. The scheduler tests
+cover startup, interval cadence, failure containment and graceful shutdown. The
+versioning regressions prove that each reservation receives a distinct immutable
+version number and that completing versions in reverse order leaves the highest
+committed version current with matching node metadata.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -626,6 +630,9 @@ the standard to match.
   one locally hash-verified inventory restores known hash/size matches, marks
   omissions and mismatches missing, ignores unknown hashes, and safely updates
   repair bindings and capacity accounting (maximum 8,000 objects per request)
+- Automatic outage classification: the control-plane process runs an immediate
+  sweep and repeats it every 60 seconds by default without overlapping slow
+  sweeps; failures are logged and contained, and shutdown waits for active work
 - Automatic whole-file LAN repair fills recorded replica shortfalls via direct
   healthy-peer transfer, with hash verification before recording the new replica
   and serialized possession-versus-repair transitions that reject stale device
@@ -666,9 +673,9 @@ the standard to match.
 
 ### Not built
 
-- **Outage scheduler and rebalancing** — opportunistic
-  offline/extended-offline classification is implemented, and suspected-loss
-  classification is opt-in via `DEVICE_SUSPECTED_LOST_AFTER_SECONDS`. Offline
+- **Rebalancing** — background and on-demand offline/extended-offline
+  classification is implemented, and suspected-loss classification is opt-in
+  via `DEVICE_SUSPECTED_LOST_AFTER_SECONDS`. Offline
   and extended-offline replicas remain durable healthy protection, but cannot
   serve downloads or repair while their device is not online; suspected-lost
   devices are quarantined, excluded from protection counts, and retain replica
@@ -678,9 +685,10 @@ the standard to match.
   hash/size matches return to healthy, omissions and mismatches become missing,
   and unknown hashes are ignored; the authenticated report is not independent
   proof against a compromised device. Repair currently acts on recorded
-  replica shortfalls and can use a draining source; final drain detach and
-  device-row removal are implemented only after protection is restored and the
-  node completes its signed removal handshake
+  replica shortfalls and can use a draining source, but it does not proactively
+  redistribute healthy copies for balance. Final drain detach and device-row
+  removal are implemented only after protection is restored and the node
+  completes its signed removal handshake
 - **Chunking and manifests** — whole-file placement only
 - **Encryption at rest** — objects are stored as plaintext. The object format
   records `v` and `encryption: "none"` so encrypted objects can coexist later
