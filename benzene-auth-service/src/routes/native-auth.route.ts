@@ -48,9 +48,19 @@ router.post(
       const { accessToken, refreshToken, emailVerified } =
         await loginController(data);
       setNativeTokenResponseHeaders(res);
+      if (!emailVerified) {
+        // The shared controller also serves the browser flow, which retains
+        // its historical behaviour. Native clients must never receive a
+        // usable bearer credential before email ownership is established.
+        await handleLogout({ refreshToken });
+        return res.status(403).json({
+          error: "Email verification required",
+          emailVerified: false,
+        });
+      }
       return res.status(200).json({
         ...tokenResponse(accessToken, refreshToken),
-        emailVerified,
+        emailVerified: true,
       });
     } catch (err) {
       if (err instanceof z.ZodError) {

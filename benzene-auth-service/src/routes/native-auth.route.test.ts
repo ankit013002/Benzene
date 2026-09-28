@@ -97,6 +97,64 @@ describe("native mobile authentication routes", () => {
       expiresInSeconds: 900,
       emailVerified: true,
     });
+    expect(handleLogout).not.toHaveBeenCalled();
+  });
+
+  it("revokes unverified native credentials without exposing either token", async () => {
+    vi.mocked(loginController).mockResolvedValue({
+      accessToken: "must-not-be-exposed",
+      refreshToken: "refresh-token-to-revoke",
+      emailVerified: false,
+    });
+    vi.mocked(handleLogout).mockResolvedValue(undefined);
+    const res = response();
+
+    await registeredHandler("/native/login")(
+      request({ email: "ada@example.com", password: "correct-password" }),
+      res,
+      vi.fn(),
+    );
+
+    expect(handleLogout).toHaveBeenCalledWith({
+      refreshToken: "refresh-token-to-revoke",
+    });
+    expect(res.set).toHaveBeenCalledWith("Cache-Control", "no-store");
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(res.json).toHaveBeenCalledWith({
+      error: "Email verification required",
+      emailVerified: false,
+    });
+    expect(JSON.stringify(vi.mocked(res.json).mock.calls)).not.toContain(
+      "must-not-be-exposed",
+    );
+    expect(JSON.stringify(vi.mocked(res.json).mock.calls)).not.toContain(
+      "refresh-token-to-revoke",
+    );
+  });
+
+  it("fails closed when an unverified refresh credential cannot be revoked", async () => {
+    vi.mocked(loginController).mockResolvedValue({
+      accessToken: "must-not-be-exposed",
+      refreshToken: "refresh-token-to-revoke",
+      emailVerified: false,
+    });
+    vi.mocked(handleLogout).mockRejectedValue(new Error("database unavailable"));
+    const res = response();
+
+    await registeredHandler("/native/login")(
+      request({ email: "ada@example.com", password: "correct-password" }),
+      res,
+      vi.fn(),
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith({ error: "Internal server error" });
+    expect(JSON.stringify(vi.mocked(res.json).mock.calls)).not.toContain(
+      "must-not-be-exposed",
+    );
+    expect(JSON.stringify(vi.mocked(res.json).mock.calls)).not.toContain(
+      "refresh-token-to-revoke",
+    );
   });
 
   it("rotates the native refresh credential from the JSON body", async () => {

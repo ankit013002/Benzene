@@ -65,6 +65,13 @@ Keychain or Android Keystore-backed storage. Token responses are marked
 PostgreSQL consume operation as browser refresh, so one credential cannot win
 two concurrent rotations.
 
+Native login issues credentials only after email verification. Correct
+credentials for an unverified account receive a no-store `403` response with
+`{ "error": "Email verification required", "emailVerified": false }` and no
+tokens. The service revokes the refresh credential created by the shared login
+controller before returning that response. Browser login retains its existing
+cookie behavior.
+
 The browser endpoints remain cookie-only even if a native-looking header or
 JSON refresh token is supplied. They never serialize access or refresh tokens
 into a response body. Conversely, native endpoints do not set authentication
