@@ -10,11 +10,12 @@ upload path.
 
 The repository contains a working local/LAN development slice. Automatic
 whole-file LAN repair fills recorded replica shortfalls via direct healthy-peer
-transfer. Outage classification runs opportunistically while active repair and
-user-facing paths run; presumed-lost inventory reconciliation is initiated by
-returning agents;
-encryption, remote access, chunking, garbage collection and several client
-surfaces remain unfinished.
+transfer, reference-safe garbage collection retires purged objects, and
+rate-limited rebalancing redistributes healthy copies after protection is
+satisfied. A background outage sweep persists device transitions, while
+returning presumed-lost agents reconcile a locally verified inventory.
+Encryption, remote access, chunking and several client surfaces remain
+unfinished.
 
 ## How it fits together
 
@@ -65,8 +66,8 @@ The frontend Docker context excludes local `.env*` files while allowing the
 committed `.env.example`; its runtime stage contains only `public`, Next
 standalone, and `.next/static` artifacts. The frontend, auth-service, gateway,
 control-plane and user-service production runtime images run as dedicated
-non-root `benzene` users. The node agent remains a host/LAN process. The
-Full `npm audit` reports 0 vulnerabilities for the frontend, node-agent and
+non-root `benzene` users. The node agent remains a host/LAN process. Full
+`npm audit` reports 0 vulnerabilities for the frontend, node-agent and
 auth-service; the frontend's production-only (`npm audit --omit=dev`) audit
 also reports 0, and the control-plane's production-only audit reports 0. The
 control-plane full audit still reports four moderate, dev-only `esbuild`
@@ -92,10 +93,12 @@ repository-wide zero.
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
   allocation.
-- Opportunistic device outage classification: silence defaults to `offline`
+- Automatic device outage classification: silence defaults to `offline`
   after 120 seconds and `extended_offline` after 24 hours. `suspected_lost` is
   disabled unless `DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly set to a
-  value later than the extended-offline threshold.
+  value later than the extended-offline threshold. A non-overlapping background
+  sweep runs every 60 seconds by default, and active paths also classify on
+  demand.
 - Presumed-lost inventory reconciliation: a returning device remains
   quarantined after a signed heartbeat until it has sent a fresh usage
   heartbeat and a complete, locally hash-verified inventory. One authenticated
@@ -112,6 +115,13 @@ repository-wide zero.
   healthy copy remains. The file UI exposes those states directly.
 - Automatic whole-file LAN repair that fills recorded replica shortfalls by
   copying from a healthy peer, verifying the hash and recording the new replica.
+- Reference-safe whole-file garbage collection after explicit purge, with
+  durable exact assignments, idempotent device deletion, legacy-reference
+  backfill and cancellation when a reference returns.
+- Automatic whole-file rebalancing after protection is healthy. A target copies
+  directly from a more utilized source, verifies and records the bytes, and only
+  then gives the old source a durable deletion assignment. One new move per
+  Vault is admitted every five minutes by default.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -159,8 +169,8 @@ repository-wide zero.
 
 ## Deliberate limits
 
-- Outage classification is not a standalone scheduler: it runs opportunistically
-  from active repair and user-facing paths. Offline and extended-offline
+- Outage classification is persisted by a background sweep and refreshed by
+  active repair and user-facing paths. Offline and extended-offline
   devices' replicas remain durable healthy protection, but cannot serve
   downloads or repair while the device is not online. An explicitly enabled
   suspected-lost device is quarantined and excluded from protection counts; its
@@ -175,10 +185,9 @@ repository-wide zero.
   waiting for an offline device; the UI labels files `Waiting for device`,
   `Restoring protection`, `Available`, or `Unavailable` according to whether a
   reachable healthy copy exists and whether repair is active.
-- Rebalancing is not implemented; repair currently acts on recorded replica
-  shortfalls and can use a draining source. Final drain detach and device-row
-  removal are implemented only after protection is restored and the node
-  completes its signed removal handshake.
+- Rebalancing is deliberately conservative: one whole-file move per Vault
+  cooldown, with no bandwidth budget, power awareness, user schedule,
+  multi-object queue or chunk-level resumption yet.
 - Objects are whole files; chunking, manifests and streaming browser hashing are
   future work. The browser currently hashes a complete file in memory.
 - Encryption at rest and key recovery are not implemented. Stored objects are
@@ -188,7 +197,6 @@ repository-wide zero.
   works for the HTTP LAN development path, but an HTTPS-hosted app still cannot
   directly PUT to an HTTP device; remote/HTTPS transfer support remains
   unfinished.
-- Garbage collection (GC) for unreferenced stored objects is not implemented.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -209,7 +217,7 @@ and web clients, with optional cloud protection. This branch validates the
 control plane, node agent and web/LAN device-first slice; it is not yet that
 commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
 access, encryption and key recovery, cloud-protection policy and billing,
-rebalancing, chunking, garbage collection, sharing and search remain blockers.
+chunking, sharing and search remain blockers.
 Availability, single-copy policy and key recovery remain open product
 questions; this status does not resolve them.
 
@@ -407,7 +415,7 @@ bytes in this path.
 | Placement and protection | `/placement/policy`, `/placement/protection` | Gateway session |
 | Device-backed files | `POST /files/uploads/device`, `POST /files/uploads/device/complete` | Gateway session |
 | File compatibility surface | `/files/**`, `/folders/**`, `/drive-nodes/**` | Gateway session |
-| Agent | `/agent/enrollments`, `/agent/heartbeat`, `/agent/possession`, `/agent/repair` | Enrollment or device signature |
+| Agent | `/agent/enrollments`, `/agent/heartbeat`, `/agent/possession`, `/agent/repair`, `/agent/garbage-collection`, `/agent/rebalancing` | Enrollment or device signature |
 
 ## Testing and CI
 
@@ -427,7 +435,7 @@ node scripts/smoke-user-profile.mjs
 Control-plane tests use real PostgreSQL and create throwaway databases per test
 file. The cross-package smoke test (`node scripts/smoke-agent.mjs`) exercises
 enrollment, heartbeat, presumed-lost inventory recovery, upload, download,
-authentication rejection and device removal against running services. It starts
+reference-safe GC, authentication rejection and device removal against running services. It starts
 the real control plane and node agent itself and talks directly to the control
 plane; it requires a reachable PostgreSQL instance, built packages and
 MongoMemoryServer, and is not a mocked unit test.
@@ -457,18 +465,18 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **346** tests, agent **115**, auth **78** when its
+Verified counts: control plane **372** tests, agent **122**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
-assertions**, and **63 smoke checks**. The frontend suite has **18 tests** total.
+assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
+checks**. The frontend suite has **18 tests** total.
 The integrated authenticated LAN acceptance has exactly **60 `ok`
 assertions** and was green in CI run `34788300450`. Default Turbopack and
 Webpack production builds pass.
 
-CI run `34790007104` is fully green and verifies exactly **346/346
-control-plane tests**, including concurrent legacy/device-backed version
-reservation, reverse-order completion, and directory-listing protection
-batching regressions.
+CI run `34909640992` is fully green and verifies the current control-plane and
+node-agent counts, both production builds, migration drift, protocol vectors,
+the 68-check core smoke and the 50-check protection/rebalance smoke.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -508,8 +516,8 @@ scripts/smoke-user-profile.mjs
 ## Roadmap
 
 The next priorities follow the architecture: design encryption and key recovery
-before real user data; then make remote/HTTPS access safe. Rebalancing, chunking,
-garbage collection and richer clients follow those foundations.
+before real user data; then make remote/HTTPS access safe. Chunking, metadata
+backup/restore and richer clients follow those foundations.
 
 ## Contributing
 

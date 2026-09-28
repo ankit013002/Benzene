@@ -19,12 +19,24 @@ both values and arrive before the same Unix-second grant boundary. Consuming
 the report clears the binding, preventing replay or unrelated-source
 quarantine.
 
+Explicitly purged versions release conservative PostgreSQL object references.
+Once no live or legacy MongoDB version references an object, the control plane
+issues durable, exact per-device garbage-collection assignments and retains
+replica metadata until each agent acknowledges its idempotent local deletion.
+
+After protection is satisfied, the control plane may admit one whole-file
+rebalance per Vault cooldown. It selects an online target that reduces
+proportional usage skew, copies and verifies the replacement before marking the
+old source for durable deletion, and serializes that state with GC, repair,
+inventory recovery and device drain.
+
 ## Outage classification
 
-Device outage classification is persisted opportunistically when active repair
-or user-facing paths inspect a Vault; there is no standalone scheduler. A
-device becomes `offline` after 120 seconds without a heartbeat by default and
-`extended_offline` after 24 hours. `suspected_lost` is disabled unless
+Device outage classification is persisted by a process-local, non-overlapping
+background sweep every 60 seconds by default, and refreshed when active repair
+or user-facing paths inspect a Vault. A device becomes `offline` after 120
+seconds without a heartbeat by default and `extended_offline` after 24 hours.
+`suspected_lost` is disabled unless
 `DEVICE_SUSPECTED_LOST_AFTER_SECONDS` is explicitly configured, and that value
 must be later than the extended-offline threshold.
 
@@ -67,5 +79,7 @@ latest fully verified cross-service counts.
 
 ## Explicit limits
 
-This slice is whole-file and LAN-only. Rebalancing, encryption and key recovery,
-remote access, chunking/manifests and garbage collection remain unfinished.
+This slice is whole-file and LAN-only. Encryption and key recovery, remote
+access and chunking/manifests remain unfinished. Rebalancing is intentionally
+limited to one whole-file move per Vault cooldown, without bandwidth or power
+awareness, user scheduling, multi-object queues or chunk-level resumption.

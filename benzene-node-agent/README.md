@@ -4,7 +4,8 @@ The process that turns a computer into storage for a Benzene vault.
 
 It holds this device's Ed25519 identity, reports signed presence to the control
 plane, serves authorized objects to peers on the local network, and performs
-bounded repair work when the control plane assigns it.
+bounded repair, garbage-collection and rebalancing work when the control plane
+assigns it.
 
 ## Running it
 
@@ -28,6 +29,7 @@ and the agent starts heartbeating.
 | `BENZENE_AGENT_PORT` | `7070` | Transfer server port |
 | `BENZENE_HEARTBEAT_MS` | `30000` | Presence interval |
 | `BENZENE_REPAIR_MS` | `60000` | Minimum interval between repair polls |
+| `BENZENE_REBALANCE_MS` | `60000` | Minimum interval between rebalance polls |
 | `BENZENE_DEVICE_NAME` | hostname | Name shown in the Devices list |
 | `BENZENE_ADVERTISED_URL` | first non-internal LAN IPv4 | URL peers use for direct transfers |
 
@@ -90,6 +92,17 @@ the agent does not poll repair assignments. A failed or lost submission
 is retried on a later heartbeat; a normal heartbeat response clears the pending
 recovery gate if the server has already accepted the report.
 
+**GC is durable and idempotent.** After explicit logical purge, the agent may
+receive one exact object-deletion assignment per heartbeat. It removes only the
+content-addressed object and sidecar inside the managed store, then acknowledges
+the stable nonce; a lost acknowledgement safely retries the same local delete.
+
+**Rebalancing copies before deleting.** The agent uses the same direct,
+grant-scoped peer transfer and hash verification as repair. Only after the
+target reports possession does the old source receive a durable deletion
+assignment. A node never overlaps repair, GC, rebalancing, inventory recovery
+or removal work locally.
+
 **The object format is versioned.** Client-side encryption is not implemented
 yet, but each object records `v` and an explicit `encryption: "none"`. When
 encryption lands, encrypted and plaintext-era objects coexist and no migration
@@ -113,11 +126,11 @@ control.
   durable healthy protection, but cannot serve downloads or repair while their
   device is not online; suspected-lost devices remain quarantined and excluded
   from protection counts until the fresh-heartbeat inventory reconciliation
-  described above. Rebalancing and garbage collection are also unfinished.
+  described above.
+- **Rebalancing is conservative.** It moves one whole file at a time and has no
+  bandwidth budget, power awareness, user schedule or chunk-level resumption.
 - **Whole files, not chunks.** Deliberate, per §107 — chunking lands after the
   core loop is proven.
-- **There is no automatic erase policy or GC.** An authorized object-delete
-  operation exists, but lifecycle cleanup of unreferenced data is unfinished.
 
 ## Protocol contract
 
@@ -128,5 +141,6 @@ format. CI diffs the two files.
 
 ## Verification
 
-The current node-agent suite has **115 tests**. The broader verified counts are
-control plane **342**, auth **78**, gateway **18**, and **63 smoke checks**.
+The current node-agent suite has **122 tests**. The broader verified counts are
+control plane **372**, auth **78**, gateway **18**, **68 core smoke checks** and
+**50 protection/rebalance smoke checks**, all green in CI run `34909640992`.
