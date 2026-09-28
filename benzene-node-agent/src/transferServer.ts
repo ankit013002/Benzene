@@ -1,5 +1,8 @@
 import express, { type Express } from "express";
 import helmet from "helmet";
+import { readFileSync } from "node:fs";
+import http from "node:http";
+import https from "node:https";
 
 import {
   AllocationExceededError,
@@ -29,6 +32,33 @@ export interface TransferServerOptions {
   controlPlanePublicKey: string;
   /** Called after a successful, hash-checked PUT to promote the placement. */
   reportPossession?: (input: { objectHash: string; sizeBytes: number }) => Promise<void>;
+}
+
+export interface TransferListenerTlsOptions {
+  certFile?: string;
+  keyFile?: string;
+}
+
+export type TransferListener = http.Server | https.Server;
+
+/**
+ * Keeps the same Express routes and grant checks whether transfers use HTTP
+ * on a development LAN or HTTPS with an explicitly configured certificate.
+ */
+export function createTransferListener(
+  app: Express,
+  tls: TransferListenerTlsOptions = {}
+): TransferListener {
+  if (Boolean(tls.certFile) !== Boolean(tls.keyFile)) {
+    throw new Error("TLS certificate and private key files must be configured together");
+  }
+  if (tls.certFile && tls.keyFile) {
+    return https.createServer(
+      { cert: readFileSync(tls.certFile), key: readFileSync(tls.keyFile) },
+      app
+    );
+  }
+  return http.createServer(app);
 }
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/;

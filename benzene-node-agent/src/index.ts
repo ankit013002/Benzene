@@ -1,7 +1,11 @@
 import { Agent, AGENT_VERSION } from "./agent.js";
 import { loadAgentConfig } from "./config.js";
 import { ObjectStore } from "./store.js";
-import { createTransferServer } from "./transferServer.js";
+import {
+  createTransferListener,
+  createTransferServer,
+  type TransferListener,
+} from "./transferServer.js";
 
 /**
  * Entry point for the Benzene node agent.
@@ -18,7 +22,7 @@ async function main(): Promise<void> {
     allocatedBytes: config.allocatedBytes,
   });
 
-  let server: ReturnType<ReturnType<typeof createTransferServer>["listen"]> | undefined;
+  let server: TransferListener | undefined;
 
   const agent = new Agent(config, store, {
     onEnrollmentPending: ({ code, expiresAt }) => {
@@ -77,12 +81,16 @@ async function main(): Promise<void> {
       !agent.canServeTransfers()
     ) return;
 
-    server = createTransferServer({
+    const app = createTransferServer({
       store,
       deviceId: identity.deviceId,
       controlPlanePublicKey: identity.controlPlanePublicKey,
       reportPossession: ({ objectHash, sizeBytes }) =>
         agent.reportPossession(objectHash, sizeBytes),
+    });
+    server = createTransferListener(app, {
+      ...(config.tlsCertFile ? { certFile: config.tlsCertFile } : {}),
+      ...(config.tlsKeyFile ? { keyFile: config.tlsKeyFile } : {}),
     }).listen(config.port, () => {
       console.log(`[agent] transfer server listening on ${config.advertisedUrl}`);
     });

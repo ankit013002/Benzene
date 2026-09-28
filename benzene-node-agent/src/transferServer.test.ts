@@ -1,8 +1,11 @@
 import { createHash, sign } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import https from "node:https";
+import type { IncomingHttpHeaders } from "node:http";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import type { Express } from "express";
 import request from "supertest";
@@ -11,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GRANT_TEST_PRIVATE_KEY, GRANT_TEST_PUBLIC_KEY } from "./grantVectors.js";
 import { ObjectStore } from "./store.js";
 import type { TransferOperation } from "./transferGrant.js";
-import { createTransferServer } from "./transferServer.js";
+import { createTransferListener, createTransferServer } from "./transferServer.js";
 
 const DEVICE_ID = "11111111-1111-1111-1111-111111111111";
 const OTHER_DEVICE_ID = "22222222-2222-2222-2222-222222222222";
@@ -55,6 +58,43 @@ function grantFor(
   return `${encoded}.${b64url(signature)}`;
 }
 
+function httpsRequest(
+  port: number,
+  method: string,
+  requestPath: string,
+  grant: string | undefined,
+  ca: Buffer
+): Promise<{ statusCode: number | undefined; headers: IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        method,
+        path: requestPath,
+        ca,
+        headers: {
+          Origin: "https://app.example",
+          ...(grant ? { "X-Transfer-Grant": grant } : {}),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () =>
+          resolve({
+            statusCode: res.statusCode,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString("utf8"),
+          })
+        );
+      }
+    );
+    req.once("error", reject);
+    req.end();
+  });
+}
+
 beforeEach(async () => {
   root = await mkdtemp(path.join(tmpdir(), "benzene-transfer-"));
   store = new ObjectStore({ rootDir: root, allocatedBytes: 1024 });
@@ -71,6 +111,65 @@ afterEach(async () => {
 });
 
 describe("authorisation", () => {
+  it("serves the existing CORS and grant checks over HTTPS", async () => {
+    const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "test-fixtures");
+    const certificate = await readFile(path.join(fixtureDir, "transfer-cert.pem"));
+    const listener = createTransferListener(app, {
+      certFile: path.join(fixtureDir, "transfer-cert.pem"),
+      keyFile: path.join(fixtureDir, "transfer-key.pem"),
+    });
+    await new Promise<void>((resolve, reject) => {
+      listener.once("error", reject);
+      listener.listen(0, "127.0.0.1", resolve);
+    });
+
+    const address = listener.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP listener address");
+
+    try {
+      const preflight = await httpsRequest(
+        address.port,
+        "OPTIONS",
+        `/objects/${sha256("x")}`,
+        undefined,
+        certificate
+      );
+      expect(preflight.statusCode).toBe(204);
+      expect(preflight.headers["access-control-allow-origin"]).toBe("*");
+      expect(preflight.headers["cross-origin-resource-policy"]).toBe("cross-origin");
+
+      const unauthorised = await httpsRequest(
+        address.port,
+        "GET",
+        `/objects/${sha256("x")}`,
+        undefined,
+        certificate
+      );
+      expect(unauthorised.statusCode).toBe(401);
+      expect(JSON.parse(unauthorised.body)).toMatchObject({
+        message: "Transfer not authorised",
+      });
+
+      const content = "served through TLS";
+      const hash = sha256(content);
+      await store.put(Readable.from([Buffer.from(content)]));
+      const download = await httpsRequest(
+        address.port,
+        "GET",
+        `/objects/${hash}`,
+        grantFor(hash, "get"),
+        certificate
+      );
+      expect(download.statusCode).toBe(200);
+      expect(download.headers["content-type"]).toContain("application/octet-stream");
+      expect(download.body).toBe(content);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        listener.close((err) => (err ? reject(err) : resolve()))
+      );
+    }
+  });
+
   // A node must not expose an unrestricted file server (§81).
   it.each([["GET"], ["PUT"], ["DELETE"]])("refuses %s with no grant", async (method) => {
     await request(app)

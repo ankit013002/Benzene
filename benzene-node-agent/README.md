@@ -27,6 +27,8 @@ and the agent starts heartbeating.
 | `BENZENE_DATA_DIR` | `~/.benzene` | Identity and storage root |
 | `BENZENE_ALLOCATED_BYTES` | `0` | Bytes this device contributes |
 | `BENZENE_AGENT_PORT` | `7070` | Transfer server port |
+| `BENZENE_AGENT_TLS_CERT_FILE` | unset | Optional TLS certificate chain |
+| `BENZENE_AGENT_TLS_KEY_FILE` | unset | Optional TLS private key; configure with the certificate |
 | `BENZENE_HEARTBEAT_MS` | `30000` | Presence interval |
 | `BENZENE_REPAIR_MS` | `60000` | Minimum interval between repair polls |
 | `BENZENE_REBALANCE_MS` | `60000` | Minimum interval between rebalance polls |
@@ -35,7 +37,9 @@ and the agent starts heartbeating.
 
 The advertised URL matters when a computer has multiple interfaces: it is the
 address the control plane gives to browsers and other agents. Override it when
-the automatic LAN address chooses a VPN or virtual interface.
+the automatic LAN address chooses a VPN or virtual interface. Configuring both
+TLS files changes the default to `https://`; the certificate must be trusted by
+clients and cover the advertised hostname or IP address.
 
 After enrollment, each heartbeat is signed with the device's private key. The
 agent also polls signed `GET /agent/repair` assignments. When work is available,
@@ -111,9 +115,10 @@ control.
 
 ## Known limits
 
-- **Transfers are HTTP/LAN oriented.** CORS is enabled for direct browser-to-
-  device requests, but an HTTPS-hosted app cannot directly PUT to an HTTP LAN
-  address; remote access and relay are unfinished.
+- **HTTPS serving is configurable, not provisioned.** The same grant-protected
+  transfer routes can listen with a supplied certificate and key, but Benzene
+  does not yet issue or renew certificates, establish browser trust, discover
+  remote peers, traverse NAT or provide a relay.
 - **Objects are plaintext.** Each sidecar records `encryption: "none"`; at-rest
   encryption and its key-recovery design must precede real user data.
 - **The private key is a `0600` file**, not platform-secure storage. Keychain,
@@ -121,8 +126,8 @@ control.
 - **Repair is whole-file and bounded.** The agent fills recorded replica
   shortfalls through direct healthy-peer transfer, including assignments that
   copy from a draining source during drain preparation. Outage classification
-  is control-plane work performed opportunistically by active repair and user
-  paths, not a node-agent scheduler. Offline and extended-offline replicas stay
+  is control-plane work performed by its background sweep and refreshed by
+  active paths. Offline and extended-offline replicas stay
   durable healthy protection, but cannot serve downloads or repair while their
   device is not online; suspected-lost devices remain quarantined and excluded
   from protection counts until the fresh-heartbeat inventory reconciliation
@@ -141,6 +146,6 @@ format. CI diffs the two files.
 
 ## Verification
 
-The current node-agent suite has **122 tests**. The broader verified counts are
+The current node-agent suite has **127 tests**. The broader verified counts are
 control plane **372**, auth **78**, gateway **18**, **68 core smoke checks** and
 **50 protection/rebalance smoke checks**, all green in CI run `34909640992`.

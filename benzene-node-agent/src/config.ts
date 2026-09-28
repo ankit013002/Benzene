@@ -16,9 +16,13 @@ export interface AgentConfig {
   allocatedBytes: number;
   /** Port the transfer server listens on for LAN peers. */
   port: number;
+  /** Optional TLS certificate chain for direct HTTPS transfers. */
+  tlsCertFile?: string;
+  /** Optional TLS private key paired with tlsCertFile. */
+  tlsKeyFile?: string;
   /**
    * Absolute URL peers should use to reach this device. Defaults to the LAN
-   * address, which is what makes browser-to-device transfer work at home.
+   * address and uses HTTPS when a TLS certificate pair is configured.
    */
   advertisedUrl: string;
   heartbeatIntervalMs: number;
@@ -56,6 +60,17 @@ function intFromEnv(name: string, fallback: number): number {
 export function loadAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
   const dataDir =
     overrides.dataDir ?? process.env["BENZENE_DATA_DIR"] ?? path.join(homedir(), ".benzene");
+  const port = overrides.port ?? intFromEnv("BENZENE_AGENT_PORT", 7070);
+  const tlsCertFile =
+    overrides.tlsCertFile ?? process.env["BENZENE_AGENT_TLS_CERT_FILE"];
+  const tlsKeyFile =
+    overrides.tlsKeyFile ?? process.env["BENZENE_AGENT_TLS_KEY_FILE"];
+
+  if (Boolean(tlsCertFile) !== Boolean(tlsKeyFile)) {
+    throw new Error(
+      "BENZENE_AGENT_TLS_CERT_FILE and BENZENE_AGENT_TLS_KEY_FILE must be configured together"
+    );
+  }
 
   return {
     controlPlaneUrl: (
@@ -69,11 +84,13 @@ export function loadAgentConfig(overrides: Partial<AgentConfig> = {}): AgentConf
     // Zero means "enrolled but contributing nothing yet"; the control plane is
     // the source of truth once the user has chosen an amount.
     allocatedBytes: overrides.allocatedBytes ?? intFromEnv("BENZENE_ALLOCATED_BYTES", 0),
-    port: overrides.port ?? intFromEnv("BENZENE_AGENT_PORT", 7070),
+    port,
+    ...(tlsCertFile ? { tlsCertFile } : {}),
+    ...(tlsKeyFile ? { tlsKeyFile } : {}),
     advertisedUrl:
       overrides.advertisedUrl ??
-      process.env["BENZENE_ADVERTISED_URL"] ??
-      `http://${lanAddress()}:${overrides.port ?? intFromEnv("BENZENE_AGENT_PORT", 7070)}`,
+      (process.env["BENZENE_ADVERTISED_URL"] ||
+        `${tlsCertFile ? "https" : "http"}://${lanAddress()}:${port}`),
     heartbeatIntervalMs:
       overrides.heartbeatIntervalMs ?? intFromEnv("BENZENE_HEARTBEAT_MS", 30_000),
     repairIntervalMs:
