@@ -1,0 +1,23 @@
+{
+  "description": "Public deterministic conformance vector; test keys and nonces only.",
+  "vaultMasterKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "objectKeyHex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "plaintextBase64Url": "QmVuemVuZSBlbmNyeXB0ZWQgb2JqZWN0IHYxIHZlY3Rvclxu",
+  "vaultId": "vector-vault",
+  "objectId": "a57db3d06c63d77e7cd19eba661b904dca2c6a0af327033f966fdc1404efe33f",
+  "storageHash": "3e76161b32333099369e824800c61bb4dd711e56352a991593be7c06070ac43f",
+  "ciphertextBase64Url": "gDHT-zUYoCs3XDNa_DolF3eu8uGfJcSqToilIBaPrHalYUNwEI4LVF8SCQRGFHX0RWMPeQ",
+  "metadata": {
+    "format": "benzene-encrypted-object",
+    "version": 1,
+    "payloadAlgorithm": "AES-256-GCM",
+    "keyWrapAlgorithm": "HKDF-SHA-256+AES-256-GCM",
+    "vaultId": "vector-vault",
+    "objectId": "a57db3d06c63d77e7cd19eba661b904dca2c6a0af327033f966fdc1404efe33f",
+    "storageHash": "3e76161b32333099369e824800c61bb4dd711e56352a991593be7c06070ac43f",
+    "plaintextSize": 36,
+    "payloadNonce": "QEFCQ0RFRkdISUpL",
+    "wrappedKeyNonce": "TE1OT1BRUlNUVVZX",
+    "wrappedKeyCiphertext": "ehnX3AWKFFJ09e7mQ09SFFxcZl4c6YymfPbYk2G6k5fAPo7_mqnu6EpxWx-Ff9Uj"
+  }
+}
