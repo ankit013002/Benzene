@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  ACCESS_TOKEN_LIFETIME_SECONDS,
   signAccessToken,
   makeOpaqueToken,
   hashToken,
@@ -61,10 +62,10 @@ describe("signAccessToken", () => {
     expect(decoded.roles).toEqual(["user"]);
   });
 
-  it("sets an expiry on the token", () => {
+  it("sets the advertised short expiry on the token", () => {
     const token = signAccessToken("cred-id-123", "user@example.com");
     const decoded = jwt.decode(token) as jwt.JwtPayload;
-    expect(decoded.exp).toBeDefined();
+    expect(decoded.exp).toBe((decoded.iat ?? 0) + ACCESS_TOKEN_LIFETIME_SECONDS);
   });
 });
 

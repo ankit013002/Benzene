@@ -52,7 +52,8 @@ class NebulaGatewayApplicationTests {
 		assertThat(auth).isNotNull();
 		assertThat(Mono.from(placement.getPredicate().apply(exchange("/placement/upload-targets"))).block()).isTrue();
 		for (String endpoint : List.of("signup", "login", "logout", "refresh",
-				"verify-email", "resend-verification", "forgot-password", "reset-password")) {
+				"verify-email", "resend-verification", "forgot-password", "reset-password",
+				"native/login", "native/refresh", "native/logout")) {
 			assertThat(Mono.from(auth.getPredicate().apply(exchange("/auth/" + endpoint))).block())
 					.as("/auth/%s is routed to the auth service", endpoint).isTrue();
 		}

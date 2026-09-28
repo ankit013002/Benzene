@@ -77,6 +77,13 @@ class SessionToHeadersFilterTest {
                         .build());
     }
 
+    private static MockServerWebExchange exchangeWithBearer(String token) {
+        return MockServerWebExchange.from(
+                MockServerHttpRequest.get("/files")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+    }
+
     @Test
     void injectsIdentityHeadersFromAValidToken() throws Exception {
         ServerWebExchange forwarded =
@@ -86,6 +93,69 @@ class SessionToHeadersFilterTest {
         assertThat(headers.getFirst("X-User-Id")).isEqualTo("user-1");
         assertThat(headers.getFirst("X-User-AuthSub")).isEqualTo("user-1");
         assertThat(headers.getFirst("X-User-Email")).isEqualTo("ada@example.com");
+    }
+
+    @Test
+    void injectsTheSameIdentityHeadersFromAValidBearerToken() throws Exception {
+        ServerWebExchange forwarded =
+                run(exchangeWithBearer(token(SECRET, "user-1", "ada@example.com", "Ada")));
+
+        HttpHeaders headers = forwarded.getRequest().getHeaders();
+        assertThat(headers.getFirst("X-User-Id")).isEqualTo("user-1");
+        assertThat(headers.getFirst("X-User-AuthSub")).isEqualTo("user-1");
+        assertThat(headers.getFirst("X-User-Email")).isEqualTo("ada@example.com");
+        assertThat(headers.getFirst("X-User-Name")).isEqualTo("Ada");
+        assertThat(headers.containsKey(HttpHeaders.AUTHORIZATION)).isFalse();
+    }
+
+    @Test
+    void bearerIdentityReplacesClientSuppliedIdentityHeaders() throws Exception {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/files")
+                        .header(HttpHeaders.AUTHORIZATION,
+                                "Bearer " + token(SECRET, "user-1", "ada@example.com", "Ada"))
+                        .header("X-User-Id", "attacker")
+                        .header("X-User-AuthSub", "attacker")
+                        .header("X-User-Email", "attacker@example.com")
+                        .header("X-User-Name", "Attacker")
+                        .build());
+
+        ServerWebExchange forwarded = run(exchange);
+
+        assertThat(forwarded.getRequest().getHeaders().get("X-User-Id"))
+                .containsExactly("user-1");
+        assertThat(forwarded.getRequest().getHeaders().get("X-User-AuthSub"))
+                .containsExactly("user-1");
+        assertThat(forwarded.getRequest().getHeaders().get("X-User-Email"))
+                .containsExactly("ada@example.com");
+        assertThat(forwarded.getRequest().getHeaders().get("X-User-Name"))
+                .containsExactly("Ada");
+    }
+
+    @Test
+    void doesNotDowngradeToACookieWhenAnExplicitBearerTokenIsInvalid() throws Exception {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/files")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer invalid")
+                        .header(HttpHeaders.COOKIE,
+                                "session=" + token(SECRET, "user-1", "ada@example.com", "Ada"))
+                        .build());
+
+        assertThat(run(exchange)).isNull();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void rejectsAnUnsupportedAuthorizationSchemeEvenWithAValidCookie() throws Exception {
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/files")
+                        .header(HttpHeaders.AUTHORIZATION, "Basic credentials")
+                        .header(HttpHeaders.COOKIE,
+                                "session=" + token(SECRET, "user-1", "ada@example.com", "Ada"))
+                        .build());
+
+        assertThat(run(exchange)).isNull();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
     /**

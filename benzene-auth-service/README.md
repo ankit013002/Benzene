@@ -12,7 +12,8 @@ PostgreSQL; no external OAuth/OIDC provider is required.
 - **Framework:** Express 5
 - **Database:** PostgreSQL (`pg`)
 - **Auth:** JWT access tokens (HS256, 15 min) + opaque refresh tokens (7 days, SHA-256 hashed in DB)
-- **Session transport:** `httpOnly` cookies (`session` + `refresh_token`)
+- **Browser session transport:** `httpOnly` cookies (`session` + `refresh_token`)
+- **Native session transport:** bearer access token + app-secured opaque refresh token
 - **Email:** nodemailer (optional SMTP for verification + password reset)
 - **Validation:** Zod
 - **Security:** helmet, express-rate-limit, bcrypt (cost 12)
@@ -29,13 +30,46 @@ available at `/api/health`.
 |--------|-------------------------|-----------------|------------------------------------------|
 | GET    | `/api/health`           | —               | Health check                             |
 | POST   | `/api/auth/signup`      | 3 / hr          | Create account, send verification email  |
-| POST   | `/api/auth/login`       | 5 / 15 min      | Authenticate, issue tokens               |
+| POST   | `/api/auth/login`       | 5 / 15 min      | Authenticate, set browser cookies        |
 | POST   | `/api/auth/logout`      | —               | Revoke refresh token, clear cookies      |
-| POST   | `/api/auth/refresh`     | —               | Rotate refresh token, reissue access token |
+| POST   | `/api/auth/refresh`     | —               | Rotate browser authentication cookies    |
+| POST   | `/api/auth/native/login` | 5 / 15 min     | Issue native bearer and refresh credentials |
+| POST   | `/api/auth/native/refresh` | —             | Atomically rotate a native refresh credential |
+| POST   | `/api/auth/native/logout` | —              | Revoke a native refresh credential          |
 | GET    | `/api/auth/verify-email`| —               | Confirm email via link token             |
 | POST   | `/api/auth/resend-verification` | 3 / hr  | Resend email verification link           |
 | POST   | `/api/auth/forgot-password`    | 5 / hr  | Send password reset email                |
 | POST   | `/api/auth/reset-password`     | 5 / hr  | Apply new password, invalidate all sessions |
+
+The three native endpoints require the exact request header
+`X-Benzene-Client-Kind: native-mobile`. Login accepts the normal email/password
+body. Refresh and logout accept `{ "refreshToken": "…" }`. Successful login
+and refresh responses use this shape:
+
+```json
+{
+  "accessToken": "short-lived HS256 JWT",
+  "refreshToken": "rotating opaque credential",
+  "tokenType": "Bearer",
+  "expiresInSeconds": 900
+}
+```
+
+Through the public gateway, the corresponding paths are
+`/auth/native/login`, `/auth/native/refresh`, and `/auth/native/logout`.
+Native clients must call these endpoints over HTTPS and send the access token
+to protected gateway routes as
+`Authorization: Bearer <accessToken>` and must store the refresh credential in
+Keychain or Android Keystore-backed storage. Token responses are marked
+`Cache-Control: no-store`. Native refresh rotation uses the same atomic
+PostgreSQL consume operation as browser refresh, so one credential cannot win
+two concurrent rotations.
+
+The browser endpoints remain cookie-only even if a native-looking header or
+JSON refresh token is supplied. They never serialize access or refresh tokens
+into a response body. Conversely, native endpoints do not set authentication
+cookies. This split is deliberate: do not make response transport depend only
+on a loosely inferred user agent.
 
 ---
 

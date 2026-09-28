@@ -48,6 +48,7 @@ describe("POST /refresh", () => {
     } as unknown as Response;
     const request = {
       cookies: { refresh_token: "old-refresh-token" },
+      body: { refreshToken: "body-token-must-not-be-used-by-web-flow" },
     } as unknown as Request;
 
     await handler(request, response, vi.fn());

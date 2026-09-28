@@ -54,8 +54,7 @@ public class SessionToHeadersFilter implements GatewayFilter, Ordered {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        String cookieHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.COOKIE);
-        String token = extractCookie(cookieHeader, "session");
+        String token = extractAccessToken(exchange.getRequest().getHeaders());
 
         if (token == null) {
             exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
@@ -100,6 +99,9 @@ public class SessionToHeadersFilter implements GatewayFilter, Ordered {
 
             ServerHttpRequest mutated = exchange.getRequest().mutate()
                     .headers(h -> {
+                        // Downstream services trust only gateway-injected
+                        // identity. Do not propagate a reusable bearer secret.
+                        h.remove(HttpHeaders.AUTHORIZATION);
                         h.remove("X-User-AuthSub");
                         h.remove("X-User-Email");
                         h.remove("X-User-Name");
@@ -127,6 +129,16 @@ public class SessionToHeadersFilter implements GatewayFilter, Ordered {
                 .filter(c -> c.startsWith(name + "="))
                 .map(c -> c.substring(name.length() + 1))
                 .findFirst().orElse(null);
+    }
+
+    private static String extractAccessToken(HttpHeaders headers) {
+        String authorization = headers.getFirst(HttpHeaders.AUTHORIZATION);
+        if (authorization != null) {
+            if (!authorization.regionMatches(true, 0, "Bearer ", 0, 7)) return null;
+            String token = authorization.substring(7).trim();
+            return token.isEmpty() ? null : token;
+        }
+        return extractCookie(headers.getFirst(HttpHeaders.COOKIE), "session");
     }
 
     @Override

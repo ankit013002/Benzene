@@ -16,6 +16,8 @@ const SIGNING_SECRET = (() => {
     : Buffer.from(RAW, "utf8");
 })();
 
+export const ACCESS_TOKEN_LIFETIME_SECONDS = 15 * 60;
+
 /**
  * Signs a JWT access token with the provided credential ID and email.
  * The token includes the credential ID as the subject (sub), the email, and a roles array with a default role of "user".
@@ -29,7 +31,7 @@ export function signAccessToken(credentialId: string, email: string): string {
   return jwt.sign(
     { sub: credentialId, email, roles: ["user"] },
     SIGNING_SECRET,
-    { algorithm: "HS256", expiresIn: "15m" },
+    { algorithm: "HS256", expiresIn: ACCESS_TOKEN_LIFETIME_SECONDS },
   );
 }
 
