@@ -44,10 +44,12 @@ jobs:
               - 'benzene-control-plane/**'
               - 'scripts/metadata-backup.mjs'
               - 'scripts/metadata-backup.test.mjs'
+              - '.github/workflows/**'
             user_service:
               - 'nebulavault-user-service/**'
             agent:
               - 'benzene-node-agent/**'
+              - '.github/workflows/**'
             docs:
               - 'README.md'
               - 'AGENTS.md'
