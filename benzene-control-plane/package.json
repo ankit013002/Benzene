@@ -13,6 +13,9 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:runtime": "node built/db/migrate.js",
+    "db:backup": "node ../scripts/metadata-backup.mjs backup",
+    "db:restore": "node ../scripts/metadata-backup.mjs restore",
+    "test:metadata-backup": "node --test ../scripts/metadata-backup.test.mjs",
     "db:studio": "drizzle-kit studio"
   },
   "keywords": [],

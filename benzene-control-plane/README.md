@@ -46,6 +46,51 @@ repair while the device is not online. A suspected-lost device is quarantined
 and excluded from protection counts while its replica metadata is preserved. A
 signed heartbeat alone does not restore that quarantine.
 
+## Metadata backup and restore
+
+`npm run db:backup -- --output /secure/backups/benzene-YYYYMMDD` creates a
+paired PostgreSQL custom-format dump and compressed MongoDB archive, with a
+manifest containing database names and SHA-256 checksums. Set `DATABASE_URL`
+and `MONGOOSE_URI` as for the control plane. The destination must not already
+exist. The script requires `--confirm-maintenance-window`; stop the control
+plane and all other writers before starting it. It writes owner-only files and
+does not store connection strings in the backup. The host must provide
+`pg_dump`, `pg_restore`, `mongodump` and `mongorestore`; use client versions
+compatible with the target database servers.
+
+Restore first stops the control plane and all writers, then runs:
+
+```bash
+npm run db:restore -- --from /secure/backups/benzene-YYYYMMDD \
+  --confirm-maintenance-window \
+  --confirm-replace-targets=benzene,benzene
+```
+
+The confirmation value is the exact PostgreSQL database name followed by the
+MongoDB database name, matching `DATABASE_URL` and `MONGOOSE_URI`. Restore
+checks both checksums and both target names before invoking either native
+restore tool. It replaces the target PostgreSQL objects and drops/reloads the
+target MongoDB database. Keep a separate copy of any target data you need.
+
+The two databases cannot be snapshotted or restored atomically with this
+workflow. The maintenance window prevents Benzene writes between the two dump
+operations; the manifest identifies the pair but does not make them a
+distributed transaction. If a restore command fails after PostgreSQL has been
+restored, keep the application offline and rerun the same restore after
+resolving the error. Use database-native point-in-time recovery and managed
+backup policies for availability objectives; this operator workflow has not
+been exercised against a production-sized deployment and is not a substitute
+for them. The archive contains control-plane metadata, including sensitive
+file names and ownership information, so store it encrypted with restricted
+access and test recovery on isolated databases before relying on it.
+
+The script-level workflow tests run without database servers or cloud
+accounts:
+
+```bash
+node --test ../scripts/metadata-backup.test.mjs
+```
+
 ### Presumed-lost inventory reconciliation
 
 When a presumed-lost device returns, its agent must first complete a fresh
