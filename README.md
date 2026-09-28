@@ -122,6 +122,13 @@ repository-wide zero.
   directly from a more utilized source, verifies and records the bytes, and only
   then gives the old source a durable deletion assignment. One new move per
   Vault is admitted every five minutes by default.
+- Optional TLS termination for the existing grant-protected node transfer API.
+  HTTP remains the LAN-development default; operators must supply a trusted
+  certificate and matching private key.
+- Offline metadata backup/restore tooling creates paired, checksummed
+  PostgreSQL and MongoDB archives with owner-only permissions and requires
+  explicit maintenance-window and destructive-target confirmation. The
+  safeguards are tested; a live production-sized restore rehearsal is not.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -193,10 +200,10 @@ repository-wide zero.
 - Encryption at rest and key recovery are not implemented. Stored objects are
   plaintext and the recovery design must be settled before real user data is
   entrusted to the system.
-- Remote access, NAT traversal and relay are not implemented. Browser CORS now
-  works for the HTTP LAN development path, but an HTTPS-hosted app still cannot
-  directly PUT to an HTTP device; remote/HTTPS transfer support remains
-  unfinished.
+- Remote peer discovery, certificate provisioning/trust, NAT traversal and
+  relay are not implemented. Browser CORS works for the HTTP LAN development
+  path and the agent can terminate explicitly configured HTTPS, but that alone
+  is not an automatic remote-access solution.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -465,7 +472,7 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **372** tests, agent **122**, auth **78** when its
+Verified counts: control plane **372** tests, agent **127**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
 assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
@@ -474,9 +481,10 @@ The integrated authenticated LAN acceptance has exactly **60 `ok`
 assertions** and was green in CI run `34788300450`. Default Turbopack and
 Webpack production builds pass.
 
-CI run `34909640992` is fully green and verifies the current control-plane and
-node-agent counts, both production builds, migration drift, protocol vectors,
-the 68-check core smoke and the 50-check protection/rebalance smoke.
+CI run `36468270582` is fully green and verifies the current control-plane and
+node-agent counts, both production builds, five metadata-backup safeguard
+tests, migration drift, protocol vectors, the 68-check core smoke and the
+50-check protection/rebalance smoke.
 
 CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
 including real-Postgres concurrency regressions for refresh-token rotation,
@@ -511,6 +519,7 @@ scripts/smoke-auth-gateway.mjs
                               Authenticated LAN web-route/topology acceptance
 scripts/smoke-user-profile.mjs
                               Authenticated user-profile bootstrap acceptance
+scripts/metadata-backup.mjs   Offline paired metadata backup/restore tooling
 ```
 
 ## Roadmap

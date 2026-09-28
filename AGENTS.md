@@ -92,6 +92,7 @@ storage-layer work.
 | `scripts/smoke-protection.mjs` | Three-device Protected repair smoke test | Node |
 | `scripts/smoke-auth-gateway.mjs` | Authenticated LAN web-route and topology acceptance | Node |
 | `scripts/smoke-user-profile.mjs` | Authenticated user-profile bootstrap acceptance | Node |
+| `scripts/metadata-backup.mjs` | Offline paired PostgreSQL/MongoDB metadata backup and restore | Node + native database tools |
 | `YAGNI-CODE/` | Notes on removed code. Not built. | — |
 | `simple-flask-server/` | Debug scratch. Not production. | — |
 
@@ -311,6 +312,12 @@ authorise a write. The signature is verified **before** the payload is parsed.
 
 Deliberately not a JWT — a fixed format has no `alg` field to negotiate down.
 
+The node transfer server can optionally terminate TLS when both certificate and
+private-key files are configured. HTTP remains the development default. This
+removes one transport-layer blocker but does not provision certificates,
+establish browser trust, discover remote peers, traverse NAT or provide a relay;
+do not describe configured HTTPS alone as remote access.
+
 Pending device names and platforms are not globally listed; a user must enter
 the short-lived code shown on that device to approve or reject it.
 
@@ -466,6 +473,11 @@ vectors and updating both files in the same commit.
 - The control-plane, node-agent and auth-service test suites use Vitest
   **4.1.11**, which preserves Node 20 compatibility and resolves the prior
   Vitest advisory.
+- `scripts/metadata-backup.test.mjs` has five database-independent workflow
+  tests covering maintenance confirmation, partial-archive cleanup, owner-only
+  permissions, checksums before destructive commands and exact target naming.
+  A live isolated restore rehearsal is still required before calling metadata
+  recovery production-verified.
 - Frontend transfer-helper tests use Node's built-in `node:test` and
   `node:assert` through `tsx`; eight deterministic tests (five upload and three
   download) cover reservation hashing, direct Protected PUTs and grants,
@@ -517,7 +529,7 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **372**, agent **122**, auth **78** when its
+Current counts: control plane **372**, agent **127**, auth **78** when its
 real-Postgres concurrency tests are enabled, gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The core
@@ -531,9 +543,10 @@ also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
 
-CI run `34909640992` is fully green and verifies exactly **372/372
-control-plane tests**, **122/122 node-agent tests**, both TypeScript production
-builds, the **68-check** core smoke and the **50-check** Protected
+CI run `36468270582` is fully green and verifies exactly **372/372
+control-plane tests**, **127/127 node-agent tests**, both TypeScript production
+builds, the five metadata-backup safeguard tests, the **68-check** core smoke
+and the **50-check** Protected
 repair/rebalance smoke. Six real-database rebalancing regressions cover
 copy-before-delete, retry identity, Vault-wide rate limiting, protection
 priority, GC exclusion, corrupt sources and draining targets. Nine
@@ -667,6 +680,15 @@ the standard to match.
   directly, hash-verified and recorded before the old source receives a durable,
   retry-safe deletion assignment. The three-device smoke proves the bytes move
   and subsequent reads name only the new holder.
+- The node agent can serve the existing grant-protected transfer API over
+  explicitly configured HTTPS. Its integration test uses a trusted test
+  certificate with hostname/IP SAN validation; certificate issuance, renewal
+  and trust distribution remain deployment work.
+- Offline metadata backup/restore tooling pairs PostgreSQL and MongoDB archives
+  in one checksummed manifest, stages archives atomically, requires explicit
+  maintenance and exact destructive-target confirmations, and locks backup
+  permissions. The workflow safeguards are tested, but no production-sized or
+  live-database restore rehearsal has been completed.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -711,7 +733,9 @@ the standard to match.
   records `v` and `encryption: "none"` so encrypted objects can coexist later
   without a migration, but the key hierarchy and recovery story (§33) are
   undesigned. **Design this before real user data lands.**
-- **Remote access / NAT traversal / relay** — LAN only
+- **Remote peer discovery / NAT traversal / relay** — the agent can terminate
+  configured HTTPS, but certificate provisioning/trust and automatic remote
+  connectivity are not implemented
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
