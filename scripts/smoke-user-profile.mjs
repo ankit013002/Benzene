@@ -305,6 +305,12 @@ async function main() {
     );
     await pool.query(
       await readFile(
+        path.join(authDir, "src/db/migrations/002_account_deletion_requests.sql"),
+        "utf8",
+      ),
+    );
+    await pool.query(
+      await readFile(
         path.join(userServiceDir, "src/main/resources/schema.sql"),
         "utf8",
       ),

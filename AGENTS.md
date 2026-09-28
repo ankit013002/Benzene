@@ -155,6 +155,9 @@ brew services start mongodb-community
 
 createdb benzene && createdb benzene_auth
 
+psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/001_initial.sql
+psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/002_account_deletion_requests.sql
+
 # One .env per service, from the committed templates
 for d in benzene-control-plane benzene-node-agent benzene-auth-service; do
   cp $d/.env.example $d/.env
@@ -529,14 +532,15 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **372**, agent **127**, auth **78** when its
-real-Postgres concurrency tests are enabled, gateway **18**, frontend
+Current counts: control plane **372**, agent **127**, auth **90** total
+(**83** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The core
 cross-package smoke has **68 checks**; the
 three-device Protected repair and rebalance smoke has **50 checks**.
-The integrated authenticated LAN acceptance has exactly **60 `ok` assertions**
-and was green in CI run `34788300450`. Default Turbopack
+The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
+assertions; its earlier 60-assertion version was green in CI run `34788300450`.
+Default Turbopack
 and Webpack production builds pass, and a live browser check verified that the
 landing page renders without an overlay and navigates to sign-in; that check
 also caught and fixed CSS import ordering and a missing base selector.

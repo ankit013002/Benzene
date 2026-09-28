@@ -158,7 +158,9 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
       - name: Apply auth database schema
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/001_initial.sql
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/001_initial.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/002_account_deletion_requests.sql
       - name: Build
         run: npm run build
       - name: Test (including PostgreSQL concurrency regression)

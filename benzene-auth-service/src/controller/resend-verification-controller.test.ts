@@ -35,6 +35,7 @@ const mockCredential = {
   email: "user@example.com",
   password_hash: "$2b$12$hashed",
   email_verified: false,
+  account_status: "active" as const,
   created_at: new Date(),
   updated_at: new Date(),
 };

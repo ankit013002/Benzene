@@ -35,14 +35,43 @@ export async function deletePasswordResetToken(
 export async function createPasswordResetToken(
   credentialId: string,
   tokenHash: string,
-): Promise<void> {
-  await pool.query(
-    `
-      INSERT INTO password_reset_tokens (credential_id, token_hash, expires_at)
-      VALUES ($1, $2, NOW() + INTERVAL '1 hour')
-    `,
-    [credentialId, tokenHash],
-  );
+): Promise<boolean> {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const credential = await client.query<{ account_status: string }>(
+      "SELECT account_status FROM credentials WHERE id = $1 FOR UPDATE",
+      [credentialId],
+    );
+    if (
+      !credential.rows[0] ||
+      (credential.rows[0].account_status &&
+        credential.rows[0].account_status !== "active")
+    ) {
+      await client.query("COMMIT");
+      return false;
+    }
+
+    await client.query(
+      `
+        INSERT INTO password_reset_tokens (credential_id, token_hash, expires_at)
+        VALUES ($1, $2, NOW() + INTERVAL '1 hour')
+      `,
+      [credentialId, tokenHash],
+    );
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the token creation failure.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -66,12 +95,36 @@ export async function resetPasswordAtomically(
         WHERE token_hash = $1
           AND expires_at > $2
           AND used_at IS NULL
-        FOR UPDATE
       `,
       [tokenHash, new Date()],
     );
     const credentialId = tokenResult.rows[0]?.credential_id;
     if (!credentialId) throw invalidResetTokenError();
+
+    const credential = await client.query<{ account_status: string }>(
+      "SELECT account_status FROM credentials WHERE id = $1 FOR UPDATE",
+      [credentialId],
+    );
+    if (
+      credential.rows[0]?.account_status &&
+      credential.rows[0].account_status !== "active"
+    ) {
+      throw invalidResetTokenError();
+    }
+
+    const lockedToken = await client.query<Pick<PasswordResetToken, "credential_id">>(
+      `
+        SELECT credential_id
+        FROM password_reset_tokens
+        WHERE token_hash = $1
+          AND credential_id = $2
+          AND expires_at > $3
+          AND used_at IS NULL
+        FOR UPDATE
+      `,
+      [tokenHash, credentialId, new Date()],
+    );
+    if (lockedToken.rowCount !== 1) throw invalidResetTokenError();
 
     await client.query(
       `

@@ -38,6 +38,7 @@ const mockCredential = {
   email: "user@example.com",
   password_hash: "$2b$12$hashed",
   email_verified: true,
+  account_status: "active" as const,
   created_at: new Date(),
   updated_at: new Date(),
 };
@@ -66,7 +67,7 @@ describe("forgotPassword", () => {
     vi.mocked(makeOpaqueToken).mockReturnValue("raw-reset-token");
     vi.mocked(hashToken).mockReturnValue("hashed-reset-token");
     vi.mocked(deletePasswordResetToken).mockResolvedValue(undefined);
-    vi.mocked(createPasswordResetToken).mockResolvedValue(undefined);
+    vi.mocked(createPasswordResetToken).mockResolvedValue(true);
     vi.mocked(sendPasswordResetEmail).mockResolvedValue(undefined);
 
     await forgotPassword({ email: "user@example.com" });
@@ -83,7 +84,7 @@ describe("forgotPassword", () => {
     vi.mocked(makeOpaqueToken).mockReturnValue("raw-reset-token");
     vi.mocked(hashToken).mockReturnValue("hashed-reset-token");
     vi.mocked(deletePasswordResetToken).mockResolvedValue(undefined);
-    vi.mocked(createPasswordResetToken).mockResolvedValue(undefined);
+    vi.mocked(createPasswordResetToken).mockResolvedValue(true);
     vi.mocked(sendPasswordResetEmail).mockResolvedValue(undefined);
 
     await forgotPassword({ email: "user@example.com" });
@@ -99,7 +100,7 @@ describe("forgotPassword", () => {
     vi.mocked(makeOpaqueToken).mockReturnValue("raw-reset-token");
     vi.mocked(hashToken).mockReturnValue("hashed-reset-token");
     vi.mocked(deletePasswordResetToken).mockResolvedValue(undefined);
-    vi.mocked(createPasswordResetToken).mockResolvedValue(undefined);
+    vi.mocked(createPasswordResetToken).mockResolvedValue(true);
     vi.mocked(sendPasswordResetEmail).mockRejectedValue(
       new Error("SMTP error"),
     );

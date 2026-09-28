@@ -43,3 +43,11 @@ export const passwordResetLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+export const accountDeletionLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: "Too many account deletion attempts, please try again later",
+  standardHeaders: true,
+  legacyHeaders: false,
+});

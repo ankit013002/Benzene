@@ -28,7 +28,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 
@@ -442,6 +442,11 @@ async function main() {
       "utf8"
     );
     await authPool.query(authMigration);
+    const deletionMigration = await readFile(
+      path.join(authDir, "src/db/migrations/002_account_deletion_requests.sql"),
+      "utf8"
+    );
+    await authPool.query(deletionMigration);
 
     const { MongoMemoryServer } = controlPlaneRequire("mongodb-memory-server");
     mongo = await withTimeout(
@@ -1112,6 +1117,71 @@ async function main() {
         );
       }
     }
+
+    console.log("\nrecord and inspect an account deletion request without claiming cleanup");
+    const idempotencyKey = randomUUID();
+    const deletionResponse = await request(`${gatewayUrl}/auth/account-deletion`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: LOGIN_EMAIL,
+        password: RESET_PASSWORD,
+        idempotencyKey,
+      }),
+    });
+    const deletion = await jsonOrNull(deletionResponse);
+    check(
+      "gateway records password-confirmed deletion as pending only",
+      deletionResponse.status === 202 &&
+        deletion?.status === "cleanup_pending" &&
+        deletion?.deletionComplete === false &&
+        deletion?.downstreamCleanupStarted === false,
+      JSON.stringify(deletion)
+    );
+
+    const repeatedDeletionResponse = await request(`${gatewayUrl}/auth/account-deletion`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: LOGIN_EMAIL,
+        password: RESET_PASSWORD,
+        idempotencyKey,
+      }),
+    });
+    const repeatedDeletion = await jsonOrNull(repeatedDeletionResponse);
+    check(
+      "repeated deletion submission returns the same durable request",
+      repeatedDeletionResponse.status === 200 &&
+        repeatedDeletion?.requestId === deletion?.requestId,
+      JSON.stringify(repeatedDeletion)
+    );
+
+    const deletionStatusResponse = await request(`${gatewayUrl}/auth/account-deletion/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: LOGIN_EMAIL, password: RESET_PASSWORD }),
+    });
+    const deletionStatus = await jsonOrNull(deletionStatusResponse);
+    check(
+      "reauthenticated status lookup shows cleanup still awaits an operator",
+      deletionStatusResponse.status === 200 &&
+        deletionStatus?.requestId === deletion?.requestId &&
+        deletionStatus?.currentPhase === "awaiting_cleanup_operator" &&
+        deletionStatus?.deletionComplete === false,
+      JSON.stringify(deletionStatus)
+    );
+
+    const deletedAccountLogin = await request(`${frontendUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: LOGIN_EMAIL, password: RESET_PASSWORD }),
+    });
+    const deletedAccountLoginBody = await jsonOrNull(deletedAccountLogin);
+    check(
+      "login is denied after an account deletion request",
+      deletedAccountLogin.status === 401,
+      JSON.stringify(deletedAccountLoginBody)
+    );
 
     console.log("\nauthenticated web-route and LAN-topology acceptance passed");
   } finally {

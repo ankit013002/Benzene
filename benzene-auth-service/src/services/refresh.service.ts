@@ -14,15 +14,42 @@ export async function createRefreshToken(
   tokenHash: string,
   expiresAt: Date,
 ): Promise<RefreshToken | null> {
-  const result = await pool.query(
-    `
-      INSERT INTO refresh_tokens (credential_id, token_hash, expires_at)
-      VALUES ($1, $2, $3)
-      RETURNING id`,
-    [credentialId, tokenHash, expiresAt],
-  );
+  const client = await pool.connect();
 
-  return result.rows[0];
+  try {
+    await client.query("BEGIN");
+    const credential = await client.query<{ account_status: string }>(
+      "SELECT account_status FROM credentials WHERE id = $1 FOR UPDATE",
+      [credentialId],
+    );
+    if (
+      credential.rows[0]?.account_status &&
+      credential.rows[0].account_status !== "active"
+    ) {
+      const error = new Error("Account deletion has been requested");
+      error.name = "AccountDeletionRequestedError";
+      throw error;
+    }
+
+    const result = await client.query(
+      `
+        INSERT INTO refresh_tokens (credential_id, token_hash, expires_at)
+        VALUES ($1, $2, $3)
+        RETURNING id`,
+      [credentialId, tokenHash, expiresAt],
+    );
+    await client.query("COMMIT");
+    return result.rows[0] ?? null;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Preserve the insert or account-state failure.
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**

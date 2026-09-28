@@ -337,6 +337,7 @@ Initialize the schemas that are not created automatically at service startup:
 
 ```bash
 psql -d benzene_auth -f benzene-auth-service/src/db/migrations/001_initial.sql
+psql -d benzene_auth -f benzene-auth-service/src/db/migrations/002_account_deletion_requests.sql
 psql -d benzene -f nebulavault-user-service/src/main/resources/schema.sql
 ```
 
@@ -472,13 +473,14 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **372** tests, agent **127**, auth **78** when its
-real-Postgres concurrency tests are enabled, gateway **18**, frontend transfer
+Verified counts: control plane **372** tests, agent **127**, auth **90** total
+(**83** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
 assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
 checks**. The frontend suite has **18 tests** total.
-The integrated authenticated LAN acceptance has exactly **60 `ok`
-assertions** and was green in CI run `34788300450`. Default Turbopack and
+The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
+assertions; its earlier 60-assertion version was green in CI run `34788300450`.
+Default Turbopack and
 Webpack production builds pass.
 
 CI run `36468270582` is fully green and verifies the current control-plane and

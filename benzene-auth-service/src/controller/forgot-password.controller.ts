@@ -17,12 +17,15 @@ async function forgotPassword(data: { email: string }) {
     return;
   }
 
+  if (credential.account_status === "deletion_requested") return;
+
   await deletePasswordResetToken(credential.id);
 
   const rawResetToken = makeOpaqueToken();
   const hashedResetToken = hashToken(rawResetToken);
 
-  await createPasswordResetToken(credential.id, hashedResetToken);
+  const created = await createPasswordResetToken(credential.id, hashedResetToken);
+  if (!created) return;
 
   try {
     await sendPasswordResetEmail(credential.email, rawResetToken);

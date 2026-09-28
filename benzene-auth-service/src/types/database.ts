@@ -3,6 +3,7 @@ export interface Credential {
   email: string;
   password_hash: string;
   email_verified: boolean;
+  account_status: "active" | "deletion_requested";
   created_at: Date;
   updated_at: Date;
 }

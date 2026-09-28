@@ -75,15 +75,28 @@ on a loosely inferred user agent.
 
 ## Database Schema
 
-Four tables — run `src/db/migrations/001_initial.sql` against the Benzene auth
-PostgreSQL database before starting.
+Run the numbered SQL migrations against the Benzene auth PostgreSQL database
+before starting. Migration 002 adds the account-deletion request ledger and
+blocks new sessions after a password-confirmed request.
 
 ```
 credentials              — email, password_hash, email_verified
 refresh_tokens           — token_hash, expires_at (7 days)
 email_verification_tokens — token_hash, expires_at (24 hrs)
 password_reset_tokens    — token_hash, expires_at (1 hr), used_at
+account_deletion_requests — durable cleanup status; does not itself delete associated data
 ```
+
+`POST /api/auth/account-deletion` requires the account email, current password,
+and an idempotency key. It records one durable request, revokes refresh tokens,
+and prevents later login, refresh, and password-reset completion. The response
+is deliberately `cleanup_pending` with `deletionComplete: false`; no downstream
+data is removed by this route. `POST /api/auth/account-deletion/status` requires
+the same password and returns the persisted phase. The initial phase is
+`awaiting_cleanup_operator` because there is not yet a cleanup worker. Existing
+access JWTs remain usable until their 15-minute expiry because the gateway does
+not check account state on every request. Do not present this foundation as
+completed Apple or Google account deletion.
 
 ---
 
@@ -127,6 +140,7 @@ npm ci
 
 ```bash
 psql "$DATABASE_URL" -f src/db/migrations/001_initial.sql
+psql "$DATABASE_URL" -f src/db/migrations/002_account_deletion_requests.sql
 ```
 
 ### 3. Configure email delivery (optional)
@@ -176,7 +190,8 @@ src/
 ├── db/
 │   ├── index.ts               — pg Pool
 │   └── migrations/
-│       └── 001_initial.sql    — initial schema
+│       ├── 001_initial.sql    — initial schema
+│       └── 002_account_deletion_requests.sql — deletion request ledger
 ├── lib/
 │   ├── tokens.ts              — JWT signing/verification, opaque token generation, SHA-256 hashing
 │   ├── cookies.ts             — httpOnly cookie helpers (set/clear)

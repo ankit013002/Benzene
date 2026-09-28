@@ -23,6 +23,12 @@ async function loginController(data: { email: string; password: string }) {
     throw error;
   }
 
+  if (credentials.account_status === "deletion_requested") {
+    const error = new Error("Invalid credentials");
+    error.name = "InvalidCredentialsError";
+    throw error;
+  }
+
   const isPasswordValid = await bcrypt.compare(
     password,
     credentials.password_hash || "",
