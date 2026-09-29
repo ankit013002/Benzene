@@ -12,3 +12,8 @@ create table if not exists users (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create table if not exists account_deletion_tombstones (
+  auth_sub text primary key,
+  created_at timestamptz not null default now()
+);

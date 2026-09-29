@@ -13,7 +13,10 @@ import {
   claimNextAccountDeletionPhase,
   completeAccountDeletionPhase,
 } from "./account-deletion.service";
-import { runNextAccountDeletionPhase } from "./account-deletion.worker";
+import {
+  runAccountDeletionWorkerBatch,
+  runNextAccountDeletionPhase,
+} from "./account-deletion.worker";
 
 const claim = {
   requestId: "request-1",
@@ -102,5 +105,28 @@ describe("account deletion phase worker", () => {
       requestId: "request-1",
       phase: "user_profile",
     });
+  });
+
+  it("blocks at stored objects after profile cleanup instead of skipping ahead", async () => {
+    vi.mocked(claimNextAccountDeletionPhase)
+      .mockResolvedValueOnce(claim)
+      .mockResolvedValueOnce({ ...claim, phase: "stored_objects", attempt: 2 });
+    const profileHandler = vi.fn().mockResolvedValue(undefined);
+
+    const outcomes = await runAccountDeletionWorkerBatch(
+      { user_profile: profileHandler },
+      10,
+    );
+
+    expect(outcomes).toEqual([
+      { outcome: "completed", requestId: "request-1", nextPhase: "stored_objects" },
+      { outcome: "blocked", requestId: "request-1", phase: "stored_objects" },
+    ]);
+    expect(profileHandler).toHaveBeenCalledOnce();
+    expect(completeAccountDeletionPhase).toHaveBeenCalledOnce();
+    expect(blockAccountDeletionPhase).toHaveBeenCalledWith(
+      { ...claim, phase: "stored_objects", attempt: 2 },
+      "phase_handler_unavailable",
+    );
   });
 });

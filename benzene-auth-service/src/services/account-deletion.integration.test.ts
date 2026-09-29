@@ -263,4 +263,57 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
       completed_at: null,
     });
   });
+
+  it("cannot report completion before the terminal credential-erasure phase", async () => {
+    const account = await createCredential();
+    const result = await requestAccountDeletion({
+      email: account.email,
+      password,
+      idempotencyKey: "credential-erasure-gate-key",
+    });
+    createdDeletionRequestIds.push(result.request.id);
+
+    const leaseToken = randomUUID();
+    await pool.query(
+      `UPDATE account_deletion_requests
+       SET current_phase = 'backups_and_logs',
+           status = 'cleanup_pending',
+           lease_token = $2,
+           lease_expires_at = now() + interval '2 minutes'
+       WHERE id = $1`,
+      [result.request.id, leaseToken],
+    );
+
+    const {
+      claimNextAccountDeletionPhase,
+      completeAccountDeletionPhase,
+      blockAccountDeletionPhase,
+    } = await import("./account-deletion.service");
+    const next = await completeAccountDeletionPhase({
+      requestId: result.request.id,
+      credentialId: account.id,
+      phase: "backups_and_logs",
+      leaseToken,
+      attempt: 1,
+    });
+    expect(next).toBe("auth_credential");
+
+    const credentialClaim = await claimNextAccountDeletionPhase(result.request.id);
+    expect(credentialClaim).toMatchObject({ phase: "auth_credential" });
+    if (!credentialClaim) throw new Error("Expected credential erasure to be claimable");
+    expect(await blockAccountDeletionPhase(credentialClaim, "phase_handler_unavailable")).toBe(true);
+
+    const persisted = await pool.query(
+      `SELECT r.status, r.current_phase, r.completed_at,
+              EXISTS (SELECT 1 FROM credentials c WHERE c.id = $2) AS credential_exists
+       FROM account_deletion_requests r WHERE r.id = $1`,
+      [result.request.id, account.id],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      status: "blocked",
+      current_phase: "auth_credential",
+      completed_at: null,
+      credential_exists: true,
+    });
+  });
 });

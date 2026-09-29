@@ -452,6 +452,11 @@ async function main() {
       "utf8"
     );
     await authPool.query(deletionWorkerMigration);
+    const deletionCredentialPhaseMigration = await readFile(
+      path.join(authDir, "src/db/migrations/004_account_deletion_credential_phase.sql"),
+      "utf8"
+    );
+    await authPool.query(deletionCredentialPhaseMigration);
 
     const { MongoMemoryServer } = controlPlaneRequire("mongodb-memory-server");
     mongo = await withTimeout(

@@ -13,6 +13,7 @@ import forgotPasswordRoute from "./routes/forgot-password.route";
 import resetPasswordRoute from "./routes/reset-password.route";
 import nativeAuthRoute from "./routes/native-auth.route";
 import accountDeletionRoute from "./routes/account-deletion.route";
+import { startAccountDeletionSchedulerFromEnvironment } from "./services/account-deletion.scheduler";
 
 import { Request, Response, NextFunction } from "express";
 import notFoundHandler from "./middleware/not-found";
@@ -49,6 +50,8 @@ app.use((req: Request, res: Response, next: NextFunction) =>
 app.use((err: unknown, req: Request, res: Response, next: NextFunction) =>
   errorHandler(err, req, res),
 );
+
+startAccountDeletionSchedulerFromEnvironment();
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);

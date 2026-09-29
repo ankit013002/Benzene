@@ -11,6 +11,7 @@ export type AccountDeletionPhase =
   | "device_data"
   | "billing_records"
   | "backups_and_logs"
+  | "auth_credential"
   | "complete";
 
 export interface AccountDeletionRequest {
@@ -30,6 +31,7 @@ export const ACCOUNT_DELETION_CLEANUP_PHASES = [
   "vault_metadata",
   "billing_records",
   "backups_and_logs",
+  "auth_credential",
 ] as const satisfies readonly AccountDeletionPhase[];
 
 export type AccountDeletionCleanupPhase =

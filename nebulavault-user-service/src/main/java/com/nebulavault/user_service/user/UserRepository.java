@@ -12,4 +12,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByAuthSub(String authSub);
 
     Optional<User> findByEmail(String email);
+
+    long deleteByAuthSub(String authSub);
 }

@@ -105,20 +105,37 @@ a process may stop after a downstream side effect and before saving phase
 progress.
 
 The declared order is profile, stored-object references, device data,
-Vault metadata, billing, then backups and logs. The device-data handler must
+Vault metadata, billing, backups and logs, then `auth_credential`. The final
+phase is intentionally unimplemented: removing credentials needs an atomic
+status-receipt design so the account cannot be reported complete before the
+login record is erased. The device-data handler must
 use the control plane's reference-safe garbage collection and wait for each
 device acknowledgement; offline devices keep that phase incomplete, and Vault
 and device metadata must remain available to deliver and acknowledge durable
-deletion assignments. The runner currently has no production phase handlers or
-scheduler wired, so requests remain pending for an operator and no profile,
-Vault, object, device, billing, backup, or log data is claimed to have been
-deleted. The state machine cannot skip a missing phase adapter and status
-remains incomplete until every phase handler reports success.
+deletion assignments. An optional bounded, non-overlapping scheduler executes
+the `user_profile` phase through the user service's private idempotent
+endpoint. The next `stored_objects` phase has no handler, so an enabled worker
+blocks there and does not claim storage cleanup or completion. With no worker
+settings, requests stay at `awaiting_cleanup_operator`. The state machine
+cannot skip a missing phase adapter and status remains incomplete until every
+phase handler reports success.
 `POST /api/auth/account-deletion/status`
 requires the same password and returns the persisted phase and a stable error
 code. Existing access JWTs remain usable until their 15-minute expiry because
-the gateway does not check account state on every request. This is still not
-completed Apple or Google account deletion.
+the gateway does not check account state on every request. The profile-deletion
+tombstone prevents those tokens from recreating the profile, but other services
+may still honor the JWT until expiry. This is still not completed Apple or
+Google account deletion.
+
+Set all three values to opt in; the internal secret must match the user service
+and the interval is 5–3600 seconds. Partial configuration is rejected. In
+production the service URL must use HTTPS.
+
+```ini
+ACCOUNT_DELETION_USER_SERVICE_URL=http://localhost:8082/internal/account-deletion
+ACCOUNT_DELETION_USER_SERVICE_SECRET=<shared 32-byte-or-longer secret>
+ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS=30
+```
 
 ---
 
@@ -164,6 +181,7 @@ npm ci
 psql "$DATABASE_URL" -f src/db/migrations/001_initial.sql
 psql "$DATABASE_URL" -f src/db/migrations/002_account_deletion_requests.sql
 psql "$DATABASE_URL" -f src/db/migrations/003_account_deletion_worker_leases.sql
+psql "$DATABASE_URL" -f src/db/migrations/004_account_deletion_credential_phase.sql
 ```
 
 ### 3. Configure email delivery (optional)
@@ -215,7 +233,8 @@ src/
 │   └── migrations/
 │       ├── 001_initial.sql    — initial schema
 │       ├── 002_account_deletion_requests.sql — deletion request ledger
-│       └── 003_account_deletion_worker_leases.sql — durable worker leases and retries
+│       ├── 003_account_deletion_worker_leases.sql — durable worker leases and retries
+│       └── 004_account_deletion_credential_phase.sql — requires final credential erasure phase
 ├── lib/
 │   ├── tokens.ts              — JWT signing/verification, opaque token generation, SHA-256 hashing
 │   ├── cookies.ts             — httpOnly cookie helpers (set/clear)
