@@ -13,7 +13,7 @@ export interface StoredObjectsDeletionConfig {
 
 export interface AccountDeletionWorkerConfig {
   profile: UserProfileDeletionConfig;
-  storedObjects: StoredObjectsDeletionConfig;
+  storedObjects?: StoredObjectsDeletionConfig;
   intervalSeconds: number;
 }
 
@@ -26,24 +26,29 @@ export function readAccountDeletionWorkerConfig(
   const storedObjectsEndpointValue = env.ACCOUNT_DELETION_CONTROL_PLANE_URL?.trim();
   const storedObjectsSecret = env.ACCOUNT_DELETION_CONTROL_PLANE_SECRET;
   const intervalValue = env.ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS?.trim();
-  const configuredCount = [
-    profileEndpointValue,
-    profileSecret?.trim(),
-    storedObjectsEndpointValue,
-    storedObjectsSecret?.trim(),
-    intervalValue,
-  ].filter((value) => value !== undefined && value.length > 0).length;
+  const profileValues = [profileEndpointValue, profileSecret?.trim(), intervalValue];
+  const profileConfiguredCount = profileValues.filter(
+    (value) => value !== undefined && value.length > 0,
+  ).length;
+  const storedObjectsValues = [storedObjectsEndpointValue, storedObjectsSecret?.trim()];
+  const storedObjectsConfiguredCount = storedObjectsValues.filter(
+    (value) => value !== undefined && value.length > 0,
+  ).length;
 
-  if (configuredCount === 0) return undefined;
-  if (configuredCount !== 5) {
+  if (profileConfiguredCount === 0 && storedObjectsConfiguredCount === 0) {
+    return undefined;
+  }
+  if (profileConfiguredCount !== 3) {
     throw new Error(
-      "Account deletion user-service URL, secret, control-plane URL, secret, and interval must be configured together",
+      "Account deletion user-service URL, secret, and interval must be configured together",
     );
   }
-  if (
-    !profileEndpointValue || !profileSecret || !storedObjectsEndpointValue ||
-    !storedObjectsSecret || !intervalValue
-  ) {
+  if (storedObjectsConfiguredCount === 1) {
+    throw new Error(
+      "Account deletion control-plane URL and secret must be configured together",
+    );
+  }
+  if (!profileEndpointValue || !profileSecret || !intervalValue) {
     throw new Error("Account deletion worker configuration is incomplete");
   }
 
@@ -53,14 +58,19 @@ export function readAccountDeletionWorkerConfig(
     "user-service",
     nodeEnvironment,
   );
-  const storedObjectsEndpoint = validateEndpoint(
-    storedObjectsEndpointValue,
-    "/internal/account-deletion",
-    "control-plane",
-    nodeEnvironment,
-  );
   validateSecret(profileSecret, "user-service");
-  validateSecret(storedObjectsSecret, "control-plane");
+
+  let storedObjects: StoredObjectsDeletionConfig | undefined;
+  if (storedObjectsEndpointValue && storedObjectsSecret) {
+    const endpoint = validateEndpoint(
+      storedObjectsEndpointValue,
+      "/internal/account-deletion",
+      "control-plane",
+      nodeEnvironment,
+    );
+    validateSecret(storedObjectsSecret, "control-plane");
+    storedObjects = { endpoint, secret: storedObjectsSecret };
+  }
 
   const intervalSeconds = Number(intervalValue);
   if (
@@ -75,7 +85,7 @@ export function readAccountDeletionWorkerConfig(
 
   return {
     profile: { endpoint: profileEndpoint, secret: profileSecret },
-    storedObjects: { endpoint: storedObjectsEndpoint, secret: storedObjectsSecret },
+    ...(storedObjects ? { storedObjects } : {}),
     intervalSeconds,
   };
 }

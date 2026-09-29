@@ -6,6 +6,29 @@ import { startAccountDeletionWorkerScheduler } from "./account-deletion.schedule
 describe("account deletion scheduler", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("preserves the fail-closed missing stored-object handler for profile-only deployments", () => {
+    const config = {
+      profile: {
+        endpoint: new URL("http://user-service:8082/internal/account-deletion"),
+        secret: "shared-test-secret-with-at-least-32-utf8-bytes",
+      },
+      intervalSeconds: 30,
+    };
+    let capturedHandlers: AccountDeletionPhaseHandlers | undefined;
+    const runBatch = vi.fn(
+      async (handlers: AccountDeletionPhaseHandlers): Promise<AccountDeletionWorkerResult[]> => {
+        capturedHandlers = handlers;
+        return [{ outcome: "idle" }];
+      },
+    );
+
+    const stop = startAccountDeletionWorkerScheduler(config, runBatch);
+    expect(runBatch).toHaveBeenCalledOnce();
+    expect(capturedHandlers?.user_profile).toBeTypeOf("function");
+    expect(capturedHandlers?.stored_objects).toBeUndefined();
+    stop();
+  });
+
   it("runs bounded batches without overlapping a slow prior tick", async () => {
     vi.useFakeTimers();
     const config = {

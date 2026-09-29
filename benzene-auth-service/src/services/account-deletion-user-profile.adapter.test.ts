@@ -17,6 +17,13 @@ const validEnvironment = {
     "another-shared-secret-with-at-least-32-utf8-bytes",
   ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS: "30",
 } as NodeJS.ProcessEnv;
+const profileOnlyEnvironment = {
+  ACCOUNT_DELETION_USER_SERVICE_URL:
+    "http://user-service:8082/internal/account-deletion",
+  ACCOUNT_DELETION_USER_SERVICE_SECRET:
+    "shared-test-secret-with-at-least-32-utf8-bytes",
+  ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS: "30",
+} as NodeJS.ProcessEnv;
 
 describe("account deletion user-profile adapter configuration", () => {
   it("keeps cleanup disabled when no worker settings are present", () => {
@@ -31,6 +38,23 @@ describe("account deletion user-profile adapter configuration", () => {
         "development",
       ),
     ).toThrow("must be configured together");
+  });
+
+  it("keeps profile-only worker configuration available while requiring control-plane settings as a pair", () => {
+    const config = readAccountDeletionWorkerConfig(profileOnlyEnvironment, "development");
+    expect(config?.profile.endpoint.pathname).toBe("/internal/account-deletion");
+    expect(config?.storedObjects).toBeUndefined();
+
+    expect(() =>
+      readAccountDeletionWorkerConfig(
+        {
+          ...profileOnlyEnvironment,
+          ACCOUNT_DELETION_CONTROL_PLANE_URL:
+            "http://control-plane:5000/internal/account-deletion",
+        },
+        "development",
+      ),
+    ).toThrow("control-plane URL and secret must be configured together");
   });
 
   it("rejects short secrets and invalid production transport", () => {
@@ -59,7 +83,7 @@ describe("account deletion user-profile adapter configuration", () => {
 
     expect(config?.intervalSeconds).toBe(30);
     expect(config?.profile.endpoint.pathname).toBe("/internal/account-deletion");
-    expect(config?.storedObjects.endpoint.pathname).toBe("/internal/account-deletion");
+    expect(config?.storedObjects?.endpoint.pathname).toBe("/internal/account-deletion");
   });
 });
 
@@ -123,7 +147,7 @@ describe("account deletion user-profile adapter", () => {
       new Response(JSON.stringify({ complete: true }), { status: 200 }),
     );
     const config = readAccountDeletionWorkerConfig(validEnvironment, "development");
-    if (!config) throw new Error("Expected explicit adapter config");
+    if (!config?.storedObjects) throw new Error("Expected explicit adapter config");
     const handler = createStoredObjectsDeletionHandler(
       config.storedObjects,
       fetchImplementation,
@@ -174,7 +198,7 @@ describe("account deletion user-profile adapter", () => {
   it("defers stored-object cleanup until existing access tokens and clock margin expire", async () => {
     const fetchImplementation = vi.fn<typeof fetch>();
     const config = readAccountDeletionWorkerConfig(validEnvironment, "development");
-    if (!config) throw new Error("Expected explicit adapter config");
+    if (!config?.storedObjects) throw new Error("Expected explicit adapter config");
     const handler = createStoredObjectsDeletionHandler(
       config.storedObjects,
       fetchImplementation,

@@ -120,12 +120,13 @@ device acknowledgement; offline devices keep that phase incomplete, and Vault
 and device metadata must remain available to deliver and acknowledge durable
 deletion assignments. An optional bounded, non-overlapping scheduler executes
 the `user_profile` phase through the user service's private idempotent
-endpoint. The `stored_objects` phase calls the control plane's private adapter
-only after the account-deletion request is at least 15 minutes and 60 seconds
-old, allowing issued access JWTs to expire with a clock-skew margin. It then
-purges legacy version objects in bounded batches and releases the matching
-version references; device-backed bytes use the existing durable garbage-
-collection assignments and per-device acknowledgements. The phase stays
+endpoint. When the optional control-plane URL and secret are configured, the
+`stored_objects` phase calls its private adapter only after the account-deletion
+request is at least 15 minutes and 60 seconds old, allowing issued access JWTs
+to expire with a clock-skew margin. It then purges legacy version objects in
+bounded batches and releases the matching version references; device-backed
+bytes use the existing durable garbage-collection assignments and per-device
+acknowledgements. The phase stays
 `cleanup_pending` without an error during the token grace period because the
 phase is not claimable yet. It stays blocked after an actual handler failure,
 or while versions, references, or replica rows remain, so an offline device
@@ -141,10 +142,13 @@ tombstone prevents those tokens from recreating the profile, but other services
 may still honor the JWT until expiry. This is still not completed Apple or
 Google account deletion.
 
-Set all five values to opt in; each internal secret must match its target
-service and the interval is 5–3600 seconds. Partial configuration is rejected.
-In production both service URLs must use HTTPS. Configure the control plane's
-`ACCOUNT_DELETION_INTERNAL_SECRET` with the same value as
+Set the profile URL, secret, and interval together to enable the profile phase;
+the interval is 5–3600 seconds. The control-plane URL and secret are an
+optional pair that enables the `stored_objects` phase. If omitted, the worker
+still completes profile cleanup and then blocks safely at the missing storage
+handler. Partial profile or control-plane configuration is rejected. In
+production, every configured service URL must use HTTPS. When enabling the
+control-plane phase, configure its `ACCOUNT_DELETION_INTERNAL_SECRET` to match
 `ACCOUNT_DELETION_CONTROL_PLANE_SECRET`.
 
 ```ini

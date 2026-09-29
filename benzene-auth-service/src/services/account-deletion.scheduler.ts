@@ -3,18 +3,23 @@ import {
   createUserProfileDeletionHandler,
   readAccountDeletionWorkerConfig,
 } from "./account-deletion-user-profile.adapter";
-import { runAccountDeletionWorkerBatch } from "./account-deletion.worker";
+import {
+  runAccountDeletionWorkerBatch,
+  type AccountDeletionPhaseHandlers,
+} from "./account-deletion.worker";
 
 export function startAccountDeletionWorkerScheduler(
   config: NonNullable<ReturnType<typeof readAccountDeletionWorkerConfig>>,
   runBatch: typeof runAccountDeletionWorkerBatch = runAccountDeletionWorkerBatch,
 ): () => void {
-  const handlers = {
+  const handlers: AccountDeletionPhaseHandlers = {
     user_profile: createUserProfileDeletionHandler(config.profile),
-    stored_objects: createStoredObjectsDeletionHandler(config.storedObjects),
     // Credential deletion and its receipt commit together inside PostgreSQL.
     auth_credential: async () => {},
   };
+  if (config.storedObjects) {
+    handlers.stored_objects = createStoredObjectsDeletionHandler(config.storedObjects);
+  }
   let running = false;
   let stopped = false;
 

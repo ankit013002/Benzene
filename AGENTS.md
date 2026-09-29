@@ -725,8 +725,9 @@ the standard to match.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. The opt-in
-  scheduler now runs the profile and stored-object phases; device-data,
-  vault-metadata, billing, and backup/log handlers remain unwired.
+  scheduler runs profile cleanup and can run stored-object cleanup when the
+  optional control-plane adapter is configured; device-data, vault-metadata,
+  billing, and backup/log handlers remain unwired.
 - **Uploads route to devices end to end**, with downloads reading back
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct
