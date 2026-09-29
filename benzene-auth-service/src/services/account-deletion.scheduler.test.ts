@@ -26,6 +26,7 @@ describe("account deletion scheduler", () => {
     expect(runBatch).toHaveBeenCalledOnce();
     expect(capturedHandlers?.user_profile).toBeTypeOf("function");
     expect(capturedHandlers?.stored_objects).toBeUndefined();
+    expect(capturedHandlers?.device_data).toBeUndefined();
     stop();
   });
 
@@ -43,12 +44,14 @@ describe("account deletion scheduler", () => {
       intervalSeconds: 5,
     };
     let releaseCurrentBatch: (() => void) | undefined;
+    let capturedHandlers: AccountDeletionPhaseHandlers | undefined;
     const runBatch = vi.fn(
       async (
-        _handlers: AccountDeletionPhaseHandlers,
+        handlers: AccountDeletionPhaseHandlers,
         _maximumPhases?: number,
       ): Promise<AccountDeletionWorkerResult[]> =>
         new Promise((resolve) => {
+          capturedHandlers = handlers;
           releaseCurrentBatch = () => resolve([{ outcome: "idle" }]);
         }),
     );
@@ -56,6 +59,7 @@ describe("account deletion scheduler", () => {
     const stop = startAccountDeletionWorkerScheduler(config, runBatch);
     expect(runBatch).toHaveBeenCalledOnce();
     expect(runBatch.mock.calls[0]?.[1]).toBe(10);
+    expect(capturedHandlers?.device_data).toBeTypeOf("function");
 
     await vi.advanceTimersByTimeAsync(15_000);
     expect(runBatch).toHaveBeenCalledOnce();

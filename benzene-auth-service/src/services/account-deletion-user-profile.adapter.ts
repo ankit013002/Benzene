@@ -185,3 +185,34 @@ export function createStoredObjectsDeletionHandler(
     }
   };
 }
+
+/** Starts device retirement and waits for each signed erase acknowledgement. */
+export function createDeviceDataDeletionHandler(
+  config: StoredObjectsDeletionConfig,
+  fetchImplementation: typeof fetch = fetch,
+): AccountDeletionPhaseHandler {
+  return async ({ credentialId }) => {
+    const endpoint = new URL(
+      `${encodeURIComponent(credentialId)}/device-data`,
+      `${config.endpoint.href.replace(/\/$/, "")}/`,
+    );
+    const response = await fetchImplementation(endpoint, {
+      method: "POST",
+      headers: { "X-Benzene-Internal-Secret": config.secret },
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
+    if (!response.ok) {
+      throw new Error(`Device-data deletion returned HTTP ${response.status}`);
+    }
+    const result: unknown = await response.json();
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("complete" in result) ||
+      result.complete !== true
+    ) {
+      throw new Error("Device-data deletion remains incomplete");
+    }
+  };
+}

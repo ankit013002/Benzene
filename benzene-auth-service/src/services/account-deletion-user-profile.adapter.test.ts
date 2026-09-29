@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
 import {
+  createDeviceDataDeletionHandler,
   createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
   readAccountDeletionWorkerConfig,
@@ -214,5 +215,62 @@ describe("account deletion user-profile adapter", () => {
       }),
     ).rejects.toThrow("so existing access tokens expire");
     expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it("keeps device-data cleanup pending until every node acknowledges removal", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          complete: false,
+          removalStarted: 2,
+          awaitingDeviceAcknowledgement: 1,
+        }),
+        { status: 200 },
+      ),
+    );
+    const config = readAccountDeletionWorkerConfig(validEnvironment, "development");
+    if (!config?.storedObjects) throw new Error("Expected shared control-plane adapter config");
+    const handler = createDeviceDataDeletionHandler(
+      config.storedObjects,
+      fetchImplementation,
+    );
+
+    await expect(
+      handler({
+        requestId: "request-1",
+        credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(),
+        phase: "device_data",
+        attempt: 1,
+      }),
+    ).rejects.toThrow("remains incomplete");
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      new URL(
+        "http://control-plane:5000/internal/account-deletion/7e1c77ad-56a0-483f-8eba-52a4f50bf2a1/device-data",
+      ),
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "X-Benzene-Internal-Secret": validEnvironment.ACCOUNT_DELETION_CONTROL_PLANE_SECRET,
+        },
+        redirect: "error",
+      }),
+    );
+
+    const completeHandler = createDeviceDataDeletionHandler(
+      config.storedObjects,
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ complete: true }), { status: 200 }),
+      ),
+    );
+    await expect(
+      completeHandler({
+        requestId: "request-1",
+        credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(),
+        phase: "device_data",
+        attempt: 2,
+      }),
+    ).resolves.toBeUndefined();
   });
 });

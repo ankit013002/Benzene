@@ -1,4 +1,5 @@
 import {
+  createDeviceDataDeletionHandler,
   createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
   readAccountDeletionWorkerConfig,
@@ -19,6 +20,7 @@ export function startAccountDeletionWorkerScheduler(
   };
   if (config.storedObjects) {
     handlers.stored_objects = createStoredObjectsDeletionHandler(config.storedObjects);
+    handlers.device_data = createDeviceDataDeletionHandler(config.storedObjects);
   }
   let running = false;
   let stopped = false;
