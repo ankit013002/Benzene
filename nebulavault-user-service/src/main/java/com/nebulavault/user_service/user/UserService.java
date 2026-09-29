@@ -1,7 +1,6 @@
 package com.nebulavault.user_service.user;
 
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -11,16 +10,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class UserService {
     private final UserRepository userRepo;
     private final AccountDeletionTombstoneRepository tombstoneRepo;
-
-    @PersistenceContext
-    private EntityManager entityManager;
+    private final EntityManager entityManager;
 
     public UserService(
             UserRepository userRepo,
-            AccountDeletionTombstoneRepository tombstoneRepo
+            AccountDeletionTombstoneRepository tombstoneRepo,
+            EntityManager entityManager
     ){
         this.userRepo = userRepo;
         this.tombstoneRepo = tombstoneRepo;
+        this.entityManager = entityManager;
     }
 
     @Transactional
