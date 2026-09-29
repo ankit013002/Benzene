@@ -175,6 +175,11 @@ export async function sendStoredRelayObject(
   // an unrequested download.
   socket.onmessage = () => closeSocket(socket);
   socket.onerror = () => closeSocket(socket);
+  // Register the completion receipt before sending. For a small final frame the
+  // relay can validate the exact byte count and close normally before the
+  // producer reaches its post-loop checks; missing that close would turn a
+  // successful transfer into a retry.
+  const transferClosed = waitForTransferClose(socket, deadline);
   const digest = createHash("sha256");
   let sentBytes = 0;
   try {
@@ -194,11 +199,11 @@ export async function sendStoredRelayObject(
     if (sentBytes !== scope.maxBytes || actualHash !== scope.storageHash) {
       throw new Error("Streamed relay object did not match the signed hash and exact size");
     }
-    await waitForWritable(socket, deadline);
-    await waitForTransferClose(socket, deadline);
+    await transferClosed;
     return { storageHash: actualHash, sizeBytes: sentBytes };
   } catch (error) {
     closeSocket(socket);
+    await transferClosed.catch(() => undefined);
     throw error;
   }
 }
