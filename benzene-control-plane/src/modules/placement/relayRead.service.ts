@@ -439,8 +439,8 @@ export async function completeRelayReadForDevice(
       ? { status: "completed", completedAt: now, claimLeaseExpiresAt: null }
       : {
         status: sql`case when ${relayReadAssignments.claimAttempts} >= ${MAX_CLAIM_ATTEMPTS} then 'failed' else 'claimed' end`,
-        completedAt: sql`case when ${relayReadAssignments.claimAttempts} >= ${MAX_CLAIM_ATTEMPTS} then ${now} else null end`,
-        claimLeaseExpiresAt: sql`case when ${relayReadAssignments.claimAttempts} >= ${MAX_CLAIM_ATTEMPTS} then null else ${new Date(now.getTime() + CLAIM_LEASE_SECONDS * 1000)} end`,
+        completedAt: sql`case when ${relayReadAssignments.claimAttempts} >= ${MAX_CLAIM_ATTEMPTS} then ${now}::timestamptz else null::timestamptz end`,
+        claimLeaseExpiresAt: sql`case when ${relayReadAssignments.claimAttempts} >= ${MAX_CLAIM_ATTEMPTS} then null::timestamptz else ${new Date(now.getTime() + CLAIM_LEASE_SECONDS * 1000)}::timestamptz end`,
       })
     .where(and(
       eq(relayReadAssignments.id, input.assignmentId),
