@@ -1,5 +1,4 @@
 diff --git a/node_modules/expo-router/build/fork/getPathFromState-forks.js b/node_modules/expo-router/build/fork/getPathFromState-forks.js
-index 63e3101..f1d0cae 100644
 --- a/node_modules/expo-router/build/fork/getPathFromState-forks.js
 +++ b/node_modules/expo-router/build/fork/getPathFromState-forks.js
 @@ -40,7 +40,8 @@ exports.appendQueryAndHash = appendQueryAndHash;
@@ -13,7 +12,6 @@ index 63e3101..f1d0cae 100644
  const native_1 = require("../react-navigation/native");
  function validatePathConfig({ preserveDynamicRoutes, preserveGroups, shouldEncodeURISegment, ...options }) {
 diff --git a/node_modules/expo-router/build/fork/getPathFromState.js b/node_modules/expo-router/build/fork/getPathFromState.js
-index 0503037..5aaeab3 100644
 --- a/node_modules/expo-router/build/fork/getPathFromState.js
 +++ b/node_modules/expo-router/build/fork/getPathFromState.js
 @@ -36,7 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
@@ -27,7 +25,6 @@ index 0503037..5aaeab3 100644
  const navigationParams_1 = require("../navigationParams");
  // END FORK
 diff --git a/node_modules/expo-router/build/react-navigation/core/getPathFromState.js b/node_modules/expo-router/build/react-navigation/core/getPathFromState.js
-index 43fb0dc..ef4cd0c 100644
 --- a/node_modules/expo-router/build/react-navigation/core/getPathFromState.js
 +++ b/node_modules/expo-router/build/react-navigation/core/getPathFromState.js
 @@ -34,7 +34,8 @@ var __importStar = (this && this.__importStar) || (function () {
@@ -41,7 +38,6 @@ index 43fb0dc..ef4cd0c 100644
  const validatePathConfig_1 = require("./validatePathConfig");
  const getActiveRoute = (state) => {
 diff --git a/node_modules/expo-router/build/react-navigation/core/getStateFromPath.js b/node_modules/expo-router/build/react-navigation/core/getStateFromPath.js
-index 2a1e1ff..a839d00 100644
 --- a/node_modules/expo-router/build/react-navigation/core/getStateFromPath.js
 +++ b/node_modules/expo-router/build/react-navigation/core/getStateFromPath.js
 @@ -38,7 +38,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
