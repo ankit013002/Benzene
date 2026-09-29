@@ -124,6 +124,41 @@ access, NAT traversal or a relay. The web export still builds, but encrypted
 picker/transfer/export flows are disabled there; no browser CORS/mixed-content
 or transfer journey has been verified.
 
+## Relay receive foundation
+
+Encrypted downloads remain direct-device-first. Once every direct target has
+failed, the Files screen makes one authenticated `POST /placement/relay-read`
+with the file node ID and a fresh UUID request ID. The API adapter accepts only
+the explicit `kind: "relay_fallback"` response and maps its
+`relayUrl/sessionId/ticket/storageHash/ciphertextBytes/expiresAt` fields into the
+bounded receiver. The request ID is carried unchanged through authenticated
+session refresh/retry, and the response must still match the metadata hash and
+ciphertext length fetched for the selected file. No node ticket is accepted by
+or exposed from this adapter.
+
+The consumer follows the current relay protocol: it sends the signed client
+ticket in the authenticate control frame, requires `paired`, accepts binary
+frames only, and succeeds only after close code 1000 with reason
+`transfer_complete`, the exact signed byte count, and a matching SHA-256
+`storageHash`. It accepts only a `wss://` relay address and locally checks that
+the ticket scope says client/get and matches the normalized fallback's session,
+hash, byte count and expiration; the relay remains responsible for signature
+verification and one-use ticket claiming. Its receive buffer is exactly the expected
+ciphertext size and cannot exceed the existing 25 MiB plaintext mobile limit
+plus the AES-GCM tag. The bytes then pass through the same encrypted-object
+metadata, hash and AES-GCM authentication before plaintext export. The injected
+WebSocket factory enables deterministic transport tests; it is not a live relay
+or remote-network acceptance test.
+
+The mobile API mapping now matches the control-plane response contract, but
+this is not yet a verified end-to-end path: deployment must configure a public
+WSS relay URL, signing key and matching node-agent relay settings; the running
+control plane, node, relay and mobile app have not been exercised together.
+There is no real node/mobile local protocol integration test. The deterministic
+tests cover request serialization, safe error mapping, ticket scope matching,
+bounded binary transport, timeout/close behavior and encrypted-object
+authentication before export. Relay is never selected as the default byte path.
+
 ## Configuration ownership
 
 `EXPO_PUBLIC_GATEWAY_ORIGIN`, `EXPO_PUBLIC_PRIVACY_POLICY_URL`,

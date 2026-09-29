@@ -1,9 +1,11 @@
 import { useCallback, useState } from 'react';
 import { router } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
+import * as Crypto from 'expo-crypto';
 import { File } from 'expo-file-system';
 import { Alert, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { isRecord } from '../../src/api/client';
+import { requestRelayReadFallback } from '../../src/api/relayRead';
 import { formatBytes, isVaultFile, isVaultSummary } from '../../src/api/models';
 import { allowsInsecureLanTransfers } from '../../src/config';
 import { decryptObject, encryptObject } from '../../src/crypto/encryptedObject';
@@ -117,6 +119,10 @@ export default function FilesScreen() {
           request: (path, init) => request<unknown>(path, init),
           directFetch: (url, init) => fetch(url, init),
           allowInsecureLanTransfers: allowsInsecureLanTransfers(),
+          relayFallback: (expected) => requestRelayReadFallback(
+            (path, init) => request<unknown>(path, init),
+            { ...expected, nodeId: file.id, requestId: Crypto.randomUUID() },
+          ),
         });
       } finally {
         vmk.fill(0);

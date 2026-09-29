@@ -1,8 +1,10 @@
 import { isRecord, type JsonRecord } from '../api/client';
 import { ApiError } from '../api/client';
 import type { EncryptedObject, EncryptedObjectMetadata } from '../crypto/encryptedObjectCore';
+import { MAX_ENCRYPTED_FILE_BYTES } from './limits';
+import { receiveRelayCiphertext, type RelayFallbackRequest, type RelayFallbackResponse, type RelayWebSocketFactory } from './relayCiphertext';
 
-export const MAX_ENCRYPTED_FILE_BYTES = 25 * 1024 * 1024;
+export { MAX_ENCRYPTED_FILE_BYTES } from './limits';
 const DEVICE_HEADER_TIMEOUT_MS = 10_000;
 
 export type DeviceTransferTarget = { deviceId: string; deviceName: string; url: string; grant: string; expiresAt: string };
@@ -16,6 +18,10 @@ type Dependencies = {
   directFetch: DirectFetch;
   allowInsecureLanTransfers: boolean;
   timeoutMs?: number;
+  /** Optional control-plane adapter. It must return only an explicit relay fallback decision. */
+  relayFallback?: (expected: RelayFallbackRequest) => Promise<RelayFallbackResponse | null>;
+  relayWebSocketFactory?: RelayWebSocketFactory;
+  relayTimeoutMs?: number;
 };
 
 type FileUploadInput = {
@@ -192,7 +198,7 @@ export async function downloadEncryptedCurrentFile(input: EncryptedDownloadInput
   const targets = planData.targets.map((target) => parseTarget(target, dependencies.allowInsecureLanTransfers, metadata.storageHash));
   if (targets.some((target) => target === null)) throw new Error('Benzene returned an unsafe or invalid storage-device target.');
   const reachableTargets = targets as DeviceTransferTarget[];
-  if (reachableTargets.length === 0) throw new Error('No online storage device is available to serve this file right now.');
+  if (reachableTargets.length === 0 && !dependencies.relayFallback) throw new Error('No online storage device is available to serve this file right now.');
 
   let deviceResponded = false;
   const timeoutMs = dependencies.timeoutMs ?? DEVICE_HEADER_TIMEOUT_MS;
@@ -250,6 +256,31 @@ export async function downloadEncryptedCurrentFile(input: EncryptedDownloadInput
       rawBytes.fill(0);
     }
   }
+  if (dependencies.relayFallback) {
+    const fallback = await dependencies.relayFallback({ nodeId: input.nodeId, storageHash: metadata.storageHash, ciphertextBytes: expectedCiphertextBytes });
+    if (fallback !== null) {
+      const rawBytes = await receiveRelayCiphertext({
+        fallback,
+        expectedStorageHash: metadata.storageHash,
+        expectedCiphertextBytes,
+        timeoutMs: dependencies.relayTimeoutMs,
+      }, dependencies.relayWebSocketFactory);
+      let plaintext: Uint8Array;
+      try { plaintext = input.decrypt(metadata, rawBytes, input.vmk); }
+      catch {
+        rawBytes.fill(0);
+        throw new Error('The relayed copy failed encrypted-object authentication. The file was not exported.');
+      }
+      try {
+        await input.exportPlaintext(input.filename, input.contentType, plaintext);
+        return;
+      } finally {
+        plaintext.fill(0);
+        rawBytes.fill(0);
+      }
+    }
+  }
+  if (reachableTargets.length === 0) throw new Error('No online storage device is available to serve this file right now.');
   if (deviceResponded) throw new Error('No available device returned a valid, decryptable copy. The file was not exported.');
   throw new Error('None of the storage devices holding this file could be reached.');
 }
