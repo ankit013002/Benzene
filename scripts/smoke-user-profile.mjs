@@ -79,7 +79,9 @@ function startProcess(command, args, cwd, env) {
   child.stderr.on("data", (chunk) => {
     output += chunk.toString();
   });
-  child.getOutput = () => output.slice(-5000);
+  // A Spring exception is often longer than 5 KiB; retain enough tail for the
+  // originating exception as well as the servlet frames when acceptance fails.
+  child.getOutput = () => output.slice(-20_000);
   return child;
 }
 
