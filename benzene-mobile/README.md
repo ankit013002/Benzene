@@ -2,9 +2,11 @@
 
 Native iOS and Android client built with Expo SDK 57, React Native and Expo
 Router. This is a native app, not a WebView. The current mobile scope is account
-sign-in, Vault summary, file and device lists, configured legal/support links,
+sign-in, Vault summary, file and device lists, device pairing by entering the
+short-lived code shown by a computer agent, configured legal/support links,
 encrypted file upload/download, local Vault-key management, and local session
-storage. Pairing devices and account signup/verification/recovery still need
+storage. Mobile approves only the code the signed-in user enters; it does not
+enumerate pending enrollments. Account signup/verification/recovery still need
 additional client work.
 
 ## Local setup

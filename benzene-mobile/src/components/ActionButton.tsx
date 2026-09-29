@@ -9,7 +9,7 @@ export function ActionButton({ title, onPress, busy = false, secondary = false, 
   disabled?: boolean;
 }) {
   return (
-    <Pressable disabled={disabled || busy} onPress={onPress} style={({ pressed }) => [
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled: disabled || busy }} disabled={disabled || busy} onPress={onPress} style={({ pressed }) => [
       styles.button,
       secondary ? styles.secondary : styles.primary,
       (pressed || disabled) && styles.dimmed,
