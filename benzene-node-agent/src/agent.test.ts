@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, sign } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Agent } from "./agent.js";
 import { loadAgentConfig, type AgentConfig } from "./config.js";
+import { GRANT_TEST_PRIVATE_KEY, GRANT_TEST_PUBLIC_KEY } from "./grantVectors.js";
 import {
   ControlPlaneClient,
   ControlPlaneError,
@@ -25,6 +26,27 @@ import type { DeviceIdentity } from "./identity.js";
 import { ObjectStore } from "./store.js";
 
 let root: string;
+
+function sourceGrant(
+  objectHash: string,
+  deviceId: string,
+  encryption: "none" | "benzene-encrypted-object-v1" = "none"
+): string {
+  const encoded = Buffer.from(JSON.stringify({
+    v: 2,
+    objectHash,
+    deviceId,
+    op: "get",
+    exp: 4_102_444_800,
+    encryption,
+  })).toString("base64url");
+  const signature = sign(null, Buffer.from(encoded), {
+    key: Buffer.from(GRANT_TEST_PRIVATE_KEY, "base64"),
+    format: "der",
+    type: "pkcs8",
+  }).toString("base64url");
+  return `${encoded}.${signature}`;
+}
 
 /**
  * Stands in for the control plane so the agent's own state machine is what is
@@ -85,6 +107,7 @@ class FakeControlPlane extends ControlPlaneClient {
       platform: "linux",
       expiresAt: new Date(Date.now() + 600_000).toISOString(),
       deviceId: this.status === "consumed" ? this.approvedDeviceId : null,
+      ...(this.status === "consumed" ? { controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY } : {}),
     };
   }
 
@@ -643,7 +666,7 @@ describe("repair", () => {
         deviceId: "source-device",
         deviceName: "Source",
         url: "http://source.invalid/objects/" + objectHash,
-        grant: "grant",
+        grant: sourceGrant(objectHash, "source-device", "benzene-encrypted-object-v1"),
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       },
     };
@@ -651,6 +674,9 @@ describe("repair", () => {
 
     await expect(agent.attemptRepair()).resolves.toBe(true);
     expect(await agent.store.verify(objectHash)).toBe(true);
+    expect(await agent.store.metadata(objectHash)).toMatchObject({
+      encryption: "benzene-encrypted-object-v1",
+    });
     expect(plane.possessionReports).toEqual([{ objectHash, sizeBytes: body.length }]);
     vi.unstubAllGlobals();
   });
@@ -670,7 +696,7 @@ describe("repair", () => {
         deviceId: "source-device",
         deviceName: "Source",
         url: `http://source.invalid/objects/${objectHash}`,
-        grant: "grant",
+        grant: sourceGrant(objectHash, "source-device"),
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       },
     };
@@ -705,7 +731,7 @@ describe("repair", () => {
         deviceId: "source-device",
         deviceName: "Source",
         url: `http://source.invalid/objects/${objectHash}`,
-        grant: "grant",
+        grant: sourceGrant(objectHash, "source-device"),
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       },
     };
@@ -739,7 +765,7 @@ describe("repair", () => {
         deviceId: "source-device",
         deviceName: "Source",
         url: `http://source.invalid/objects/${objectHash}`,
-        grant: "grant",
+        grant: sourceGrant(objectHash, "source-device"),
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       },
     };
@@ -770,7 +796,7 @@ describe("rebalancing", () => {
         deviceId: "source-device",
         deviceName: "Source",
         url: `http://source.invalid/objects/${objectHash}`,
-        grant: "grant",
+        grant: sourceGrant(objectHash, "source-device"),
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
       },
     };

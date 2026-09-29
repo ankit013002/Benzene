@@ -39,17 +39,19 @@ describe("grant contract", () => {
       now: 1_757_000_000_000,
     });
 
-    expect(result).toMatchObject({ ok: true });
+    expect(result).toEqual({ ok: true, payload: vector.payload });
   });
 });
 
 describe("scoping", () => {
   const base = {
-    v: 1,
+    v: 2,
     objectHash: "a".repeat(64),
     deviceId: "device-1",
     op: "put" as const,
     exp: FUTURE,
+    size: 1,
+    encryption: "none" as const,
   };
 
   function verify(overrides: Partial<typeof base>, expected?: Partial<typeof base>) {
@@ -86,7 +88,7 @@ describe("scoping", () => {
 
   // A read grant must not authorise a write.
   it("refuses a grant issued for a different operation", () => {
-    expect(verify({ op: "get" }, { op: "put" })).toEqual({
+    expect(verify({ op: "get", size: undefined }, { op: "put" })).toEqual({
       ok: false,
       reason: "wrong_operation",
     });
@@ -98,6 +100,52 @@ describe("scoping", () => {
 
   it("refuses a grant with an unknown version", () => {
     expect(verify({ v: 99 })).toEqual({ ok: false, reason: "unsupported_version" });
+  });
+
+  it("accepts a legacy v1 plaintext GET only as encryption none", () => {
+    const legacy = mint({ ...base, v: 1, op: "get", encryption: undefined });
+    const result = verifyTransferGrant({
+      grant: legacy,
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      expected: { objectHash: base.objectHash, deviceId: base.deviceId, op: "get" },
+    });
+    expect(result).toMatchObject({ ok: true, payload: { v: 1, encryption: "none" } });
+  });
+
+  it("rejects legacy v1 writes and any attempt to attach an encryption label", () => {
+    const legacyPut = mint({ ...base, v: 1, encryption: undefined });
+    expect(verifyTransferGrant({
+      grant: legacyPut,
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      expected: { objectHash: base.objectHash, deviceId: base.deviceId, op: "put" },
+    })).toEqual({ ok: false, reason: "unsupported_version" });
+    const legacyEncrypted = mint({ ...base, v: 1, encryption: "benzene-encrypted-object-v1" });
+    expect(verifyTransferGrant({
+      grant: legacyEncrypted,
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      expected: { objectHash: base.objectHash, deviceId: base.deviceId, op: "put" },
+    })).toEqual({ ok: false, reason: "malformed" });
+  });
+
+  it("requires an explicit storage format on v2 PUT and GET grants", () => {
+    expect(verifyTransferGrant({
+      grant: mint({ ...base, encryption: undefined }),
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      expected: { objectHash: base.objectHash, deviceId: base.deviceId, op: "put" },
+    })).toEqual({ ok: false, reason: "malformed" });
+    expect(verifyTransferGrant({
+      grant: mint({ ...base, op: "get", encryption: undefined }),
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      expected: { objectHash: base.objectHash, deviceId: base.deviceId, op: "get" },
+    })).toEqual({ ok: false, reason: "malformed" });
+  });
+
+  it("requires a signed size on v2 PUT grants", () => {
+    expect(verifyTransferGrant({
+      grant: mint({ ...base, size: undefined }),
+      controlPlanePublicKey: GRANT_TEST_PUBLIC_KEY,
+      expected: { objectHash: base.objectHash, deviceId: base.deviceId, op: "put" },
+    })).toEqual({ ok: false, reason: "malformed" });
   });
 });
 

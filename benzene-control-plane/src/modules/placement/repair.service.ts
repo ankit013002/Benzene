@@ -251,6 +251,7 @@ export async function pollRepairForDevice(
       const replicaRows = await tx
         .select({
           status: replicas.status,
+          encryption: replicas.encryption,
           deviceStatus: devices.status,
         })
         .from(replicas)
@@ -258,6 +259,8 @@ export async function pollRepairForDevice(
         .where(
           and(eq(replicas.vaultId, target.vaultId), eq(replicas.objectHash, object.objectHash))
         );
+      const formats = new Set(replicaRows.map((row) => row.encryption));
+      if (formats.has("unknown") || formats.size > 1) return null;
       const availableReplicas = replicaRows.filter(
         (row) =>
           row.deviceStatus !== "draining" &&
@@ -277,6 +280,7 @@ export async function pollRepairForDevice(
           sizeBytes: replicas.sizeBytes,
           repairSourceDeviceId: replicas.repairSourceDeviceId,
           repairAssignmentId: replicas.repairAssignmentId,
+          encryption: replicas.encryption,
         })
         .from(replicas)
         .where(
@@ -302,6 +306,7 @@ export async function pollRepairForDevice(
           advertisedUrl: devices.advertisedUrl,
           deviceStatus: devices.status,
           lastSeenAt: devices.lastSeenAt,
+          encryption: replicas.encryption,
         })
         .from(replicas)
         .innerJoin(devices, eq(devices.id, replicas.deviceId))
@@ -330,6 +335,9 @@ export async function pollRepairForDevice(
             : deriveStatus(row.deviceStatus, row.lastSeenAt, offlineAfterMs) === "online")
       );
       if (!source || !source.advertisedUrl) return null;
+      if (targetReplica?.status === "placing" && targetReplica.encryption !== source.encryption) {
+        return null;
+      }
 
       const sizeBytes = Number(targetReplica?.sizeBytes ?? source.sizeBytes);
       const repairAssignmentId = targetReplica?.status === "placing"
@@ -372,6 +380,7 @@ export async function pollRepairForDevice(
           .set({
             repairSourceDeviceId: source.deviceId,
             repairAssignmentId,
+            encryption: source.encryption,
             updatedAt: issuedAt,
           })
           .where(eq(replicas.id, targetReplica.id));
@@ -386,6 +395,7 @@ export async function pollRepairForDevice(
             sizeBytes,
             repairSourceDeviceId: source.deviceId,
             repairAssignmentId,
+            encryption: source.encryption,
             updatedAt: issuedAt,
           })
           .where(eq(replicas.id, targetReplica.id));
@@ -400,6 +410,7 @@ export async function pollRepairForDevice(
             status: "placing",
             repairSourceDeviceId: source.deviceId,
             repairAssignmentId,
+            encryption: source.encryption,
             updatedAt: issuedAt,
           })
           .onConflictDoNothing({
@@ -421,6 +432,7 @@ export async function pollRepairForDevice(
             deviceId: source.deviceId,
             op: "get",
             exp: expiresAt,
+            encryption: source.encryption as "none" | "benzene-encrypted-object-v1",
           }),
           expiresAt: new Date(expiresAt * 1000).toISOString(),
         },

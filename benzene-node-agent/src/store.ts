@@ -14,6 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { Readable } from "node:stream";
+import type { TransferEncryption } from "./transferGrant.js";
 
 /**
  * The device's contributed storage.
@@ -27,11 +28,8 @@ import type { Readable } from "node:stream";
 /**
  * On-disk format version, recorded per object.
  *
- * Encryption is not implemented yet, but it lands before this is deployed
- * widely, and by then there will be stored objects. Recording a version and an
- * explicit `encryption` field now means a reader can tell plaintext-era objects
- * from encrypted ones and a migration is unnecessary — the alternative is
- * rewriting every stored byte on machines we do not control.
+ * Recording the authenticated transfer mode lets readers distinguish legacy
+ * plaintext objects from ciphertext without rewriting user-owned stores.
  */
 export const OBJECT_FORMAT_VERSION = 1;
 /** Shared MVP limit for one signed presumed-loss inventory report. */
@@ -73,6 +71,13 @@ export class SizeMismatchError extends Error {
   constructor(readonly expected: number, readonly actual: number) {
     super(`Object has size ${actual} bytes, expected ${expected} bytes`);
     this.name = "SizeMismatchError";
+  }
+}
+
+export class StorageEncryptionMismatchError extends Error {
+  constructor(readonly expected: TransferEncryption, readonly actual: string | null) {
+    super(`Object encryption mode is ${actual ?? "unknown"}, expected ${expected}`);
+    this.name = "StorageEncryptionMismatchError";
   }
 }
 
@@ -216,16 +221,17 @@ export class ObjectStore {
    */
   async put(
     source: Readable,
-    options: { expectedSize?: number; expectedHash?: string } = {}
+    options: { expectedSize?: number; expectedHash?: string; encryption?: TransferEncryption } = {}
   ): Promise<StoredObject> {
     return this.withMutationLock(() => this.putUnlocked(source, options));
   }
 
   private async putUnlocked(
     source: Readable,
-    options: { expectedSize?: number; expectedHash?: string }
+    options: { expectedSize?: number; expectedHash?: string; encryption?: TransferEncryption }
   ): Promise<StoredObject> {
     this.assertLoaded();
+    const encryption = options.encryption ?? "none";
 
     // A device may already hold the expected object. Verify that path before
     // accepting more bytes: retaining a valid copy needs no allocation, while
@@ -240,6 +246,10 @@ export class ObjectStore {
         }
         if (incoming.hash !== options.expectedHash) {
           throw new IntegrityError(options.expectedHash, incoming.hash);
+        }
+        const metadata = await this.metadata(options.expectedHash);
+        if (metadata?.encryption !== encryption) {
+          throw new StorageEncryptionMismatchError(encryption, metadata?.encryption ?? null);
         }
         return incoming;
       }
@@ -294,6 +304,11 @@ export class ObjectStore {
       // of possession because a disk can corrupt bytes in place.
       if (await this.has(hash)) {
         if (await this.verify(hash)) {
+          const metadata = await this.metadata(hash);
+          if (metadata?.encryption !== encryption) {
+            await rm(tmpPath, { force: true });
+            throw new StorageEncryptionMismatchError(encryption, metadata?.encryption ?? null);
+          }
           await rm(tmpPath, { force: true });
           return { hash, size };
         }
@@ -313,7 +328,7 @@ export class ObjectStore {
               v: OBJECT_FORMAT_VERSION,
               hash,
               size,
-              encryption: "none",
+              encryption,
               receivedAt: new Date().toISOString(),
             } satisfies ObjectMetadata),
             "utf8"
@@ -337,7 +352,7 @@ export class ObjectStore {
         v: OBJECT_FORMAT_VERSION,
         hash,
         size,
-        encryption: "none",
+        encryption,
         receivedAt: new Date().toISOString(),
       };
       await writeFile(

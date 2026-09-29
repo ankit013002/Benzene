@@ -113,11 +113,12 @@ describe("planning an upload", () => {
     const plan = await planUpload(OWNER, { objectHash: hash, sizeBytes: 1024 });
 
     expect(decodeGrant(plan.targets[0]!.grant)).toMatchObject({
-      v: 1,
+      v: 2,
       objectHash: hash,
       deviceId,
       op: "put",
       size: 1024,
+      encryption: "none",
     });
   });
 
@@ -342,7 +343,13 @@ describe("planning a download", () => {
     const targets = await planDownload(OWNER, hash);
 
     expect(targets).toHaveLength(1);
-    expect(decodeGrant(targets[0]!.grant)).toMatchObject({ objectHash: hash, deviceId, op: "get" });
+    expect(decodeGrant(targets[0]!.grant)).toMatchObject({
+      v: 2,
+      objectHash: hash,
+      deviceId,
+      op: "get",
+      encryption: "none",
+    });
   });
 
   // A replica still being placed has no bytes to serve yet.
@@ -356,6 +363,23 @@ describe("planning a download", () => {
 
   it("returns nothing for an object nobody holds", async () => {
     expect(await planDownload(OWNER, hashOf("absent"))).toEqual([]);
+  });
+
+  it("fails closed for legacy replicas whose storage format has not been reconciled", async () => {
+    const deviceId = await reachableDevice("legacy", "http://192.168.1.10:7070");
+    await setPolicy(OWNER, { mode: "maximum_capacity" });
+    const hash = hashOf("unclassified historical bytes");
+    const plan = await planUpload(OWNER, { objectHash: hash, sizeBytes: 10 });
+    await confirmReplica(OWNER, { objectHash: hash, deviceId: plan.targets[0]!.deviceId });
+    await db
+      .update(schema.replicas)
+      .set({ encryption: "unknown" })
+      .where(eq(schema.replicas.deviceId, deviceId));
+
+    await expect(planDownload(OWNER, hash)).rejects.toMatchObject({
+      status: 409,
+      details: { reason: "storage_format_unknown" },
+    });
   });
 
   it("does not issue a download grant for a removed device", async () => {

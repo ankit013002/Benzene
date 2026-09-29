@@ -36,16 +36,27 @@ function b64url(input: Buffer): string {
 function grantFor(
   objectHash: string,
   op: TransferOperation,
-  overrides: { deviceId?: string; exp?: number } = {}
+  overrides: {
+    deviceId?: string;
+    exp?: number;
+    v?: 1 | 2;
+    encryption?: "none" | "benzene-encrypted-object-v1";
+    size?: number;
+  } = {}
 ): string {
+  const v = overrides.v ?? 2;
   const encoded = b64url(
     Buffer.from(
       JSON.stringify({
-        v: 1,
+        v,
         objectHash,
         deviceId: overrides.deviceId ?? DEVICE_ID,
         op,
         exp: overrides.exp ?? FUTURE,
+        ...(overrides.size !== undefined ? { size: overrides.size } : {}),
+        ...(v === 2 && (op === "put" || op === "get")
+          ? { encryption: overrides.encryption ?? "none" }
+          : {}),
       }),
       "utf8"
     )
@@ -212,12 +223,48 @@ describe("authorisation", () => {
 
     await request(app)
       .put(`/objects/${hash}`)
-      .set("X-Transfer-Grant", grantFor(hash, "put"))
+      .set("X-Transfer-Grant", grantFor(hash, "put", { size: body.length, encryption: "none" }))
       .set("Content-Type", "application/octet-stream")
       .send(body)
       .expect(201);
 
     expect(reports).toEqual([{ objectHash: hash, sizeBytes: body.length }]);
+  });
+
+  it("stores and serves the signed encrypted-object mode without relabeling duplicates", async () => {
+    const body = "ciphertext payload";
+    const hash = sha256(body);
+    await request(app)
+      .put(`/objects/${hash}`)
+      .set("X-Transfer-Grant", grantFor(hash, "put", {
+        v: 2,
+        size: body.length,
+        encryption: "benzene-encrypted-object-v1",
+      }))
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(201);
+
+    expect(await store.metadata(hash)).toMatchObject({ encryption: "benzene-encrypted-object-v1" });
+    await request(app)
+      .get(`/objects/${hash}`)
+      .set("X-Transfer-Grant", grantFor(hash, "get", {
+        v: 2,
+        encryption: "benzene-encrypted-object-v1",
+      }))
+      .expect(200);
+
+    await request(app)
+      .put(`/objects/${hash}`)
+      .set("X-Transfer-Grant", grantFor(hash, "put", {
+        v: 2,
+        size: body.length,
+        encryption: "none",
+      }))
+      .set("Content-Type", "application/octet-stream")
+      .send(body)
+      .expect(409);
+    expect(await store.metadata(hash)).toMatchObject({ encryption: "benzene-encrypted-object-v1" });
   });
 
   it("does not serve an object whose on-disk bytes have been corrupted", async () => {
@@ -313,7 +360,7 @@ describe("object transfer", () => {
 
     await request(app)
       .put(`/objects/${hash}`)
-      .set("X-Transfer-Grant", grantFor(hash, "put"))
+      .set("X-Transfer-Grant", grantFor(hash, "put", { size: body.length, encryption: "none" }))
       .set("Content-Type", "application/octet-stream")
       .send(body)
       .expect(201);
@@ -332,7 +379,10 @@ describe("object transfer", () => {
 
     await request(app)
       .put(`/objects/${hash}`)
-      .set("X-Transfer-Grant", grantFor(hash, "put"))
+      .set("X-Transfer-Grant", grantFor(hash, "put", {
+        size: "something else entirely".length,
+        encryption: "none",
+      }))
       .set("Content-Type", "application/octet-stream")
       .send("something else entirely")
       .expect(422);
@@ -346,7 +396,7 @@ describe("object transfer", () => {
 
     await request(app)
       .put(`/objects/${hash}`)
-      .set("X-Transfer-Grant", grantFor(hash, "put"))
+      .set("X-Transfer-Grant", grantFor(hash, "put", { size: big.length, encryption: "none" }))
       .set("Content-Type", "application/octet-stream")
       .send(big)
       .expect(507);

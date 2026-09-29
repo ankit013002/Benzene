@@ -255,6 +255,26 @@ describe("reserving and confirming", () => {
     expect(protection.placingReplicas).toBe(0);
   });
 
+  it("does not reuse an existing replica under a different signed storage format", async () => {
+    const device = await onlineDevice(OWNER, "format-mismatch");
+    const hash = hashOf("encrypted bytes");
+    await reservePlacement(OWNER, {
+      objectHash: hash,
+      sizeBytes: 14,
+      deviceIds: [device],
+      encryption: "benzene-encrypted-object-v1",
+    });
+
+    await expect(
+      reservePlacement(OWNER, { objectHash: hash, sizeBytes: 14, deviceIds: [device] })
+    ).rejects.toMatchObject({ status: 409, details: { reason: "storage_format_mismatch" } });
+    const [replica] = await db
+      .select({ encryption: schema.replicas.encryption })
+      .from(schema.replicas)
+      .where(eq(schema.replicas.objectHash, hash));
+    expect(replica?.encryption).toBe("benzene-encrypted-object-v1");
+  });
+
   it("accepts an exact-fit first reservation but rejects the next byte", async () => {
     const device = await onlineDevice(OWNER, "exact-fit", 14);
 

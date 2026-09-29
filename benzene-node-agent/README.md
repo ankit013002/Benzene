@@ -44,10 +44,11 @@ clients and cover the advertised hostname or IP address.
 After enrollment, each heartbeat is signed with the device's private key. The
 agent also polls signed `GET /agent/repair` assignments. When work is available,
 the control plane supplies a healthy peer URL and a short-lived Ed25519 transfer
-grant scoped to one object, device and operation;
-the agent fetches that one whole file directly from the peer, verifies its
-SHA-256 hash while writing, and reports possession back with another signed
-request. File bytes do not pass through the browser or control plane.
+grant scoped to one object, device, operation and storage-encryption mode. The
+agent verifies the source grant, fetches that object directly from the peer,
+preserves its authenticated mode in the local sidecar, verifies its SHA-256 hash
+while writing, and reports possession back with another signed request. File
+bytes do not pass through the browser or control plane.
 
 ## How storage is laid out
 
@@ -107,11 +108,22 @@ target reports possession does the old source receive a durable deletion
 assignment. A node never overlaps repair, GC, rebalancing, inventory recovery
 or removal work locally.
 
-**The object format is versioned.** Client-side encryption is not implemented
-yet, but each object records `v` and an explicit `encryption: "none"`. When
-encryption lands, encrypted and plaintext-era objects coexist and no migration
-is needed — which matters because these files live on machines we do not
-control.
+**The storage mode is authenticated.** Transfer-grant v2 requires `encryption`
+to be exactly `none` or `benzene-encrypted-object-v1` for PUT and GET. The mode
+is signed and copied into the object sidecar. A verified duplicate with a
+missing or different mode is refused instead of silently relabeled. Legacy v1
+GET grants are accepted only as `none`; v1 PUTs are rejected because they do
+not authenticate a format. Repair/rebalance require v2 source grants, so a
+legacy token cannot relabel copied bytes. This marker is not proof that
+arbitrary bytes are ciphertext: clients and the control plane must still ensure
+encrypted uploads contain ciphertext.
+
+Deploy transfer-grant v2 in a coordinated control-plane/agent rollout. New
+agents intentionally reject v1 PUT grants because those grants do not bind a
+storage format. The control-plane migration marks all pre-v2 replicas
+`unknown`; it retains their bytes but blocks reads and copies until an operator
+reconciles their mode. There is no automated reconciliation tool yet, so do not
+roll v2 onto a fleet with live objects without a separately planned migration.
 
 ## Known limits
 
@@ -119,8 +131,10 @@ control.
   transfer routes can listen with a supplied certificate and key, but Benzene
   does not yet issue or renew certificates, establish browser trust, discover
   remote peers, traverse NAT or provide a relay.
-- **Objects are plaintext.** Each sidecar records `encryption: "none"`; at-rest
-  encryption and its key-recovery design must precede real user data.
+- **Encryption does not complete the key lifecycle.** Encrypted-object v1 bytes
+  can be stored and replicated as ciphertext, but key recovery and legacy
+  plaintext migration remain unresolved. Do not treat either path as ready for
+  real user data until those designs and end-to-end recovery are verified.
 - **The private key is a `0600` file**, not platform-secure storage. Keychain,
   DPAPI and Keystore are per-platform native work (§34).
 - **Repair is whole-file and bounded.** The agent fills recorded replica
@@ -152,7 +166,7 @@ these vectors.
 
 ## Verification
 
-The current node-agent suite has **140 tests**, including the relay-ticket
+The current node-agent suite has **152 tests**, including the relay-ticket
 conformance vector. The last fully green broader baseline before the relay job
 was added is CI run `36508422483`; the repository guide records its exact
 cross-package counts.

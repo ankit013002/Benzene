@@ -22,21 +22,25 @@ import {
  * for an attacker to negotiate down and no library surface beyond Ed25519.
  */
 
-export const GRANT_VERSION = 1;
+export const GRANT_VERSION = 2;
 
 export type TransferOperation = "put" | "get" | "delete";
+export type TransferEncryption = "none" | "benzene-encrypted-object-v1";
 
-export interface TransferGrantPayload {
-  v: number;
+interface TransferGrantBase {
   /** SHA-256 of the object's bytes, lowercase hex. */
   objectHash: string;
   deviceId: string;
-  op: TransferOperation;
   /** Unix seconds. */
   exp: number;
-  /** Declared size, so a device can refuse before accepting a stream. */
-  size?: number;
 }
+
+export type TransferGrantInput = TransferGrantBase & (
+  | { op: "put"; size: number; encryption: TransferEncryption }
+  | { op: "get"; encryption: TransferEncryption }
+  | { op: "delete" }
+);
+export type TransferGrantPayload = { v: 2 } & TransferGrantInput;
 
 export interface TransferSigningKeys {
   /** Base64 PKCS8 DER. Held only by the control plane. */
@@ -81,9 +85,9 @@ function base64url(input: Buffer): string {
  */
 export function issueTransferGrant(
   privateKeyB64: string,
-  payload: Omit<TransferGrantPayload, "v">
+  payload: TransferGrantInput
 ): string {
-  const full: TransferGrantPayload = { v: GRANT_VERSION, ...payload };
+  const full = { v: GRANT_VERSION, ...payload };
   const encoded = base64url(Buffer.from(JSON.stringify(full), "utf8"));
 
   const signature = cryptoSign(null, Buffer.from(encoded, "utf8"), {

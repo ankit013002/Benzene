@@ -9,8 +9,9 @@ import {
   IntegrityError,
   ObjectStore,
   SizeMismatchError,
+  StorageEncryptionMismatchError,
 } from "./store.js";
-import { verifyTransferGrant, type TransferOperation } from "./transferGrant.js";
+import { verifyTransferGrant, type TransferGrantPayload, type TransferOperation } from "./transferGrant.js";
 
 /**
  * Serves this device's objects to peers on the local network.
@@ -113,7 +114,7 @@ export function createTransferServer(options: TransferServerOptions): Express {
     req: express.Request,
     res: express.Response,
     op: TransferOperation
-  ): boolean {
+  ): TransferGrantPayload | undefined {
     const grant = req.get("x-transfer-grant") ?? "";
     const result = verifyTransferGrant({
       grant,
@@ -127,18 +128,23 @@ export function createTransferServer(options: TransferServerOptions): Express {
 
     if (!result.ok) {
       res.status(401).json({ message: "Transfer not authorised", code: result.reason });
-      return false;
+      return undefined;
     }
-    return true;
+    return result.payload;
   }
 
   app.head("/objects/:hash", async (req, res, next) => {
     try {
-      if (!authorise(req, res, "get")) return;
+      const grant = authorise(req, res, "get");
+      if (!grant) return;
       const hash = req.params["hash"] as string;
       const meta = await options.store.metadata(hash);
       if (!meta) {
         res.status(404).end();
+        return;
+      }
+      if (meta.encryption !== grant.encryption) {
+        res.status(409).json({ message: "Object encryption mode does not match its grant", code: "STORAGE_FORMAT_MISMATCH" });
         return;
       }
       if (!(await options.store.verify(hash))) {
@@ -155,10 +161,16 @@ export function createTransferServer(options: TransferServerOptions): Express {
 
   app.get("/objects/:hash", async (req, res, next) => {
     try {
-      if (!authorise(req, res, "get")) return;
+      const grant = authorise(req, res, "get");
+      if (!grant) return;
       const hash = req.params["hash"] as string;
       if (!(await options.store.has(hash))) {
         res.status(404).json({ message: "Object not held", code: "NOT_FOUND" });
+        return;
+      }
+      const meta = await options.store.metadata(hash);
+      if (!meta || meta.encryption !== grant.encryption) {
+        res.status(409).json({ message: "Object encryption mode does not match its grant", code: "STORAGE_FORMAT_MISMATCH" });
         return;
       }
       // Verify before opening the stream. A silently corrupted object is
@@ -179,16 +191,24 @@ export function createTransferServer(options: TransferServerOptions): Express {
 
   app.put("/objects/:hash", (req, res) => {
     void (async () => {
-      if (!authorise(req, res, "put")) return;
+      const grant = authorise(req, res, "put");
+      if (!grant) return;
       const hash = req.params["hash"] as string;
       const declared = Number(req.get("content-length"));
+      if (typeof grant.size === "number" && Number.isFinite(declared) && declared !== grant.size) {
+        res.status(422).json({ message: "Transfer size does not match its grant", code: "SIZE_MISMATCH" });
+        return;
+      }
 
       try {
         const stored = await options.store.put(req, {
           // The hash is in the URL, so a corrupted or substituted transfer is
           // rejected on arrival rather than discovered on a later read.
           expectedHash: hash,
-          ...(Number.isFinite(declared) ? { expectedSize: declared } : {}),
+          ...(typeof grant.size === "number"
+            ? { expectedSize: grant.size }
+            : Number.isFinite(declared) ? { expectedSize: declared } : {}),
+          encryption: grant.encryption ?? "none",
         });
 
         if (options.reportPossession) {
@@ -220,6 +240,10 @@ export function createTransferServer(options: TransferServerOptions): Express {
         }
         if (err instanceof SizeMismatchError) {
           res.status(422).json({ message: err.message, code: "SIZE_MISMATCH" });
+          return;
+        }
+        if (err instanceof StorageEncryptionMismatchError) {
+          res.status(409).json({ message: err.message, code: "STORAGE_FORMAT_MISMATCH" });
           return;
         }
         res.status(500).json({ message: "Could not store object", code: "SERVER" });

@@ -3,6 +3,7 @@ import { alias } from "drizzle-orm/pg-core";
 
 import { config } from "../../config/env.js";
 import { db } from "../../db/client.js";
+import type { TransferEncryption } from "./transferGrant.js";
 import {
   REPLICAS_FOR_MODE,
   deviceStorageAllocations,
@@ -212,12 +213,18 @@ export async function decidePlacement(
  */
 export async function reservePlacement(
   ownerId: string,
-  input: { objectHash: string; sizeBytes: number; deviceIds: string[] },
+  input: {
+    objectHash: string;
+    sizeBytes: number;
+    deviceIds: string[];
+    encryption?: TransferEncryption;
+  },
   options: { requireReachable?: boolean; holdDeviceIds?: string[] } = {}
 ): Promise<Replica[]> {
   const vault = await ensureVaultForOwner(ownerId);
   await classifyDeviceOutages(vault.id);
   const deviceIds = [...new Set(input.deviceIds)];
+  const encryption = input.encryption ?? "none";
   const holdDeviceIds = [...new Set(options.holdDeviceIds ?? [])];
   const lockDeviceIds = [...new Set([...deviceIds, ...holdDeviceIds])].sort();
   if (lockDeviceIds.length === 0) return [];
@@ -283,7 +290,7 @@ export async function reservePlacement(
     );
     if (holdDeviceIds.length > 0) {
       const heldRows = await tx
-        .select({ deviceId: replicas.deviceId, status: replicas.status })
+        .select({ deviceId: replicas.deviceId, status: replicas.status, encryption: replicas.encryption })
         .from(replicas)
         .where(
           and(
@@ -297,6 +304,11 @@ export async function reservePlacement(
       if (holdDeviceIds.some((deviceId) => heldByDevice.get(deviceId) !== "healthy")) {
         throw AppError.conflict("An existing replica changed before placement could be reserved");
       }
+      if (heldRows.some((row) => row.encryption !== encryption)) {
+        throw AppError.conflict("An existing replica has an incompatible storage format", {
+          reason: "storage_format_mismatch",
+        });
+      }
     }
     const existingRows = await tx
       .select({
@@ -304,6 +316,7 @@ export async function reservePlacement(
         deviceId: replicas.deviceId,
         status: replicas.status,
         sizeBytes: replicas.sizeBytes,
+        encryption: replicas.encryption,
       })
       .from(replicas)
       .where(
@@ -320,6 +333,17 @@ export async function reservePlacement(
         "Object cleanup is still finishing on one or more target devices",
         { reason: "garbage_collection_in_progress" }
       );
+    }
+    if (
+      existingRows.some(
+        (row) =>
+          (row.status === "healthy" || row.status === "placing") &&
+          row.encryption !== encryption
+      )
+    ) {
+      throw AppError.conflict("An existing replica has an incompatible storage format", {
+        reason: "storage_format_mismatch",
+      });
     }
     const reusableExistingDevices = new Set(
       existingRows
@@ -357,6 +381,7 @@ export async function reservePlacement(
         .set({
           status: "placing",
           sizeBytes: input.sizeBytes,
+          encryption,
           verifiedAt: null,
           repairSourceDeviceId: null,
           repairAssignmentId: null,
@@ -380,6 +405,7 @@ export async function reservePlacement(
           objectHash: input.objectHash,
           deviceId,
           sizeBytes: input.sizeBytes,
+          encryption,
           status: "placing" as const,
         }))
       )

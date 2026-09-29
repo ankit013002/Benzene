@@ -402,7 +402,7 @@ export async function reserveEncryptedDeviceUpload(
     objectHash: storageHash,
     sizeBytes: storageBytes,
     versionId: versionDoc._id.toString(),
-  });
+  }, { encryption: "benzene-encrypted-object-v1" });
   const { objectHash: _physicalHash, ...physicalPlacement } = placement;
 
   return {

@@ -15,6 +15,7 @@ import {
   ObjectStore,
   OBJECT_FORMAT_VERSION,
   SizeMismatchError,
+  StorageEncryptionMismatchError,
 } from "./store.js";
 
 const MB = 1024 * 1024;
@@ -87,6 +88,49 @@ describe("storing objects", () => {
       // encrypted objects can coexist without migrating these.
       encryption: "none",
     });
+  });
+
+  it("persists the authenticated encrypted-object mode in its sidecar", async () => {
+    const store = await makeStore();
+    const { hash } = await store.put(bytes("ciphertext"), {
+      encryption: "benzene-encrypted-object-v1",
+    });
+
+    expect(await store.metadata(hash)).toMatchObject({
+      hash,
+      encryption: "benzene-encrypted-object-v1",
+    });
+  });
+
+  it("refuses to relabel an existing object's storage mode on idempotent PUT", async () => {
+    const store = await makeStore();
+    const first = await store.put(bytes("same ciphertext"), {
+      encryption: "benzene-encrypted-object-v1",
+    });
+
+    await expect(store.put(bytes("same ciphertext"), { expectedHash: first.hash }))
+      .rejects.toBeInstanceOf(StorageEncryptionMismatchError);
+    expect(await store.metadata(first.hash)).toMatchObject({ encryption: "benzene-encrypted-object-v1" });
+  });
+
+  it("enforces the storage mode on duplicate PUTs without an expected hash", async () => {
+    const store = await makeStore();
+    const first = await store.put(bytes("same bytes"));
+
+    await expect(
+      store.put(bytes("same bytes"), { encryption: "benzene-encrypted-object-v1" })
+    ).rejects.toBeInstanceOf(StorageEncryptionMismatchError);
+    expect(await store.metadata(first.hash)).toMatchObject({ encryption: "none" });
+  });
+
+  it("does not infer a storage mode from bytes when an existing sidecar is missing", async () => {
+    const store = await makeStore();
+    const first = await store.put(bytes("unmarked bytes"));
+    await rm(path.join(root, "meta", first.hash.slice(0, 2), `${first.hash}.json`));
+
+    await expect(store.put(bytes("unmarked bytes"), { expectedHash: first.hash }))
+      .rejects.toMatchObject({ name: "StorageEncryptionMismatchError", actual: null });
+    expect(await store.metadata(first.hash)).toBeNull();
   });
 
   it("treats a repeated transfer of the same bytes as a no-op", async () => {

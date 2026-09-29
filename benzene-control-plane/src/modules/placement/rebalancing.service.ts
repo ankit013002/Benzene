@@ -85,6 +85,7 @@ async function retryCopyAssignment(
         sizeBytes: replicas.sizeBytes,
         assignmentId: replicas.rebalanceAssignmentId,
         sourceDeviceId: replicas.rebalancePeerDeviceId,
+        encryption: replicas.encryption,
       })
       .from(replicas)
       .where(
@@ -105,6 +106,7 @@ async function retryCopyAssignment(
         advertisedUrl: devices.advertisedUrl,
         status: devices.status,
         lastSeenAt: devices.lastSeenAt,
+        encryption: replicas.encryption,
       })
       .from(devices)
       .innerJoin(
@@ -145,8 +147,9 @@ async function retryCopyAssignment(
 
     const issuedAtSeconds = Math.floor(Date.now() / 1000);
     const issuedAt = new Date(issuedAtSeconds * 1000);
-    await tx.update(replicas).set({ updatedAt: issuedAt }).where(eq(replicas.id, work.id));
     const expiresAt = issuedAtSeconds + config().transferGrantTtlSeconds;
+    if (work.encryption === "unknown" || source.encryption !== work.encryption) return null;
+    await tx.update(replicas).set({ updatedAt: issuedAt }).where(eq(replicas.id, work.id));
     return {
       action: "copy",
       objectHash: work.objectHash,
@@ -161,6 +164,7 @@ async function retryCopyAssignment(
           deviceId: work.sourceDeviceId,
           op: "get",
           exp: expiresAt,
+          encryption: work.encryption as "none" | "benzene-encrypted-object-v1",
         }),
         expiresAt: new Date(expiresAt * 1000).toISOString(),
       },
@@ -268,6 +272,7 @@ export async function pollRebalancingForDevice(
         deviceId: replicas.deviceId,
         sizeBytes: replicas.sizeBytes,
         status: replicas.status,
+        encryption: replicas.encryption,
         deviceStatus: devices.status,
         garbageCollectionAssignmentId: replicas.garbageCollectionAssignmentId,
       })
@@ -288,6 +293,18 @@ export async function pollRebalancingForDevice(
       )
     ) {
       return null;
+    }
+    const encryptionByHash = new Map<string, "none" | "benzene-encrypted-object-v1">();
+    for (const objectHash of hashes) {
+      const formats = new Set(
+        replicaRows
+          .filter((row) => row.objectHash === objectHash)
+          .map((row) => row.encryption)
+      );
+      if (formats.size !== 1 || formats.has("unknown")) return null;
+      const format = [...formats][0];
+      if (format !== "none" && format !== "benzene-encrypted-object-v1") return null;
+      encryptionByHash.set(objectHash, format);
     }
 
     const [policy] = await tx
@@ -384,6 +401,7 @@ export async function pollRebalancingForDevice(
         status: replicas.status,
         garbageCollectionAssignmentId: replicas.garbageCollectionAssignmentId,
         rebalanceAssignmentId: replicas.rebalanceAssignmentId,
+        encryption: replicas.encryption,
       })
       .from(replicas)
       .where(
@@ -399,6 +417,9 @@ export async function pollRebalancingForDevice(
     const targetRow = lockedRows.find((row) => row.deviceId === deviceId);
     if (
       !source ||
+      source.encryption === "unknown" ||
+      source.encryption !== encryptionByHash.get(plan.objectHash) ||
+      lockedRows.some((row) => row.encryption !== source.encryption) ||
       targetRow?.status === "healthy" ||
       lockedRows.some(
         (row) =>
@@ -432,6 +453,7 @@ export async function pollRebalancingForDevice(
         .set({
           status: "placing",
           sizeBytes: plan.sizeBytes,
+          encryption: source.encryption,
           verifiedAt: null,
           repairSourceDeviceId: plan.sourceDeviceId,
           repairAssignmentId: assignmentId,
@@ -446,6 +468,7 @@ export async function pollRebalancingForDevice(
         objectHash: plan.objectHash,
         deviceId,
         sizeBytes: plan.sizeBytes,
+        encryption: source.encryption,
         status: "placing",
         repairSourceDeviceId: plan.sourceDeviceId,
         repairAssignmentId: assignmentId,
@@ -474,6 +497,7 @@ export async function pollRebalancingForDevice(
           deviceId: plan.sourceDeviceId,
           op: "get",
           exp: expiresAt,
+          encryption: source.encryption as "none" | "benzene-encrypted-object-v1",
         }),
         expiresAt: new Date(expiresAt * 1000).toISOString(),
       },

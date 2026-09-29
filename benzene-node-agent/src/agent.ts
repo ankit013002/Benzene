@@ -6,6 +6,7 @@ import { ControlPlaneClient, ControlPlaneError } from "./controlPlane.js";
 import { IdentityStore, type DeviceIdentity } from "./identity.js";
 import { generateDeviceKeyPair } from "./protocol.js";
 import { IntegrityError, ObjectStore, type StoredObject } from "./store.js";
+import { verifyTransferGrant, type TransferEncryption } from "./transferGrant.js";
 
 export const AGENT_VERSION = "0.1.0";
 const REPAIR_FETCH_TIMEOUT_MS = 30_000;
@@ -62,6 +63,26 @@ export class Agent {
 
   currentIdentity(): DeviceIdentity | undefined {
     return this.identity;
+  }
+
+  private sourceEncryption(
+    identity: DeviceIdentity,
+    input: { objectHash: string; source: { deviceId: string; grant: string } }
+  ): TransferEncryption {
+    if (!identity.controlPlanePublicKey) throw new Error("Control-plane transfer key is unavailable");
+    const verified = verifyTransferGrant({
+      grant: input.source.grant,
+      controlPlanePublicKey: identity.controlPlanePublicKey,
+      expected: {
+        objectHash: input.objectHash,
+        deviceId: input.source.deviceId,
+        op: "get",
+      },
+    });
+    if (!verified.ok || verified.payload.v !== 2 || verified.payload.encryption === undefined) {
+      throw new Error("Repair source grant does not authenticate an object storage format");
+    }
+    return verified.payload.encryption;
   }
 
   /** False after an erase directive until this device is removed. */
@@ -336,6 +357,7 @@ export class Agent {
         privateKey: identity.privateKey,
       });
       if (!assignment) return false;
+      const encryption = this.sourceEncryption(identity, assignment);
 
       const response = await fetch(assignment.source.url, {
         method: "GET",
@@ -362,7 +384,7 @@ export class Agent {
       try {
         stored = await this.store.put(
           Readable.fromWeb(response.body as ReadableStream<Uint8Array>),
-          { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes }
+          { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes, encryption }
         );
       } catch (err) {
         // A successful response can still change between the source's
@@ -465,6 +487,8 @@ export class Agent {
         return true;
       }
 
+      const encryption = this.sourceEncryption(identity, assignment);
+
       const response = await fetch(assignment.source.url, {
         method: "GET",
         headers: { "X-Transfer-Grant": assignment.source.grant },
@@ -490,7 +514,7 @@ export class Agent {
       try {
         stored = await this.store.put(
           Readable.fromWeb(response.body as ReadableStream<Uint8Array>),
-          { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes }
+          { expectedHash: assignment.objectHash, expectedSize: assignment.sizeBytes, encryption }
         );
       } catch (err) {
         if (err instanceof IntegrityError) {

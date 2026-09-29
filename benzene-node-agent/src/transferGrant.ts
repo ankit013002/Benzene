@@ -12,17 +12,19 @@ import { createPublicKey, verify as cryptoVerify } from "node:crypto";
  * is: the two packages are separate deployables and must not drift.
  */
 
-export const GRANT_VERSION = 1;
+export const GRANT_VERSION = 2;
 
 export type TransferOperation = "put" | "get" | "delete";
+export type TransferEncryption = "none" | "benzene-encrypted-object-v1";
 
 export interface TransferGrantPayload {
-  v: number;
+  v: 1 | 2;
   objectHash: string;
   deviceId: string;
   op: TransferOperation;
   exp: number;
   size?: number;
+  encryption?: TransferEncryption;
 }
 
 export type GrantRejection =
@@ -85,16 +87,71 @@ export function verifyTransferGrant(input: {
   // Signature first: never parse a payload that has not been authenticated.
   if (!verified) return { ok: false, reason: "bad_signature" };
 
-  let payload: TransferGrantPayload;
+  let parsed: unknown;
   try {
-    payload = JSON.parse(fromBase64url(encoded).toString("utf8")) as TransferGrantPayload;
+    parsed = JSON.parse(fromBase64url(encoded).toString("utf8")) as unknown;
   } catch {
     return { ok: false, reason: "malformed" };
   }
 
-  if (payload.v !== GRANT_VERSION) {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, reason: "malformed" };
+  }
+  const raw = parsed as Record<string, unknown>;
+  if (raw["v"] !== 1 && raw["v"] !== GRANT_VERSION) {
     return { ok: false, reason: "unsupported_version" };
   }
+  const v = raw["v"];
+  const op = raw["op"];
+  if (op !== "put" && op !== "get" && op !== "delete") {
+    return { ok: false, reason: "malformed" };
+  }
+  const fields = Object.keys(raw).sort();
+  const baseFields = ["deviceId", "exp", "objectHash", "op", "v"];
+  const expectedFields = v === 1
+    ? [...baseFields, ...(raw["size"] !== undefined ? ["size"] : [])]
+    : op === "put"
+      ? [...baseFields, "encryption", ...(raw["size"] !== undefined ? ["size"] : [])]
+      : op === "get"
+        ? [...baseFields, "encryption"]
+        : baseFields;
+  if (fields.length !== expectedFields.length
+    || fields.some((field, index) => field !== expectedFields.slice().sort()[index])) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (v === 1 && raw["encryption"] !== undefined) {
+    return { ok: false, reason: "malformed" };
+  }
+  // A legacy read can be treated as plaintext for compatibility, but a v1
+  // write has no authenticated format marker and could mislabel ciphertext.
+  if (v === 1 && op === "put") return { ok: false, reason: "unsupported_version" };
+  if (v === GRANT_VERSION && op === "put" && raw["size"] === undefined) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (raw["op"] === "put" || raw["op"] === "get") {
+    if (v === GRANT_VERSION && raw["encryption"] !== "none"
+      && raw["encryption"] !== "benzene-encrypted-object-v1") {
+      return { ok: false, reason: "malformed" };
+    }
+  } else if (raw["encryption"] !== undefined) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (raw["size"] !== undefined && (!Number.isSafeInteger(raw["size"]) || (raw["size"] as number) < 0)) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (typeof raw["deviceId"] !== "string" || typeof raw["objectHash"] !== "string"
+    || !Number.isSafeInteger(raw["exp"])) return { ok: false, reason: "malformed" };
+  const payload: TransferGrantPayload = {
+    v,
+    objectHash: raw["objectHash"],
+    deviceId: raw["deviceId"],
+    op,
+    exp: raw["exp"] as number,
+    ...(raw["size"] !== undefined ? { size: raw["size"] as number } : {}),
+    ...((raw["op"] === "put" || raw["op"] === "get")
+      ? { encryption: v === 1 ? "none" : raw["encryption"] as TransferEncryption }
+      : {}),
+  };
   if (typeof payload.exp !== "number" || (input.now ?? Date.now()) / 1000 > payload.exp) {
     return { ok: false, reason: "expired" };
   }

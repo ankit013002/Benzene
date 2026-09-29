@@ -13,6 +13,23 @@ allocation changes share this calculation and lock the allocation row before
 admission, so exact-fit reservations cannot be over-issued between
 heartbeats.
 
+Transfer-grant v2 signs the physical encryption mode (`none` for legacy
+plaintext or `benzene-encrypted-object-v1` for encrypted objects) on PUT and
+GET grants. The node agent stores that authenticated mode in the sidecar and
+refuses an idempotent PUT if the existing bytes have missing or conflicting
+mode metadata. The agent accepts old v1 GET grants only as plaintext and
+rejects v1 PUTs; repair/rebalance require v2 source grants. Use the
+control-plane and node-agent releases together when rolling out v2. Migration
+0010 deliberately marks every pre-v2 replica `unknown` rather than guessing
+from a ciphertext-looking hash or its old `none` sidecar. Downloads fail closed
+for those rows, and repair/rebalance will not copy them until their format is
+explicitly reconciled. The bytes and replica rows are retained; this is a
+temporary availability gate, not deletion. Before upgrading a deployed fleet,
+pause new transfers and reconcile existing replicas against authoritative
+version metadata as a coordinated operation. There is not yet an automated
+reconciliation command, so this pre-production migration is not a zero-downtime
+rolling upgrade.
+
 Repair assignments bind a target reservation to one healthy source and a
 persisted one-shot assignment id. A signed source-failure report must name
 both values and arrive before the same Unix-second grant boundary. Consuming

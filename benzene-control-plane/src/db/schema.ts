@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   pgTable,
@@ -327,6 +328,8 @@ export const replicas = pgTable(
      * `objectId` lives only with the encrypted version metadata.
      */
     objectHash: text("object_hash").notNull(),
+    /** Physical bytes on disk. Old rows remain unknown until explicitly reconciled. */
+    encryption: text("encryption").notNull().default("none"),
     deviceId: uuid("device_id")
       .notNull()
       .references(() => devices.id, { onDelete: "cascade" }),
@@ -359,6 +362,10 @@ export const replicas = pgTable(
       .default(sql`now()`),
   },
   (table) => [
+    check(
+      "replicas_encryption_check",
+      sql`${table.encryption} in ('unknown', 'none', 'benzene-encrypted-object-v1')`
+    ),
     uniqueIndex("replicas_object_device_idx").on(
       table.vaultId,
       table.objectHash,

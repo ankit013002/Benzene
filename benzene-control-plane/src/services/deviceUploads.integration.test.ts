@@ -17,6 +17,7 @@ import {
   requestEnrollment,
 } from "../modules/devices/devices.service.js";
 import { confirmReplicaForDevice } from "../modules/placement/placement.service.js";
+import { planDownload } from "../modules/placement/uploadTargets.service.js";
 import { ensureVaultForOwner } from "../modules/vaults/vaults.service.js";
 import { GRANT_TEST_PRIVATE_KEY } from "../modules/placement/grantVectors.js";
 import DriveNodeModel from "../models/driveNode.model.js";
@@ -134,6 +135,15 @@ describe("device-primary upload metadata", () => {
       placement: { storageHash, sizeBytes: Buffer.byteLength(plaintext) + 16 },
     });
     expect(reservation.placement.targets[0]?.url).toContain(storageHash);
+    const grantPayload = JSON.parse(
+      Buffer.from(reservation.placement.targets[0]!.grant.split(".")[0]!, "base64url").toString("utf8")
+    ) as Record<string, unknown>;
+    expect(grantPayload).toMatchObject({
+      v: 2,
+      objectHash: storageHash,
+      op: "put",
+      encryption: "benzene-encrypted-object-v1",
+    });
     expect(version).toMatchObject({
       bytes: Buffer.byteLength(plaintext),
       storageBytes: Buffer.byteLength(plaintext) + 16,
@@ -145,6 +155,23 @@ describe("device-primary upload metadata", () => {
     expect(version).not.toHaveProperty("ciphertext");
     const references = await db.select().from(schema.objectReferences);
     expect(references).toMatchObject([{ objectHash: storageHash }]);
+
+    const target = reservation.placement.targets[0];
+    if (!target) throw new Error("Expected an encrypted upload target");
+    await confirmReplicaForDevice(target.deviceId, {
+      objectHash: storageHash,
+      sizeBytes: Buffer.byteLength(plaintext) + 16,
+    });
+    const downloads = await planDownload(OWNER, storageHash);
+    const downloadPayload = JSON.parse(
+      Buffer.from(downloads[0]!.grant.split(".")[0]!, "base64url").toString("utf8")
+    ) as Record<string, unknown>;
+    expect(downloadPayload).toMatchObject({
+      v: 2,
+      op: "get",
+      objectHash: storageHash,
+      encryption: "benzene-encrypted-object-v1",
+    });
   });
 
   it("completes encrypted v1 using ciphertext possession and rejects ciphertext in metadata requests", async () => {

@@ -11,7 +11,7 @@ import {
   decidePlacement,
   reservePlacement,
 } from "./placement.service.js";
-import { issueTransferGrant, publicKeyFor } from "./transferGrant.js";
+import { issueTransferGrant, publicKeyFor, type TransferEncryption } from "./transferGrant.js";
 import { registerObjectReference } from "./garbageCollection.service.js";
 
 /**
@@ -72,7 +72,8 @@ export function transferPublicKey(): string {
  */
 export async function planUpload(
   ownerId: string,
-  input: { objectHash: string; sizeBytes: number; versionId?: string }
+  input: { objectHash: string; sizeBytes: number; versionId?: string },
+  options: { encryption?: TransferEncryption } = {}
 ): Promise<UploadPlan> {
   const key = signingKey();
   const vault = await ensureVaultForOwner(ownerId);
@@ -121,6 +122,7 @@ export async function planUpload(
             objectHash: input.objectHash,
             sizeBytes: input.sizeBytes,
             deviceIds: reservableDeviceIds,
+            encryption: options.encryption ?? "none",
           },
           {
             requireReachable: true,
@@ -160,6 +162,7 @@ export async function planUpload(
           op: "put",
           exp: expiresAt,
           size: input.sizeBytes,
+          encryption: options.encryption ?? "none",
         }),
         expiresAt: new Date(expiresAt * 1000).toISOString(),
       });
@@ -192,7 +195,6 @@ export async function planDownload(
   const key = signingKey();
   const vault = await ensureVaultForOwner(ownerId);
   await classifyDeviceOutages(vault.id);
-
   const rows = await db()
     .select({
       id: devices.id,
@@ -200,6 +202,7 @@ export async function planDownload(
       advertisedUrl: devices.advertisedUrl,
       status: devices.status,
       lastSeenAt: devices.lastSeenAt,
+      encryption: replicas.encryption,
     })
     .from(replicas)
     .innerJoin(devices, eq(devices.id, replicas.deviceId))
@@ -211,6 +214,14 @@ export async function planDownload(
         sql`${devices.status} not in ('removed', 'suspected_lost')`
       )
     );
+
+  const formats = new Set(rows.map((row) => row.encryption));
+  if (formats.has("unknown") || formats.size > 1) {
+    throw AppError.conflict("Stored replica encryption metadata is unknown or inconsistent", {
+      reason: "storage_format_unknown",
+    });
+  }
+  const encryption = (rows[0]?.encryption ?? "none") as TransferEncryption;
 
   const ttl = config().transferGrantTtlSeconds;
   const expiresAt = Math.floor(Date.now() / 1000) + ttl;
@@ -242,6 +253,7 @@ export async function planDownload(
         deviceId: row.id,
         op: "get",
         exp: expiresAt,
+        encryption,
       }),
       expiresAt: new Date(expiresAt * 1000).toISOString(),
     }));

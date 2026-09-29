@@ -37,7 +37,7 @@ describe("grant contract", () => {
   // the contract: this proves the control plane emits exactly these bytes.
   it.each(GRANT_VECTORS)("emits the agreed grant for $payload.op", (vector) => {
     const { v, ...rest } = vector.payload;
-    expect(v).toBe(1);
+    expect(v).toBe(2);
 
     expect(issueTransferGrant(GRANT_TEST_PRIVATE_KEY, rest)).toBe(vector.grant);
   });
@@ -57,15 +57,17 @@ describe("issuing", () => {
       op: "put",
       exp: 4_102_444_800,
       size: 99,
+      encryption: "none",
     });
 
     expect(decode(grant)).toEqual({
-      v: 1,
+      v: 2,
       objectHash: "a".repeat(64),
       deviceId: "device-1",
       op: "put",
       exp: 4_102_444_800,
       size: 99,
+      encryption: "none",
     });
   });
 
@@ -75,6 +77,7 @@ describe("issuing", () => {
       deviceId: "device-2",
       op: "get",
       exp: 4_102_444_800,
+      encryption: "benzene-encrypted-object-v1",
     });
 
     expect(signatureVerifies(grant, keys.publicKey)).toBe(true);
