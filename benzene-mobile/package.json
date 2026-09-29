@@ -54,10 +54,11 @@
     "export:ios": "expo export --platform ios --output-dir dist/ios",
     "export:android": "expo export --platform android --output-dir dist/android",
     "export:web": "expo export --platform web",
+    "check:store-config": "node --test tests/storeConfig.test.mjs",
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
     "lint": "eslint app src tests --max-warnings 0",
-    "test": "tsx --test tests/*.test.ts && node --test tests/*.test.mjs"
+    "test": "node --import tsx --test tests/*.test.ts && node --test tests/*.test.mjs"
   },
   "private": true
 }

@@ -54,17 +54,31 @@ const config: ExpoConfig = {
     supportsTablet: true,
     bundleIdentifier: appIdentifier('IOS_BUNDLE_IDENTIFIER'),
     buildNumber: '1',
+    infoPlist: {
+      NSAppTransportSecurity: productionBuild
+        ? { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: true }
+        : {
+            NSAllowsArbitraryLoads: true,
+            NSExceptionDomains: { localhost: { NSExceptionAllowsInsecureHTTPLoads: true } },
+          },
+    },
   },
   android: {
     package: appIdentifier('ANDROID_APPLICATION_ID'),
     versionCode: 1,
+    blockedPermissions: [
+      'android.permission.READ_EXTERNAL_STORAGE',
+      'android.permission.WRITE_EXTERNAL_STORAGE',
+      'android.permission.SYSTEM_ALERT_WINDOW',
+      'android.permission.VIBRATE',
+    ],
     adaptiveIcon: {
       backgroundColor: '#f7f7f5',
       foregroundImage: './assets/images/android-icon-foreground.png',
       monochromeImage: './assets/images/android-icon-monochrome.png',
     },
   },
-  plugins: ['expo-router', 'expo-secure-store', 'expo-sharing'],
+  plugins: ['expo-router', ['expo-secure-store', { faceIDPermission: false }], 'expo-sharing'],
   experiments: { typedRoutes: true },
 };
 

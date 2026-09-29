@@ -37,8 +37,20 @@ require the team's Apple/Google accounts, certificates, provisioning data and
 store metadata; none are included here. Set `IOS_BUNDLE_IDENTIFIER` and
 `ANDROID_APPLICATION_ID` to identifiers owned by the publisher before creating
 production builds. Production EAS builds fail if either ID is absent or still
-uses `com.example.*`. The default icons are scaffold assets
-and also need Benzene-owned artwork before review.
+uses `com.example.*`. The production profile increments the local iOS build
+number and Android version code. Its generated iOS transport policy rejects
+arbitrary cleartext traffic while permitting local-network connections for
+device transfers. Android excludes legacy shared-storage, overlay and
+vibration permissions; file selection uses the system document picker. The
+app does not request Face ID access. These are config-level safeguards, not a
+review of the final signed native binaries.
+
+Run `npm run check:store-config` to resolve the production Expo native config
+with fixture identifiers and URLs and verify the identifier guards, transport
+policy, permission list and EAS build-number settings. The fixture values only
+exercise validation; the publisher must provide real owned identifiers and
+service URLs for an actual build. The default icons are scaffold assets and
+need Benzene-owned artwork before review.
 
 ## Native authentication contract
 
