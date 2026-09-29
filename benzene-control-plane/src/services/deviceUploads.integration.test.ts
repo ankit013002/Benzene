@@ -17,6 +17,7 @@ import {
   requestEnrollment,
 } from "../modules/devices/devices.service.js";
 import { confirmReplicaForDevice } from "../modules/placement/placement.service.js";
+import { ensureVaultForOwner } from "../modules/vaults/vaults.service.js";
 import { GRANT_TEST_PRIVATE_KEY } from "../modules/placement/grantVectors.js";
 import DriveNodeModel from "../models/driveNode.model.js";
 import FileVersionModel from "../models/fileVersion.model.js";
@@ -96,6 +97,109 @@ describe("device-primary upload metadata", () => {
       isCurrent: false,
     });
     expect(version?.storage).toBeUndefined();
+  });
+
+  it("reserves encrypted v1 metadata with separate logical and physical identities", async () => {
+    await deviceFor(OWNER);
+    const vault = await ensureVaultForOwner(OWNER);
+    const plaintext = "private contents";
+    const storageHash = hashOf("encrypted bytes plus tag");
+    const encryptedObject = {
+      format: "benzene-encrypted-object" as const,
+      version: 1 as const,
+      payloadAlgorithm: "AES-256-GCM" as const,
+      keyWrapAlgorithm: "HKDF-SHA-256+AES-256-GCM" as const,
+      vaultId: vault.id,
+      objectId: hashOf(plaintext),
+      storageHash,
+      plaintextSize: Buffer.byteLength(plaintext),
+      payloadNonce: "AAAAAAAAAAAAAAAA",
+      wrappedKeyNonce: "BBBBBBBBBBBBBBBB",
+      wrappedKeyCiphertext: "C".repeat(64),
+    };
+
+    const response = await request(app)
+      .post("/files/uploads/device/v1/encrypted")
+      .set("X-User-Id", OWNER)
+      .send({ name: "private.bin", path: "vault", encryptedObject })
+      .expect(201);
+
+    const reservation = response.body.data;
+    const version = await FileVersionModel.findById(reservation.versionId).lean();
+    expect(reservation).toMatchObject({
+      objectId: encryptedObject.objectId,
+      storageHash,
+      plaintextBytes: Buffer.byteLength(plaintext),
+      storageBytes: Buffer.byteLength(plaintext) + 16,
+      placement: { storageHash, sizeBytes: Buffer.byteLength(plaintext) + 16 },
+    });
+    expect(reservation.placement.targets[0]?.url).toContain(storageHash);
+    expect(version).toMatchObject({
+      bytes: Buffer.byteLength(plaintext),
+      storageBytes: Buffer.byteLength(plaintext) + 16,
+      objectHash: storageHash,
+      storageFormat: "benzene-encrypted-object-v1",
+      encryptedObject,
+      status: "pending",
+    });
+    expect(version).not.toHaveProperty("ciphertext");
+    const references = await db.select().from(schema.objectReferences);
+    expect(references).toMatchObject([{ objectHash: storageHash }]);
+  });
+
+  it("completes encrypted v1 using ciphertext possession and rejects ciphertext in metadata requests", async () => {
+    const device = await deviceFor(OWNER);
+    const vault = await ensureVaultForOwner(OWNER);
+    const plaintext = "encrypted upload completion";
+    const storageHash = hashOf("ciphertext object");
+    const encryptedObject = {
+      format: "benzene-encrypted-object" as const,
+      version: 1 as const,
+      payloadAlgorithm: "AES-256-GCM" as const,
+      keyWrapAlgorithm: "HKDF-SHA-256+AES-256-GCM" as const,
+      vaultId: vault.id,
+      objectId: hashOf(plaintext),
+      storageHash,
+      plaintextSize: Buffer.byteLength(plaintext),
+      payloadNonce: "AAAAAAAAAAAAAAAA",
+      wrappedKeyNonce: "BBBBBBBBBBBBBBBB",
+      wrappedKeyCiphertext: "C".repeat(64),
+    };
+    await request(app)
+      .post("/files/uploads/device/v1/encrypted")
+      .set("X-User-Id", OWNER)
+      .send({ name: "bad.bin", encryptedObject, ciphertext: "must not persist" })
+      .expect(400);
+    const reserved = await request(app)
+      .post("/files/uploads/device/v1/encrypted")
+      .set("X-User-Id", OWNER)
+      .send({ name: "done.bin", encryptedObject })
+      .expect(201);
+    const versionId = reserved.body.data.versionId as string;
+
+    await confirmReplicaForDevice(device.id, {
+      objectHash: storageHash,
+      sizeBytes: Buffer.byteLength(plaintext) + 16,
+    });
+    const completed = await request(app)
+      .post("/files/uploads/device/v1/encrypted/complete")
+      .set("X-User-Id", OWNER)
+      .send({ versionIds: [versionId] })
+      .expect(200);
+
+    expect(completed.body.data.completed[0]).toMatchObject({
+      versionId,
+      objectId: encryptedObject.objectId,
+      storageHash,
+      plaintextBytes: Buffer.byteLength(plaintext),
+      storageBytes: Buffer.byteLength(plaintext) + 16,
+    });
+    const metadata = await request(app)
+      .get(`/files/${reserved.body.data.nodeId}/encrypted-object`)
+      .set("X-User-Id", OWNER)
+      .expect(200);
+    expect(metadata.body.data.encryptedObject).toEqual(encryptedObject);
+    expect(metadata.body.data).not.toHaveProperty("ciphertext");
   });
 
   it("does not commit a device upload until a healthy replica exists", async () => {

@@ -296,6 +296,7 @@ export const objectReferences = pgTable(
     vaultId: uuid("vault_id")
       .notNull()
       .references(() => vaults.id, { onDelete: "cascade" }),
+    /** Physical storage address; ciphertext SHA-256 for encrypted versions. */
     objectHash: text("object_hash").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -320,7 +321,11 @@ export const replicas = pgTable(
     vaultId: uuid("vault_id")
       .notNull()
       .references(() => vaults.id, { onDelete: "cascade" }),
-    /** SHA-256 of the object's bytes, lowercase hex. */
+    /**
+     * SHA-256 of bytes physically stored on devices, lowercase hex. For
+     * encrypted v1 objects this is `storageHash`; the logical plaintext
+     * `objectId` lives only with the encrypted version metadata.
+     */
     objectHash: text("object_hash").notNull(),
     deviceId: uuid("device_id")
       .notNull()

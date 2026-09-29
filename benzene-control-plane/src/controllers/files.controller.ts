@@ -10,11 +10,15 @@ import {
 import {
   completeUploads,
   completeDeviceUploads,
+  completeEncryptedDeviceUploads,
   createDownloadUrlForNode,
+  getEncryptedObjectMetadata,
+  reserveEncryptedDeviceUpload,
   presignUploads,
   reserveDeviceUpload,
 } from "../services/uploads.services.js";
 import { AppError } from "../utils/AppError.js";
+import { encryptedObjectV1MetadataSchema } from "../modules/encryption/encryptedObjectV1.js";
 
 /** Rejects path segments that could escape the owner prefix or break listing. */
 const safeName = z
@@ -72,6 +76,15 @@ const deviceUploadSchema = z.object({
   contentType: z.string().max(255).optional(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i, "sha256 must be a SHA-256 hex digest"),
 });
+
+const encryptedDeviceUploadSchema = z
+  .object({
+    name: safeName,
+    path: pathString.default(""),
+    contentType: z.string().max(255).optional(),
+    encryptedObject: encryptedObjectV1MetadataSchema,
+  })
+  .strict();
 
 const completeDeviceSchema = z.object({
   versionIds: z
@@ -133,6 +146,15 @@ export async function reserveDeviceUploadHandler(
   res.status(201).json({ data: reservation });
 }
 
+export async function reserveEncryptedDeviceUploadHandler(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const body = parse(encryptedDeviceUploadSchema, req.body);
+  const reservation = await reserveEncryptedDeviceUpload(ownerOf(req), body);
+  res.status(201).json({ data: reservation });
+}
+
 export async function completeDeviceUploadsHandler(
   req: Request,
   res: Response
@@ -142,10 +164,28 @@ export async function completeDeviceUploadsHandler(
   res.status(200).json({ data: { completed } });
 }
 
+export async function completeEncryptedDeviceUploadsHandler(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const body = parse(completeDeviceSchema, req.body);
+  const completed = await completeEncryptedDeviceUploads(ownerOf(req), body.versionIds);
+  res.status(200).json({ data: { completed } });
+}
+
 export async function createFoldersHandler(req: Request, res: Response): Promise<void> {
   const body = parse(foldersSchema, req.body);
   const created = await createFolders(ownerOf(req), body.paths);
   res.status(201).json({ data: { created } });
+}
+
+export async function encryptedObjectMetadataHandler(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const nodeId = parse(objectId, req.params["nodeId"]);
+  const encryptedObject = await getEncryptedObjectMetadata(ownerOf(req), nodeId);
+  res.status(200).json({ data: { encryptedObject } });
 }
 
 export async function downloadHandler(req: Request, res: Response): Promise<void> {

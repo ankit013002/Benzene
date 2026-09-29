@@ -1,7 +1,9 @@
 # Benzene encrypted object contract, version 1
 
-This is an executable cryptographic format foundation. It is deliberately not
-connected to upload, repair, download, or garbage collection paths yet.
+This is an executable cryptographic format foundation. The control plane now
+has an additive metadata and placement boundary for this format, but no shipped
+client encrypts or decrypts files through it yet. This is not evidence that
+encryption is live or that Benzene is ready for real user data.
 
 ## Format
 
@@ -97,11 +99,37 @@ chunk manifests. The compact JSON metadata contains no file bytes; the raw
 ciphertext is returned separately for data-plane storage and transfer. There
 is no maximum object-size guard or streaming implementation, so this code is
 only a cryptographic foundation for small test vectors and must not be used
-for production-sized files. It has not been integrated into live paths.
+for production-sized files.
 Existing stored objects are plaintext-era data; no migration, mixed-version read policy,
 re-encryption, or reference-safe old-object cleanup is implemented. The
 visible SHA-256 object ID also preserves a deduplication equality leak. These
 are explicit blockers, not properties solved by this primitive.
+
+## Control-plane boundary
+
+The authenticated control-plane API accepts this descriptor at
+`POST /files/uploads/device/v1/encrypted`, accepts possession at
+`POST /files/uploads/device/v1/encrypted/complete`, and returns the committed
+current descriptor at `GET /files/{nodeId}/encrypted-object`. Requests contain
+metadata only; extra ciphertext fields are rejected. Ciphertext must be PUT
+directly to a device using the returned placement targets.
+
+For encrypted v1 versions, Mongo stores the compact metadata, `bytes` records
+the plaintext size for the file listing, and `storageBytes` records the
+ciphertext size (plaintext size plus the 16-byte GCM tag). The existing
+PostgreSQL `objectHash` names remain for compatibility, but they identify
+physical bytes: their value is `storageHash` for encrypted objects and the
+legacy SHA-256 of stored plaintext bytes for plaintext-era objects. Placement,
+replica confirmation, repair, reads, rebalancing and garbage collection all use
+that physical hash. `objectId` is never used as a replica address.
+
+The control plane checks the metadata shape, Vault ID and size relationship. It
+does not prove that the metadata decrypts to `objectId`; that proof belongs to
+a client holding the VMK. A signed possession report proves only that a device
+stores bytes matching `storageHash`. Existing web and node clients still use
+the plaintext upload flow. VMK creation/recovery, cryptographic client
+integration, encrypted download/decrypt, old plaintext migration and end-to-end
+security testing remain unimplemented.
 
 `vectors.json` is a deterministic conformance fixture. Its fixed keys/nonces
 are public test data and must never be used for real objects. Node's WebCrypto

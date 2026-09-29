@@ -11,6 +11,11 @@ import { AppError } from "../utils/AppError.js";
 import { buildObjectKey } from "../utils/objectKeys.js";
 import { getObjectProtection, type ObjectProtection } from "../modules/placement/placement.service.js";
 import { planUpload, type UploadPlan } from "../modules/placement/uploadTargets.service.js";
+import {
+  encryptedObjectStorageBytes,
+  type EncryptedObjectV1Metadata,
+} from "../modules/encryption/encryptedObjectV1.js";
+import { ensureVaultForOwner } from "../modules/vaults/vaults.service.js";
 
 export interface PresignFileInput {
   name: string;
@@ -52,6 +57,32 @@ export interface DeviceCompletedUpload {
   version: number;
   objectHash: string;
   bytes: number;
+  protection: ObjectProtection;
+  shortfall: boolean;
+}
+
+export interface EncryptedDeviceUploadReservation {
+  nodeId: string;
+  versionId: string;
+  version: number;
+  name: string;
+  path: string;
+  objectId: string;
+  storageHash: string;
+  plaintextBytes: number;
+  storageBytes: number;
+  contentType: string;
+  placement: Omit<UploadPlan, "objectHash"> & { storageHash: string };
+}
+
+export interface EncryptedDeviceCompletedUpload {
+  nodeId: string;
+  versionId: string;
+  version: number;
+  objectId: string;
+  storageHash: string;
+  plaintextBytes: number;
+  storageBytes: number;
   protection: ObjectProtection;
   shortfall: boolean;
 }
@@ -291,6 +322,101 @@ export async function reserveDeviceUpload(
     sizeBytes: input.size,
     contentType,
     placement,
+  };
+}
+
+/**
+ * Reserves an encrypted v1 version. The logical plaintext identity is kept in
+ * its compact metadata; every existing placement/replica/GC operation receives
+ * only the ciphertext storage hash and ciphertext byte length.
+ */
+export async function reserveEncryptedDeviceUpload(
+  ownerId: string,
+  input: {
+    name: string;
+    path: string;
+    contentType?: string;
+    encryptedObject: EncryptedObjectV1Metadata;
+  }
+): Promise<EncryptedDeviceUploadReservation> {
+  const cfg = config();
+  const metadata = input.encryptedObject;
+  const storageBytes = encryptedObjectStorageBytes(metadata);
+  if (metadata.plaintextSize > cfg.maxUploadBytes || storageBytes > cfg.maxUploadBytes + 16) {
+    throw AppError.payloadTooLarge(
+      `"${input.name}" exceeds the ${cfg.maxUploadBytes}-byte plaintext upload limit`
+    );
+  }
+
+  const vault = await ensureVaultForOwner(ownerId);
+  if (metadata.vaultId !== vault.id) {
+    throw AppError.badRequest("Encrypted object metadata belongs to a different Vault");
+  }
+
+  const contentType = input.contentType?.trim() || DEFAULT_CONTENT_TYPE;
+  const filePath = normalizePath(input.path);
+  const parent = await ensureFolderChain(ownerId, filePath);
+  const node = await DriveNodeModel.findOneAndUpdate(
+    { ownerId, path: filePath, nameLower: input.name.toLowerCase(), isDeleted: false },
+    {
+      $setOnInsert: {
+        ownerId,
+        type: "file",
+        name: input.name,
+        nameLower: input.name.toLowerCase(),
+        path: filePath,
+        parentId: parent?._id ?? null,
+        ancestors: parent ? [...parent.ancestors, parent._id] : [],
+        createdBy: ownerId,
+      },
+      $set: { updatedBy: ownerId, contentType },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  if (node.type !== "file") {
+    throw AppError.conflict(`"${input.name}" already exists as a folder`);
+  }
+
+  // `objectHash` is the existing persistence/wire name for a physical object
+  // address. In this versioned endpoint its value is always storageHash.
+  const storageHash = metadata.storageHash;
+  const versionDoc = await reserveVersion(node._id, (version) =>
+    FileVersionModel.create({
+      nodeId: node._id,
+      ownerId,
+      version,
+      bytes: metadata.plaintextSize,
+      storageBytes,
+      contentType,
+      objectHash: storageHash,
+      storageFormat: "benzene-encrypted-object-v1",
+      encryptedObject: metadata,
+      status: "pending",
+      uploadedBy: ownerId,
+      isCurrent: false,
+    })
+  );
+
+  const placement = await planUpload(ownerId, {
+    objectHash: storageHash,
+    sizeBytes: storageBytes,
+    versionId: versionDoc._id.toString(),
+  });
+  const { objectHash: _physicalHash, ...physicalPlacement } = placement;
+
+  return {
+    nodeId: node._id.toString(),
+    versionId: versionDoc._id.toString(),
+    version: versionDoc.version,
+    name: node.name,
+    path: filePath,
+    objectId: metadata.objectId,
+    storageHash,
+    plaintextBytes: metadata.plaintextSize,
+    storageBytes,
+    contentType,
+    placement: { ...physicalPlacement, storageHash },
   };
 }
 
@@ -563,15 +689,23 @@ export async function completeUploads(
 }
 
 /** Commits a device-backed version only after signed possession exists. */
-export async function completeDeviceUploads(
+async function completeDeviceUploadsWithFormat(
   ownerId: string,
-  versionIds: string[]
+  versionIds: string[],
+  encryptedV1: boolean
 ): Promise<DeviceCompletedUpload[]> {
   const completed: DeviceCompletedUpload[] = [];
 
   for (const versionId of versionIds) {
     const version = await FileVersionModel.findOne({ _id: versionId, ownerId });
     if (!version) throw AppError.notFound(`Upload ${versionId} not found`);
+    if ((version.storageFormat === "benzene-encrypted-object-v1") !== encryptedV1) {
+      throw AppError.badRequest(
+        encryptedV1
+          ? `Version ${versionId} is not an encrypted v1 upload`
+          : `Version ${versionId} requires encrypted v1 completion`
+      );
+    }
     if (!version.objectHash) {
       throw AppError.badRequest(`Version ${versionId} is not device-backed`);
     }
@@ -610,6 +744,77 @@ export async function completeDeviceUploads(
   }
 
   return completed;
+}
+
+export async function completeDeviceUploads(
+  ownerId: string,
+  versionIds: string[]
+): Promise<DeviceCompletedUpload[]> {
+  return completeDeviceUploadsWithFormat(ownerId, versionIds, false);
+}
+
+/** Completes encrypted v1 uploads while returning distinct logical/physical IDs. */
+export async function completeEncryptedDeviceUploads(
+  ownerId: string,
+  versionIds: string[]
+): Promise<EncryptedDeviceCompletedUpload[]> {
+  const versions = await Promise.all(
+    versionIds.map(async (versionId) => {
+      const version = await FileVersionModel.findOne({ _id: versionId, ownerId }).lean();
+      if (!version) throw AppError.notFound(`Upload ${versionId} not found`);
+      if (
+        version.storageFormat !== "benzene-encrypted-object-v1" ||
+        !version.encryptedObject ||
+        version.objectHash !== version.encryptedObject.storageHash
+      ) {
+        throw AppError.badRequest(`Version ${versionId} is not a consistent encrypted v1 upload`);
+      }
+      return version;
+    })
+  );
+  const completed = await completeDeviceUploadsWithFormat(ownerId, versionIds, true);
+  const byVersionId = new Map(completed.map((upload) => [upload.versionId, upload]));
+
+  return versions.map((version) => {
+    const upload = byVersionId.get(version._id.toString());
+    const metadata = version.encryptedObject;
+    if (!upload || !metadata) {
+      throw new AppError(500, "SERVER", "Encrypted upload completion metadata disappeared");
+    }
+    return {
+      nodeId: upload.nodeId,
+      versionId: upload.versionId,
+      version: upload.version,
+      objectId: metadata.objectId,
+      storageHash: metadata.storageHash,
+      plaintextBytes: metadata.plaintextSize,
+      storageBytes: encryptedObjectStorageBytes(metadata),
+      protection: upload.protection,
+      shortfall: upload.shortfall,
+    };
+  });
+}
+
+/** Returns compact encrypted metadata for an authorized current file version. */
+export async function getEncryptedObjectMetadata(
+  ownerId: string,
+  nodeId: string
+): Promise<EncryptedObjectV1Metadata> {
+  const version = await FileVersionModel.findOne({
+    nodeId,
+    ownerId,
+    isCurrent: true,
+    status: "committed",
+  }).lean();
+  if (!version) throw AppError.notFound("Committed file version not found");
+  if (
+    version.storageFormat !== "benzene-encrypted-object-v1" ||
+    !version.encryptedObject ||
+    version.objectHash !== version.encryptedObject.storageHash
+  ) {
+    throw AppError.badRequest("Current file version is not an encrypted v1 object");
+  }
+  return version.encryptedObject;
 }
 
 /** Time-limited download URL for the current version of a node. */
