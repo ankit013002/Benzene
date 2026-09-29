@@ -1,6 +1,5 @@
 package com.nebulavault.user_service.user;
 
-import jakarta.persistence.EntityManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -10,16 +9,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class UserService {
     private final UserRepository userRepo;
     private final AccountDeletionTombstoneRepository tombstoneRepo;
-    private final EntityManager entityManager;
+    private final AuthSubjectTransactionLock subjectLock;
 
     public UserService(
             UserRepository userRepo,
             AccountDeletionTombstoneRepository tombstoneRepo,
-            EntityManager entityManager
+            AuthSubjectTransactionLock subjectLock
     ){
         this.userRepo = userRepo;
         this.tombstoneRepo = tombstoneRepo;
-        this.entityManager = entityManager;
+        this.subjectLock = subjectLock;
     }
 
     @Transactional
@@ -58,10 +57,6 @@ public class UserService {
     }
 
     private void lockSubject(String authSub) {
-        entityManager.createNativeQuery(
-                        "SELECT pg_advisory_xact_lock(hashtextextended(:authSub, 0))"
-                )
-                .setParameter("authSub", authSub)
-                .getSingleResult();
+        subjectLock.lock(authSub);
     }
 }

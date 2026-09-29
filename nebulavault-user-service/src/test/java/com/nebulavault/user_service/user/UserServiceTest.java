@@ -2,8 +2,6 @@ package com.nebulavault.user_service.user;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.Query;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -14,7 +12,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -29,23 +26,13 @@ class UserServiceTest {
     private AccountDeletionTombstoneRepository tombstoneRepository;
 
     @Mock
-    private EntityManager entityManager;
-
-    @Mock
-    private Query nativeQuery;
+    private AuthSubjectTransactionLock subjectLock;
 
     @InjectMocks
     private UserService userService;
 
-    private void configureSubjectLock() {
-        when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
-        when(nativeQuery.setParameter(anyString(), any())).thenReturn(nativeQuery);
-        when(nativeQuery.getSingleResult()).thenReturn(null);
-    }
-
     @Test
     void bootstrapsAndReturnsANewProfileForAnUnknownSubject() {
-        configureSubjectLock();
         UUID id = UUID.randomUUID();
         when(userRepository.findByAuthSub("auth-sub")).thenReturn(Optional.empty());
         when(userRepository.save(any(User.class))).thenAnswer(invocation -> {
@@ -61,11 +48,11 @@ class UserServiceTest {
         assertThat(result.getEmail()).isEqualTo("ada@example.com");
         assertThat(result.getName()).isEqualTo("Ada");
         verify(userRepository).save(any(User.class));
+        verify(subjectLock).lock("auth-sub");
     }
 
     @Test
     void repeatBootstrapIsIdempotentWhenProfileClaimsHaveNotChanged() {
-        configureSubjectLock();
         User existing = new User("auth-sub", "ada@example.com", "Ada");
         existing.setId(UUID.randomUUID());
         when(userRepository.findByAuthSub("auth-sub")).thenReturn(Optional.of(existing));
@@ -74,6 +61,7 @@ class UserServiceTest {
 
         assertThat(result).isSameAs(existing);
         verify(userRepository, never()).save(any(User.class));
+        verify(subjectLock).lock("auth-sub");
     }
 
     @Test
@@ -87,18 +75,17 @@ class UserServiceTest {
 
     @Test
     void accountProfileDeletionIsIdempotentForAnAlreadyAbsentSubject() {
-        configureSubjectLock();
         when(userRepository.deleteByAuthSub("auth-sub")).thenReturn(1L, 0L);
 
         assertThat(userService.deleteByAuthSub("auth-sub")).isEqualTo(1L);
         assertThat(userService.deleteByAuthSub("auth-sub")).isZero();
 
         verify(userRepository, times(2)).deleteByAuthSub("auth-sub");
+        verify(subjectLock, times(2)).lock("auth-sub");
     }
 
     @Test
     void existingDeletionTombstonePreventsAStaleSessionFromRecreatingProfile() {
-        configureSubjectLock();
         when(tombstoneRepository.existsById("deleted-sub")).thenReturn(true);
 
         assertThatThrownBy(() -> userService.bootstrap(
@@ -110,5 +97,6 @@ class UserServiceTest {
                 .hasMessageContaining("Account deletion has been requested");
 
         verify(userRepository, never()).findByAuthSub("deleted-sub");
+        verify(subjectLock).lock("deleted-sub");
     }
 }
