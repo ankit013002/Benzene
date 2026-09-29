@@ -31,7 +31,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     if (pool) {
       await Promise.all(
         createdDeletionRequestIds.map((id) =>
-          pool.query("DELETE FROM account_deletion_tombstones WHERE deletion_request_id = $1", [id]),
+          pool.query("DELETE FROM auth_account_deletion_tombstones WHERE deletion_request_id = $1", [id]),
         ),
       );
       await Promise.all(
@@ -358,7 +358,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
               (SELECT count(*) FROM email_verification_tokens WHERE credential_id = $2) AS verification_count,
               (SELECT count(*) FROM password_reset_tokens WHERE credential_id = $2) AS reset_count
        FROM account_deletion_requests r
-       LEFT JOIN account_deletion_tombstones t ON t.deletion_request_id = r.id
+       LEFT JOIN auth_account_deletion_tombstones t ON t.deletion_request_id = r.id
        WHERE r.id = $1`,
       [result.request.id, account.id],
     );
@@ -389,7 +389,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
          (SELECT count(*) FROM email_verification_tokens WHERE credential_id = $1) AS verification_count,
          (SELECT count(*) FROM password_reset_tokens WHERE credential_id = $1) AS reset_count,
          (SELECT count(*) FROM credentials WHERE id = $1) AS old_credential_count,
-         (SELECT count(*) FROM account_deletion_tombstones WHERE deletion_request_id = $2) AS tombstone_count,
+         (SELECT count(*) FROM auth_account_deletion_tombstones WHERE deletion_request_id = $2) AS tombstone_count,
          (SELECT count(*) FROM account_deletion_requests WHERE id = $2 AND status = 'completed') AS completed_request_count`,
       [account.id, result.request.id],
     );
@@ -436,7 +436,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
 
     const persisted = await pool.query(
       `SELECT r.status, r.current_phase, r.completed_at,
-              (SELECT count(*) FROM account_deletion_tombstones WHERE deletion_request_id = r.id) AS tombstone_count,
+              (SELECT count(*) FROM auth_account_deletion_tombstones WHERE deletion_request_id = r.id) AS tombstone_count,
               (SELECT count(*) FROM credentials WHERE id = $2) AS credential_count
        FROM account_deletion_requests r WHERE r.id = $1`,
       [result.request.id, account.id],

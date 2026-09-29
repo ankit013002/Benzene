@@ -93,7 +93,7 @@ refresh_tokens           — token_hash, expires_at (7 days)
 email_verification_tokens — token_hash, expires_at (24 hrs)
 password_reset_tokens    — token_hash, expires_at (1 hr), used_at
 account_deletion_requests — durable cleanup status, phase leases, retry counts
-account_deletion_tombstones — deletion request ID, former credential ID, deletion time
+auth_account_deletion_tombstones — deletion request ID, former credential ID, deletion time
 ```
 
 `POST /api/auth/account-deletion` requires the account email, current password,

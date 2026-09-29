@@ -326,7 +326,7 @@ export async function completeAccountDeletionPhase(
       }
 
       await client.query(
-        `INSERT INTO account_deletion_tombstones
+        `INSERT INTO auth_account_deletion_tombstones
            (deletion_request_id, credential_id)
          VALUES ($1, $2)`,
         [claim.requestId, claim.credentialId],
