@@ -19,6 +19,7 @@ jobs:
     outputs:
       web: ${{ steps.filter.outputs.web }}
       mobile: ${{ steps.filter.outputs.mobile }}
+      encrypted_contract: ${{ steps.filter.outputs.encrypted_contract }}
       auth: ${{ steps.filter.outputs.auth }}
       gateway: ${{ steps.filter.outputs.gateway }}
       control_plane: ${{ steps.filter.outputs.control_plane }}
@@ -39,6 +40,9 @@ jobs:
               - 'nebulavault-frontend/**'
             mobile:
               - 'benzene-mobile/**'
+              - '.github/workflows/**'
+            encrypted_contract:
+              - 'contracts/encrypted-object-v1/**'
               - '.github/workflows/**'
             auth:
               - 'benzene-auth-service/**'
@@ -158,6 +162,22 @@ jobs:
         run: npm run export:android
       - name: Export web bundle
         run: npm run export:web
+
+  encrypted-object-contract:
+    name: Encrypted object v1 — conformance vectors
+    needs: detect-changes
+    if: needs.detect-changes.outputs.encrypted_contract == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/encrypted-object-v1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Test deterministic encryption contract
+        run: npm test
 
   auth:
     name: Auth (Node/TS) — build & test
