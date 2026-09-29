@@ -412,7 +412,7 @@ export class ObjectStore {
   }
 
   /** Opens an object for reading. Callers that need integrity should verify. */
-  read(hash: string): NodeJS.ReadableStream {
+  read(hash: string): Readable {
     return createReadStream(this.pathFor(this.objectsDir, hash));
   }
 

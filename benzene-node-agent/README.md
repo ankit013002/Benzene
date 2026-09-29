@@ -125,12 +125,28 @@ storage format. The control-plane migration marks all pre-v2 replicas
 reconciles their mode. There is no automated reconciliation tool yet, so do not
 roll v2 onto a fleet with live objects without a separately planned migration.
 
+**Relay production is a separate, encrypted-object path.** The exported
+`sendStoredRelayObject` API can open an outbound WebSocket as the authorized
+`node/get` producer and stream a locally stored encrypted object as opaque
+binary frames. It checks the relay ticket signature, expiry, role, device,
+storage hash and exact byte ceiling; rejects sidecars marked `none`; verifies
+the object before connecting and re-hashes it while streaming. Frames and
+queued socket data are bounded, and sending waits for the WebSocket buffer to
+drain. The API is not wired into repair, uploads, downloads, or direct-first
+fallback. The client consumer and `client/put` path do not exist.
+
 ## Known limits
 
-- **HTTPS serving is configurable, not provisioned.** The same grant-protected
+- **Remote relay access is not end to end.** The relay service and node
+  `node/get` producer slice exist, but the control plane does not issue tickets,
+  clients/mobile do not consume relay streams, and no direct-first fallback is
+  wired. Production relay TLS deployment, DNS, certificate lifecycle, abuse
+  controls and remote end-to-end verification remain open. Local WebSocket
+  integration coverage does not prove Internet connectivity or NAT traversal.
+- **HTTPS serving is configurable, not provisioned.** The direct grant-protected
   transfer routes can listen with a supplied certificate and key, but Benzene
-  does not yet issue or renew certificates, establish browser trust, discover
-  remote peers, traverse NAT or provide a relay.
+  does not yet issue or renew certificates, establish browser trust, or discover
+  remote peers.
 - **Encryption does not complete the key lifecycle.** Encrypted-object v1 bytes
   can be stored and replicated as ciphertext, but key recovery and legacy
   plaintext migration remain unresolved. Do not treat either path as ready for
@@ -166,7 +182,10 @@ these vectors.
 
 ## Verification
 
-The current node-agent suite has **152 tests**, including the relay-ticket
-conformance vector. The last fully green broader baseline before the relay job
-was added is CI run `36508422483`; the repository guide records its exact
-cross-package counts.
+The current node-agent suite has **154 tests**, including relay-ticket
+conformance and a local producer-to-consumer integration against the relay
+server. This test does not cover control-plane issuance, a production TLS
+endpoint, a browser/mobile consumer, direct-first fallback, or remote network
+behavior. The last fully green broader baseline before the relay job was added
+is CI run `36508422483`; the repository guide records its exact cross-package
+counts.
