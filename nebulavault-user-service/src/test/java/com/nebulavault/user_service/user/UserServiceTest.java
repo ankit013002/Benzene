@@ -75,7 +75,7 @@ class UserServiceTest {
 
     @Test
     void accountProfileDeletionIsIdempotentForAnAlreadyAbsentSubject() {
-        when(userRepository.deleteByAuthSub("auth-sub")).thenReturn(1L, 0L);
+        when(userRepository.deleteByAuthSub("auth-sub")).thenReturn(1, 0);
 
         assertThat(userService.deleteByAuthSub("auth-sub")).isEqualTo(1L);
         assertThat(userService.deleteByAuthSub("auth-sub")).isZero();
