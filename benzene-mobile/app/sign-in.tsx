@@ -1,4 +1,4 @@
-import { Link, router } from 'expo-router';
+import { Link, router, type Href } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionButton } from '../src/components/ActionButton';
@@ -43,9 +43,10 @@ export default function SignInScreen() {
           <TextInput autoCapitalize="none" autoComplete="current-password" secureTextEntry textContentType="password" value={password} onChangeText={setPassword} placeholder="Your password" placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel="Password" onSubmitEditing={() => void submit()} />
           {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
           <ActionButton title="Sign in" onPress={() => void submit()} busy={busy} disabled={!email.trim() || !password} />
+          <Link href={'/forgot-password' as Href} style={styles.link}>Forgot password?</Link>
         </View>
         <View style={styles.footer}>
-          <Text style={styles.footerText}>New to Benzene? Account creation is managed by your Benzene service.</Text>
+          <Link href={'/register' as Href} style={styles.link}>New to Benzene? Create an account</Link>
           <View style={styles.links}>
             <Link href="/account-deletion" style={styles.link}>Delete account / check status</Link>
             <Link href="/privacy" style={styles.link}>Privacy</Link>
@@ -68,7 +69,6 @@ const styles = StyleSheet.create({
   input: { minHeight: 54, borderWidth: 1, borderColor: palette.line, backgroundColor: palette.card, borderRadius: 14, paddingHorizontal: 15, color: palette.ink, fontSize: 15 },
   error: { color: palette.danger, ...type.small, marginVertical: 4 },
   footer: { marginTop: 'auto', gap: 12, paddingTop: 40 },
-  footerText: { color: palette.muted, ...type.small },
   links: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-  link: { color: palette.ink, fontSize: 14, fontWeight: '600', textDecorationLine: 'underline' },
+  link: { color: palette.ink, fontSize: 14, fontWeight: '600', textDecorationLine: 'underline', textAlign: 'center', marginTop: 8 },
 });

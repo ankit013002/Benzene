@@ -12,6 +12,11 @@ import {
 import { ACCESS_TOKEN_LIFETIME_SECONDS } from "../lib/tokens";
 import { loginLimiter } from "../lib/rateLimiter";
 import { loginSchema } from "../lib/schema";
+import { resendVerificationLimiter } from "../lib/rateLimiter";
+import { resendNativeVerification } from "../controller/native-resend-verification.controller";
+import createUser from "../controller/signup.controller";
+import { signupSchema } from "../lib/schema";
+import { signupLimiter } from "../lib/rateLimiter";
 
 const router = Router();
 
@@ -36,6 +41,48 @@ function tokenResponse(accessToken: string, refreshToken: string) {
     expiresInSeconds: ACCESS_TOKEN_LIFETIME_SECONDS,
   };
 }
+
+router.post(
+  "/native/signup",
+  signupLimiter,
+  async (req: Request, res: Response) => {
+    if (!requireNativeMobile(req, res)) return;
+    try {
+      const data = signupSchema.parse(req.body);
+      await createUser(data, { issueSession: false });
+      setNativeTokenResponseHeaders(res);
+      return res.status(201).json({ ok: true, emailVerified: false });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ error: "Validation error" });
+      if (err instanceof Error && err.name === "UserExistsError") return res.status(409).json({ error: "Email already in use" });
+      if (err instanceof Error && err.name === "UserCreationError") return res.status(500).json({ error: "Failed to create user" });
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+router.post(
+  "/native/resend-verification",
+  resendVerificationLimiter,
+  async (req: Request, res: Response) => {
+    if (!requireNativeMobile(req, res)) return;
+
+    const bodySchema = z.object({ email: z.string().email(), password: z.string().min(1) }).strict();
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request" });
+    }
+
+    try {
+      await resendNativeVerification(parsed.data);
+      setNativeTokenResponseHeaders(res);
+      return res.status(200).json({ ok: true });
+    } catch {
+      // Keep the response generic so account existence and verification state are not disclosed.
+      return res.status(500).json({ error: "Unable to process verification request" });
+    }
+  },
+);
 
 router.post(
   "/native/login",

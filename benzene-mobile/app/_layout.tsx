@@ -10,6 +10,9 @@ export default function RootLayout() {
       <Stack screenOptions={{ contentStyle: { backgroundColor: palette.paper }, headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="sign-in" />
+        <Stack.Screen name="register" />
+        <Stack.Screen name="forgot-password" />
+        <Stack.Screen name="reset-password" />
         <Stack.Screen name="(app)" />
         <Stack.Screen name="privacy" options={{ headerShown: true, title: 'Privacy', headerBackTitle: 'Settings' }} />
         <Stack.Screen name="terms" options={{ headerShown: true, title: 'Terms', headerBackTitle: 'Settings' }} />

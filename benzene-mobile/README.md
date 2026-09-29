@@ -2,12 +2,12 @@
 
 Native iOS and Android client built with Expo SDK 57, React Native and Expo
 Router. This is a native app, not a WebView. The current mobile scope is account
-sign-in, Vault summary, file and device lists, device pairing by entering the
-short-lived code shown by a computer agent, configured legal/support links,
+sign-in, native account signup, email-verification resend and confirmation,
+password reset, Vault summary, file and device lists, device pairing by entering
+the short-lived code shown by a computer agent, configured legal/support links,
 encrypted file upload/download, local Vault-key management, and local session
 storage. Mobile approves only the code the signed-in user enters; it does not
-enumerate pending enrollments. Account signup/verification/recovery still need
-additional client work.
+enumerate pending enrollments.
 
 ## Local setup
 
@@ -56,16 +56,22 @@ need Benzene-owned artwork before review.
 
 ## Native authentication contract
 
-The app calls the gateway's `/auth/native/login`, `/auth/native/refresh` and
+The app calls the gateway's `/auth/native/signup`, `/auth/native/login`,
+`/auth/native/resend-verification`, `/auth/native/refresh` and
 `/auth/native/logout` endpoints with `X-Benzene-Client-Kind: native-mobile`.
 Login and refresh must return short-lived access tokens plus one-use rotating
 refresh tokens in JSON. Protected API requests use `Authorization: Bearer`.
 The app stores the opaque token pair in iOS Keychain / Android Keystore through
 `expo-secure-store`; it never extracts the web-only HttpOnly cookies.
 
-The native API depends on the matching backend contract and gateway Bearer
-verification being deployed. Email-verification completion, password recovery
-and signup are not yet implemented in this client. The in-app account-deletion
+The native API depends on the matching backend contract and gateway routing
+being deployed. Signup does not issue or persist an unverified session. The app
+keeps signup and resend passwords only in screen memory, and clears reset tokens
+and new passwords after a successful reset. Verification email links currently
+open the configured web app; the user returns to mobile and confirms completion
+manually. Reset tokens can be pasted into the app from the reset URL. Native
+app/universal links are not configured, so verification and reset links do not
+yet reopen the app automatically. The in-app account-deletion
 screen can record a password-verified request and check its phase. The service
 revokes refresh credentials, but an already-issued access token can remain valid
 for up to 15 minutes. Account/Vault cleanup is still pending for an operator;

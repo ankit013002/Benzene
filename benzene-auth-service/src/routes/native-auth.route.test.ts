@@ -4,10 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../controller/login.controller", () => ({ default: vi.fn() }));
 vi.mock("../controller/logout.controller", () => ({ default: vi.fn() }));
 vi.mock("../controller/refresh.controller", () => ({ default: vi.fn() }));
+vi.mock("../controller/signup.controller", () => ({ default: vi.fn() }));
+vi.mock("../controller/native-resend-verification.controller", () => ({ resendNativeVerification: vi.fn() }));
 
 import loginController from "../controller/login.controller";
 import handleLogout from "../controller/logout.controller";
 import refreshRefreshToken from "../controller/refresh.controller";
+import createUser from "../controller/signup.controller";
+import { resendNativeVerification } from "../controller/native-resend-verification.controller";
 import {
   NATIVE_CLIENT_KIND,
   NATIVE_CLIENT_KIND_HEADER,
@@ -67,6 +71,41 @@ describe("native mobile authentication routes", () => {
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(loginController).not.toHaveBeenCalled();
+  });
+
+  it("creates a native account without issuing a session or setting cookies", async () => {
+    vi.mocked(createUser).mockResolvedValue(undefined as never);
+    const res = response();
+    await registeredHandler("/native/signup")(
+      request({ email: "ada@example.com", password: "correct-password" }), res, vi.fn(),
+    );
+    expect(createUser).toHaveBeenCalledWith(
+      { email: "ada@example.com", password: "correct-password" },
+      { issueSession: false },
+    );
+    expect(res.status).toHaveBeenCalledWith(201);
+    expect(res.json).toHaveBeenCalledWith({ ok: true, emailVerified: false });
+    expect(JSON.stringify(vi.mocked(res.json).mock.calls)).not.toMatch(/accessToken|refreshToken/);
+  });
+
+  it("resends native verification only behind the native client contract", async () => {
+    vi.mocked(resendNativeVerification).mockResolvedValue(undefined);
+    const res = response();
+    await registeredHandler("/native/resend-verification")(
+      request({ email: "ada@example.com", password: "correct-password" }), res, vi.fn(),
+    );
+    expect(resendNativeVerification).toHaveBeenCalledWith({ email: "ada@example.com", password: "correct-password" });
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("rejects native signup if the caller omits the native client marker", async () => {
+    const res = response();
+    await registeredHandler("/native/signup")(
+      request({ email: "ada@example.com", password: "correct-password" }, false), res, vi.fn(),
+    );
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(createUser).not.toHaveBeenCalled();
   });
 
   it("returns short-lived bearer and refresh credentials only to a native login", async () => {

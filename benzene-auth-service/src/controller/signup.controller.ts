@@ -17,7 +17,12 @@ import bcrypt from "bcrypt";
  * @throws {UserExistsError} If a user with the provided email already exists in the database.
  * @throws {Error} If there is an issue during user creation, token generation, or email sending.
  */
-async function createUser(data: { email: string; password: string }) {
+type SignupData = { email: string; password: string };
+type SignupSession = { accessToken: string; refreshToken: string };
+
+function createUser(data: SignupData, options: { issueSession: false }): Promise<void>;
+function createUser(data: SignupData, options?: { issueSession?: true }): Promise<SignupSession>;
+async function createUser(data: SignupData, options: { issueSession?: boolean } = {}): Promise<void | SignupSession> {
   const { email: rawEmail, password } = data;
   const email = rawEmail.toLowerCase().trim();
 
@@ -46,17 +51,15 @@ async function createUser(data: { email: string; password: string }) {
 
     await createVerificationToken(credentials.id, hashedToken);
 
+    if (options.issueSession === false) {
+      await sendVerificationEmail(email, rawToken);
+      return;
+    }
+
     const rawRefreshToken = makeOpaqueToken();
     const hashedRefreshToken = hashToken(rawRefreshToken);
-
-    await createRefreshToken(
-      credentials.id,
-      hashedRefreshToken,
-      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-    );
-
+    await createRefreshToken(credentials.id, hashedRefreshToken, new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
     const accessToken = signAccessToken(credentials.id, email);
-
     await sendVerificationEmail(email, rawToken);
 
     return {
