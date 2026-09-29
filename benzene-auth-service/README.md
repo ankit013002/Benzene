@@ -83,26 +83,41 @@ on a loosely inferred user agent.
 ## Database Schema
 
 Run the numbered SQL migrations against the Benzene auth PostgreSQL database
-before starting. Migration 002 adds the account-deletion request ledger and
-blocks new sessions after a password-confirmed request.
+before starting. Migrations 002 and 003 add the account-deletion ledger and
+retry-safe phase leases; a password-confirmed request blocks new sessions.
 
 ```
 credentials              — email, password_hash, email_verified
 refresh_tokens           — token_hash, expires_at (7 days)
 email_verification_tokens — token_hash, expires_at (24 hrs)
 password_reset_tokens    — token_hash, expires_at (1 hr), used_at
-account_deletion_requests — durable cleanup status; does not itself delete associated data
+account_deletion_requests — durable cleanup status, phase leases, retry counts
 ```
 
 `POST /api/auth/account-deletion` requires the account email, current password,
 and an idempotency key. It records one durable request, revokes refresh tokens,
-and prevents later login, refresh, and password-reset completion. The response
-is deliberately `cleanup_pending` with `deletionComplete: false`; no downstream
-data is removed by this route. `POST /api/auth/account-deletion/status` requires
-the same password and returns the persisted phase. The initial phase is
-`awaiting_cleanup_operator` because there is not yet a cleanup worker. Existing
-access JWTs remain usable until their 15-minute expiry because the gateway does
-not check account state on every request. Do not present this foundation as
+and prevents later login, refresh, and password-reset completion. The phase
+runner claims one step using a two-minute database lease, executes its handler,
+then advances only if that exact lease is still current. Expired leases can be
+retried; a missing handler or failed action leaves the request `blocked` at the
+same phase with a five-minute retry delay. Handlers must be idempotent because
+a process may stop after a downstream side effect and before saving phase
+progress.
+
+The declared order is profile, stored-object references, device data,
+Vault metadata, billing, then backups and logs. The device-data handler must
+use the control plane's reference-safe garbage collection and wait for each
+device acknowledgement; offline devices keep that phase incomplete, and Vault
+and device metadata must remain available to deliver and acknowledge durable
+deletion assignments. The runner currently has no production phase handlers or
+scheduler wired, so requests remain pending for an operator and no profile,
+Vault, object, device, billing, backup, or log data is claimed to have been
+deleted. The state machine cannot skip a missing phase adapter and status
+remains incomplete until every phase handler reports success.
+`POST /api/auth/account-deletion/status`
+requires the same password and returns the persisted phase and a stable error
+code. Existing access JWTs remain usable until their 15-minute expiry because
+the gateway does not check account state on every request. This is still not
 completed Apple or Google account deletion.
 
 ---
@@ -148,6 +163,7 @@ npm ci
 ```bash
 psql "$DATABASE_URL" -f src/db/migrations/001_initial.sql
 psql "$DATABASE_URL" -f src/db/migrations/002_account_deletion_requests.sql
+psql "$DATABASE_URL" -f src/db/migrations/003_account_deletion_worker_leases.sql
 ```
 
 ### 3. Configure email delivery (optional)
@@ -198,7 +214,8 @@ src/
 │   ├── index.ts               — pg Pool
 │   └── migrations/
 │       ├── 001_initial.sql    — initial schema
-│       └── 002_account_deletion_requests.sql — deletion request ledger
+│       ├── 002_account_deletion_requests.sql — deletion request ledger
+│       └── 003_account_deletion_worker_leases.sql — durable worker leases and retries
 ├── lib/
 │   ├── tokens.ts              — JWT signing/verification, opaque token generation, SHA-256 hashing
 │   ├── cookies.ts             — httpOnly cookie helpers (set/clear)

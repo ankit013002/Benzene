@@ -12,6 +12,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
   let loginController: typeof import("../controller/login.controller").default;
   let createRefreshToken: typeof import("./refresh.service").createRefreshToken;
   const createdCredentialIds: string[] = [];
+  const createdDeletionRequestIds: string[] = [];
   const password = "account-deletion-test-password";
 
   beforeAll(async () => {
@@ -28,6 +29,11 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
 
   afterAll(async () => {
     if (pool) {
+      await Promise.all(
+        createdDeletionRequestIds.map((id) =>
+          pool.query("DELETE FROM account_deletion_requests WHERE id = $1", [id]),
+        ),
+      );
       await Promise.all(
         createdCredentialIds.map((id) =>
           pool.query("DELETE FROM credentials WHERE id = $1", [id]),
@@ -81,6 +87,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
       password,
       idempotencyKey: "stable-deletion-operation-key",
     });
+    createdDeletionRequestIds.push(result.request.id);
 
     expect(result.created).toBe(true);
     expect(result.request).toMatchObject({
@@ -184,5 +191,76 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
       [account.id],
     );
     expect(records.rows).toHaveLength(1);
+    const firstResult = results[0];
+    if (!firstResult) throw new Error("Expected a deletion request result");
+    createdDeletionRequestIds.push(firstResult.request.id);
+  });
+
+  it("leases cleanup one phase at a time and cannot complete before all phases succeed", async () => {
+    const account = await createCredential();
+    const result = await requestAccountDeletion({
+      email: account.email,
+      password,
+      idempotencyKey: "phase-runner-key",
+    });
+    createdDeletionRequestIds.push(result.request.id);
+
+    const {
+      claimNextAccountDeletionPhase,
+      completeAccountDeletionPhase,
+      blockAccountDeletionPhase,
+    } = await import("./account-deletion.service");
+
+    const claim = await claimNextAccountDeletionPhase(result.request.id);
+    expect(claim).toMatchObject({
+      requestId: result.request.id,
+      credentialId: account.id,
+      phase: "user_profile",
+      attempt: 1,
+    });
+    if (!claim) throw new Error("Expected the first cleanup phase to be claimable");
+
+    const competingClaim = await claimNextAccountDeletionPhase(result.request.id);
+    expect(competingClaim).toBeNull();
+
+    expect(await blockAccountDeletionPhase(claim, "phase_execution_failed")).toBe(true);
+    const blocked = await pool.query(
+      `SELECT status, current_phase, completed_at, last_error_code,
+              retry_after > now() AS retry_delayed
+       FROM account_deletion_requests WHERE id = $1`,
+      [result.request.id],
+    );
+    expect(blocked.rows[0]).toMatchObject({
+      status: "blocked",
+      current_phase: "user_profile",
+      completed_at: null,
+      last_error_code: "phase_execution_failed",
+      retry_delayed: true,
+    });
+
+    await expect(
+      claimNextAccountDeletionPhase(result.request.id),
+    ).resolves.toBeNull();
+    await pool.query(
+      `UPDATE account_deletion_requests
+       SET retry_after = now() - interval '1 second' WHERE id = $1`,
+      [result.request.id],
+    );
+
+    const retry = await claimNextAccountDeletionPhase(result.request.id);
+    expect(retry).toMatchObject({ phase: "user_profile", attempt: 2 });
+    if (!retry) throw new Error("Expected the failed cleanup phase to be retryable");
+    await completeAccountDeletionPhase(retry);
+
+    const advanced = await pool.query(
+      `SELECT status, current_phase, completed_at
+       FROM account_deletion_requests WHERE id = $1`,
+      [result.request.id],
+    );
+    expect(advanced.rows[0]).toMatchObject({
+      status: "cleanup_pending",
+      current_phase: "stored_objects",
+      completed_at: null,
+    });
   });
 });

@@ -36,9 +36,11 @@ router.post(
         currentPhase: result.request.current_phase,
         requestedAt: result.request.requested_at,
         deletionComplete: result.request.completed_at !== null,
-        downstreamCleanupStarted: false,
+        lastErrorCode: result.request.last_error_code ?? null,
+        downstreamCleanupStarted:
+          result.request.current_phase !== "awaiting_cleanup_operator",
         message:
-          "The request is recorded. Refresh and session-renewal credentials are revoked; any already-issued access token can remain valid for up to 15 minutes. Associated data has not been deleted; cleanup is awaiting an operator or cleanup worker.",
+          "The request is recorded. Refresh and session-renewal credentials are revoked; any already-issued access token can remain valid for up to 15 minutes. Associated data is removed only as each cleanup phase succeeds.",
       });
     } catch (err) {
       setNoStore(res);
@@ -74,6 +76,7 @@ router.post(
         deletionComplete: request.completed_at !== null,
         downstreamCleanupStarted:
           request.current_phase !== "awaiting_cleanup_operator",
+        lastErrorCode: request.last_error_code ?? null,
       });
     } catch (err) {
       setNoStore(res);

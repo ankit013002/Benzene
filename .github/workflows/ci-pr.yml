@@ -219,6 +219,7 @@ jobs:
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/001_initial.sql
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/002_account_deletion_requests.sql
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f src/db/migrations/003_account_deletion_worker_leases.sql
       - name: Build
         run: npm run build
       - name: Test (including PostgreSQL concurrency regression)

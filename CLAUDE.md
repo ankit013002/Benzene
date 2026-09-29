@@ -165,6 +165,7 @@ createdb benzene && createdb benzene_auth
 
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/001_initial.sql
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/002_account_deletion_requests.sql
+psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/003_account_deletion_worker_leases.sql
 
 # One .env per service, from the committed templates
 for d in benzene-control-plane benzene-node-agent benzene-auth-service; do
@@ -540,8 +541,8 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **380**, agent **139**, auth **92** total
-(**85** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
+Current counts: control plane **380**, agent **139**, auth **98** total
+(**90** run without PostgreSQL; **8** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The mobile
 client has **10 tests**, including two dependency-override compatibility
@@ -717,6 +718,10 @@ the standard to match.
   integration, Vault/file/device summaries, settings and an account-deletion
   request screen. File transfers and complete account/Vault erasure remain
   unfinished.
+- Password-confirmed account-deletion requests revoke renewable sessions and
+  enter a durable, leased cleanup phase runner. Missing or failed downstream
+  handlers block and retry instead of reporting completion; the production
+  scheduler and profile/storage/device/billing/backup handlers are not wired.
 - **Uploads route to devices end to end**, with downloads reading back
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct

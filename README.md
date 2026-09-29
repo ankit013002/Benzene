@@ -95,6 +95,10 @@ repository-wide zero.
   Vault/file/device summaries, settings and account-deletion request screens.
   It depends on the native auth contract; it does not yet transfer files or
   complete account/Vault erasure.
+- Password-confirmed account-deletion requests revoke renewable sessions and
+  enter a durable, leased cleanup phase runner. Missing or failed downstream
+  handlers block and retry instead of reporting completion; the production
+  scheduler and profile/storage/device/billing/backup handlers are not wired.
 - Vault creation and device enrollment with a pairing code and explicit user
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
@@ -346,6 +350,7 @@ Initialize the schemas that are not created automatically at service startup:
 ```bash
 psql -d benzene_auth -f benzene-auth-service/src/db/migrations/001_initial.sql
 psql -d benzene_auth -f benzene-auth-service/src/db/migrations/002_account_deletion_requests.sql
+psql -d benzene_auth -f benzene-auth-service/src/db/migrations/003_account_deletion_worker_leases.sql
 psql -d benzene -f nebulavault-user-service/src/main/resources/schema.sql
 ```
 
@@ -481,8 +486,8 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **380** tests, agent **139**, auth **92** total
-(**85** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
+Verified counts: control plane **380** tests, agent **139**, auth **98** total
+(**90** run without PostgreSQL; **8** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
 assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
 checks**. The frontend suite has **18 tests** total. The mobile client has **10
