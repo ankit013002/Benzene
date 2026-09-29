@@ -637,7 +637,13 @@ async function main() {
       JSON.stringify({ status: deletionStatusBody, persisted: deletionRow }),
     );
 
-    if (failures > 0) throw new Error(`${failures} acceptance check(s) failed`);
+    if (failures > 0) {
+      throw new Error(
+        `${failures} acceptance check(s) failed\n` +
+          `auth service tail:\n${authProcess?.getOutput?.() ?? "unavailable"}\n` +
+          `user service tail:\n${userServiceProcess?.getOutput?.() ?? "unavailable"}`,
+      );
+    }
     console.log("\nuser-profile acceptance passed");
   } finally {
     await cleanupStep("stopping frontend", () => stopProcess(frontendProcess));

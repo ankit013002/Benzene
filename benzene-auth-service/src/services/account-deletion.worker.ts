@@ -47,7 +47,15 @@ export async function runNextAccountDeletionPhase(
       phase: claim.phase,
       attempt: claim.attempt,
     });
-  } catch {
+  } catch (error) {
+    console.error(
+      "Account deletion phase execution failed",
+      JSON.stringify({
+        requestId: claim.requestId,
+        phase: claim.phase,
+        error: error instanceof Error ? error.message : "Unknown phase failure",
+      }),
+    );
     const blocked = await blockAccountDeletionPhase(claim, "phase_execution_failed");
     return {
       outcome: blocked ? "blocked" : "lease_lost",
