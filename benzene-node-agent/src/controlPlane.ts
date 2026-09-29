@@ -101,6 +101,20 @@ export interface RepairAssignment {
   };
 }
 
+export interface RelayReadAssignment {
+  assignmentId: string;
+  sessionId: string;
+  relayUrl: string;
+  nodeTicket: string;
+  storageHash: string;
+  sizeBytes: number;
+  expiresAt: string;
+}
+
+export interface RelayReadCompletion {
+  status: "completed" | "retrying" | "failed";
+}
+
 export class ControlPlaneError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -317,6 +331,61 @@ export class ControlPlaneClient {
     }
 
     const payload = (await res.json()) as { data: RepairAssignment | null };
+    return payload.data;
+  }
+
+  /** Claims at most one pending relay producer assignment for this device. */
+  async pollRelayRead(input: {
+    deviceId: string;
+    privateKey: string;
+  }): Promise<RelayReadAssignment | null> {
+    const path = "/agent/relay-read";
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "GET",
+      headers: {
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "GET",
+          path,
+          body: "",
+        }),
+      },
+    });
+    if (!res.ok) {
+      throw new ControlPlaneError(res.status, await readError(res, "Relay read poll rejected"));
+    }
+    const payload = (await res.json()) as { data: RelayReadAssignment | null };
+    return payload.data;
+  }
+
+  /** Retires the one-shot relay assignment after the producer attempt. */
+  async completeRelayRead(input: {
+    deviceId: string;
+    privateKey: string;
+    assignmentId: string;
+    outcome: "sent" | "failed";
+  }): Promise<RelayReadCompletion> {
+    const path = "/agent/relay-read/complete";
+    const body = JSON.stringify({ assignmentId: input.assignmentId, outcome: input.outcome });
+    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...signedHeaders({
+          deviceId: input.deviceId,
+          privateKey: input.privateKey,
+          method: "POST",
+          path,
+          body,
+        }),
+      },
+      body,
+    });
+    if (!res.ok) {
+      throw new ControlPlaneError(res.status, await readError(res, "Relay read completion rejected"));
+    }
+    const payload = (await res.json()) as { data: RelayReadCompletion };
     return payload.data;
   }
 

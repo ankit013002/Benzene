@@ -49,6 +49,8 @@ export interface AppConfig {
   accountDeletionInternalSecret: string | undefined;
   /** How long a transfer grant stays usable. */
   transferGrantTtlSeconds: number;
+  /** Public WebSocket origin clients and nodes use for relay sessions. */
+  relayPublicUrl: string | undefined;
   s3: {
     bucket: string;
     region: string;
@@ -172,6 +174,7 @@ export function loadConfig(): AppConfig {
     transferSigningKey: optional("TRANSFER_SIGNING_KEY"),
     accountDeletionInternalSecret,
     transferGrantTtlSeconds: intFromEnv("TRANSFER_GRANT_TTL_SECONDS", 300),
+    relayPublicUrl: optional("RELAY_PUBLIC_URL"),
     storageDriver,
     maxUploadBytes: intFromEnv("MAX_UPLOAD_BYTES", 5 * 1024 * 1024 * 1024),
     presignTtlSeconds: intFromEnv("PRESIGN_TTL_SECONDS", 900),

@@ -6,6 +6,7 @@ import { ControlPlaneClient, ControlPlaneError } from "./controlPlane.js";
 import { IdentityStore, type DeviceIdentity } from "./identity.js";
 import { generateDeviceKeyPair } from "./protocol.js";
 import { IntegrityError, ObjectStore, type StoredObject } from "./store.js";
+import { sendStoredRelayObject } from "./relayTransport.js";
 import { verifyTransferGrant, type TransferEncryption } from "./transferGrant.js";
 
 export const AGENT_VERSION = "0.1.0";
@@ -42,6 +43,7 @@ export class Agent {
   private repairInFlight = false;
   private garbageCollectionInFlight = false;
   private rebalancingInFlight = false;
+  private relayReadInFlight = false;
   private removalInFlight = false;
   private transferServingAllowed = true;
   private lastRepairAttemptAt = 0;
@@ -55,7 +57,8 @@ export class Agent {
     private readonly config: AgentConfig,
     readonly store: ObjectStore,
     private readonly events: AgentEvents = {},
-    client?: ControlPlaneClient
+    client?: ControlPlaneClient,
+    private readonly relayObjectSender: typeof sendStoredRelayObject = sendStoredRelayObject
   ) {
     this.identityStore = new IdentityStore(config.identityFile);
     this.client = client ?? new ControlPlaneClient(config.controlPlaneUrl);
@@ -226,6 +229,10 @@ export class Agent {
 
     this.inventoryRecoveryRequired = true;
 
+    // Inventory reconciliation can alter replica metadata while a producer is
+    // reading its object; leave it pending for the next heartbeat instead.
+    if (this.relayReadInFlight) return;
+
     // A normal heartbeat may complete while an earlier suspected-lost
     // reconciliation is still scanning. Do not let that stale scan mark the
     // next suspected-lost episode as reconciled.
@@ -288,7 +295,7 @@ export class Agent {
    */
   async pollRemoval(): Promise<boolean> {
     const identity = this.requireIdentity();
-    if (!identity.deviceId || this.removalInFlight) return false;
+    if (!identity.deviceId || this.removalInFlight || this.relayReadInFlight) return false;
     this.removalInFlight = true;
 
     try {
@@ -339,6 +346,7 @@ export class Agent {
       this.repairInFlight ||
       this.garbageCollectionInFlight ||
       this.rebalancingInFlight ||
+      this.relayReadInFlight ||
       this.removalInFlight ||
       this.inventoryRecoveryRequired ||
       this.inventoryReconciliationInFlight
@@ -408,6 +416,57 @@ export class Agent {
     }
   }
 
+  /** Streams one explicitly requested encrypted GET fallback to its client. */
+  async attemptRelayRead(): Promise<boolean> {
+    const identity = this.requireIdentity();
+    if (
+      !identity.deviceId ||
+      !identity.controlPlanePublicKey ||
+      this.relayReadInFlight ||
+      this.repairInFlight ||
+      this.garbageCollectionInFlight ||
+      this.rebalancingInFlight ||
+      this.removalInFlight ||
+      this.inventoryRecoveryRequired ||
+      this.inventoryReconciliationInFlight
+    ) {
+      return false;
+    }
+
+    this.relayReadInFlight = true;
+    try {
+      const assignment = await this.client.pollRelayRead({
+        deviceId: identity.deviceId,
+        privateKey: identity.privateKey,
+      });
+      if (!assignment) return false;
+
+      let outcome: "sent" | "failed" = "failed";
+      try {
+        await this.relayObjectSender({
+          relayUrl: assignment.relayUrl,
+          ticket: assignment.nodeTicket,
+          controlPlanePublicKey: identity.controlPlanePublicKey,
+          store: this.store,
+          deviceId: identity.deviceId,
+          storageHash: assignment.storageHash,
+          sizeBytes: assignment.sizeBytes,
+        });
+        outcome = "sent";
+        return true;
+      } finally {
+        await this.client.completeRelayRead({
+          deviceId: identity.deviceId,
+          privateKey: identity.privateKey,
+          assignmentId: assignment.assignmentId,
+          outcome,
+        });
+      }
+    } finally {
+      this.relayReadInFlight = false;
+    }
+  }
+
   /** Deletes at most one unreferenced object through a retry-safe handshake. */
   async attemptGarbageCollection(): Promise<boolean> {
     const identity = this.requireIdentity();
@@ -416,6 +475,7 @@ export class Agent {
       this.garbageCollectionInFlight ||
       this.repairInFlight ||
       this.rebalancingInFlight ||
+      this.relayReadInFlight ||
       this.removalInFlight ||
       this.inventoryRecoveryRequired ||
       this.inventoryReconciliationInFlight
@@ -455,6 +515,7 @@ export class Agent {
       this.rebalancingInFlight ||
       this.repairInFlight ||
       this.garbageCollectionInFlight ||
+      this.relayReadInFlight ||
       this.removalInFlight ||
       this.inventoryRecoveryRequired ||
       this.inventoryReconciliationInFlight
@@ -554,6 +615,8 @@ export class Agent {
           if (removed || this.removalInFlight) return false;
           return this.sendHeartbeat().then(async () => {
             await this.attemptGarbageCollection();
+            const relayed = await this.attemptRelayRead();
+            if (relayed) return true;
             const repaired = await this.attemptRepair();
             return repaired ? true : this.attemptRebalancing();
           });

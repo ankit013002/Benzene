@@ -15,6 +15,7 @@ import {
   setPolicy,
 } from "./placement.service.js";
 import { planDownload, planUpload } from "./uploadTargets.service.js";
+import { createRelayReadFallback } from "./relayRead.service.js";
 
 const router = Router();
 
@@ -37,6 +38,11 @@ const reserveSchema = z.object({
   sizeBytes: z.number().int().nonnegative(),
   deviceIds: z.array(z.string().uuid()).min(1).max(10),
 });
+
+const relayReadSchema = z.object({
+  nodeId: z.string().regex(/^[a-f0-9]{24}$/i, "must be a file id"),
+  requestId: z.string().uuid(),
+}).strict();
 
 function parse<T>(schema: z.ZodType<T>, payload: unknown): T {
   const result = schema.safeParse(payload);
@@ -115,6 +121,15 @@ router.get(
   asyncHandler(async (req, res) => {
     const hash = parse(objectHash, req.params["objectHash"]);
     res.status(200).json({ data: { targets: await planDownload(ownerOf(req), hash) } });
+  })
+);
+
+/** Explicitly requested after direct reads fail; returns only the client ticket. */
+router.post(
+  "/relay-read",
+  asyncHandler(async (req, res) => {
+    const body = parse(relayReadSchema, req.body);
+    res.status(201).json({ data: await createRelayReadFallback(ownerOf(req), body) });
   })
 );
 

@@ -125,7 +125,15 @@ storage format. The control-plane migration marks all pre-v2 replicas
 reconciles their mode. There is no automated reconciliation tool yet, so do not
 roll v2 onto a fleet with live objects without a separately planned migration.
 
-**Relay production is a separate, encrypted-object path.** The exported
+**Relay production is a separate, encrypted-object path.** On explicit
+`POST /placement/relay-read`, the control plane selects an online healthy
+encrypted-v1 replica, persists a bounded assignment, and returns only the
+client ticket. The signed node poll receives the complementary node ticket;
+the API below handles its producer half. Lost polls and producer failures reuse
+the same assignment/ticket through a 20-second lease for at most three claims.
+Normal direct read planning remains unchanged and direct-first.
+
+The exported
 `sendStoredRelayObject` API can open an outbound WebSocket as the authorized
 `node/get` producer and stream a locally stored encrypted object as opaque
 binary frames. It checks the relay ticket signature, expiry, role, device,
@@ -137,12 +145,13 @@ fallback. The client consumer and `client/put` path do not exist.
 
 ## Known limits
 
-- **Remote relay access is not end to end.** The relay service and node
-  `node/get` producer slice exist, but the control plane does not issue tickets,
-  clients/mobile do not consume relay streams, and no direct-first fallback is
-  wired. Production relay TLS deployment, DNS, certificate lifecycle, abuse
-  controls and remote end-to-end verification remain open. Local WebSocket
-  integration coverage does not prove Internet connectivity or NAT traversal.
+- **Remote relay access is not end to end.** Explicit control-plane GET ticket
+  issuance and node assignment polling now exist, but consumer/mobile stream
+  validation and fallback wiring are still absent. There is no control-plane
+  client path requesting relay only after direct failure. Production relay TLS
+  deployment, DNS, certificate lifecycle, abuse controls and full remote
+  end-to-end verification remain open. Local WebSocket integration coverage
+  does not prove Internet connectivity or NAT traversal.
 - **HTTPS serving is configurable, not provisioned.** The direct grant-protected
   transfer routes can listen with a supplied certificate and key, but Benzene
   does not yet issue or renew certificates, establish browser trust, or discover
@@ -175,14 +184,14 @@ these vectors are what stop two separate deployables drifting apart on the wire
 format. CI diffs the two files.
 
 The relay authorization contract is pinned by `src/relayScopeVectors.ts`, which
-is byte-identical to the relay service's copy. Both verifiers assert against the
-same exact signed ticket. Its Ed25519 public key and signature use the existing
-throwaway test-key fixture only; no production key or private key belongs in
-these vectors.
+is byte-identical to the control plane and relay service copies. All three
+packages assert against the same exact signed ticket, and CI diffs the copies.
+Its Ed25519 public key and signature use the existing throwaway test-key
+fixture only; no production key or private key belongs in these vectors.
 
 ## Verification
 
-The current node-agent suite has **154 tests**, including relay-ticket
+The current node-agent suite has **155 tests**, including relay-ticket
 conformance and a local producer-to-consumer integration against the relay
 server. This test does not cover control-plane issuance, a production TLS
 endpoint, a browser/mobile consumer, direct-first fallback, or remote network

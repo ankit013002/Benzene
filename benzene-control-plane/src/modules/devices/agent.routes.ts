@@ -34,6 +34,10 @@ import {
   requestEnrollment,
 } from "./devices.service.js";
 import { enrollmentCreationThrottle } from "./enrollmentThrottle.js";
+import {
+  claimRelayReadForDevice,
+  completeRelayReadForDevice,
+} from "../placement/relayRead.service.js";
 
 /**
  * The node agent API.
@@ -87,6 +91,11 @@ const rebalancingCompletionSchema = z.object({
     .transform((value) => value.toLowerCase()),
   assignmentId: z.string().uuid(),
 });
+
+const relayReadCompletionSchema = z.object({
+  assignmentId: z.string().uuid(),
+  outcome: z.enum(["sent", "failed"]),
+}).strict();
 
 const inventoryObjectSchema = z.object({
   objectHash: z
@@ -200,6 +209,27 @@ router.get(
   asyncHandler(async (req, res) => {
     if (!req.deviceId) throw AppError.unauthorized();
     res.status(200).json({ data: await pollRepairForDevice(req.deviceId) });
+  })
+);
+
+/** Claims one short-lived relay producer assignment for this signed device. */
+router.get(
+  "/relay-read",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await claimRelayReadForDevice(req.deviceId) });
+  })
+);
+
+/** Retires the exact claimed relay transfer so its bounded queue slot is freed. */
+router.post(
+  "/relay-read/complete",
+  requireDevice,
+  asyncHandler(async (req, res) => {
+    const body = parse(relayReadCompletionSchema, req.body);
+    if (!req.deviceId) throw AppError.unauthorized();
+    res.status(200).json({ data: await completeRelayReadForDevice(req.deviceId, body) });
   })
 );
 

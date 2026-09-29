@@ -307,6 +307,56 @@ export const objectReferences = pgTable(
 );
 
 /**
+ * Short-lived work created only after a client explicitly requests relay
+ * fallback. The node ticket is returned only by the signed `/agent` poll.
+ */
+export const relayReadAssignments = pgTable(
+  "relay_read_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    vaultId: uuid("vault_id")
+      .notNull()
+      .references(() => vaults.id, { onDelete: "cascade" }),
+    requestId: uuid("request_id").notNull(),
+    objectHash: text("object_hash").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    deviceId: uuid("device_id")
+      .notNull()
+      .references(() => devices.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id").notNull(),
+    clientTicket: text("client_ticket").notNull(),
+    nodeTicket: text("node_ticket").notNull(),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    claimLeaseExpiresAt: timestamp("claim_lease_expires_at", { withTimezone: true }),
+    claimAttempts: integer("claim_attempts").notNull().default(0),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (table) => [
+    uniqueIndex("relay_read_assignments_vault_request_idx").on(table.vaultId, table.requestId),
+    uniqueIndex("relay_read_assignments_session_idx").on(table.sessionId),
+    check(
+      "relay_read_assignments_size_check",
+      sql`${table.sizeBytes} > 0 and ${table.sizeBytes} <= 1073741824`
+    ),
+    check(
+      "relay_read_assignments_status_check",
+      sql`${table.status} in ('pending', 'claimed', 'completed', 'failed')`
+    ),
+    check(
+      "relay_read_assignments_claim_attempts_check",
+      sql`${table.claimAttempts} >= 0 and ${table.claimAttempts} <= 3`
+    ),
+    index("relay_read_assignments_device_queue_idx").on(table.deviceId, table.status, table.createdAt),
+    index("relay_read_assignments_expiry_idx").on(table.expiresAt),
+  ]
+);
+
+/**
  * A physical copy of an object on one device.
  *
  * Objects are identified by content hash, so a replica row is the join between

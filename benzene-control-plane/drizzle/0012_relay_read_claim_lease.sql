@@ -1,0 +1,3 @@
+ALTER TABLE "relay_read_assignments" ADD COLUMN "claim_lease_expires_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "relay_read_assignments" ADD COLUMN "claim_attempts" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "relay_read_assignments" ADD CONSTRAINT "relay_read_assignments_claim_attempts_check" CHECK ("relay_read_assignments"."claim_attempts" >= 0 and "relay_read_assignments"."claim_attempts" <= 3);

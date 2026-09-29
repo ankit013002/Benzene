@@ -78,6 +78,20 @@
       "when": 1790681997465,
       "tag": "0010_violet_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790701480199,
+      "tag": "0011_relay_read_assignments",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790702811877,
+      "tag": "0012_relay_read_claim_lease",
+      "breakpoints": true
     }
   ]
 }

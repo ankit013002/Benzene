@@ -1,4 +1,4 @@
-import { createHash, sign } from "node:crypto";
+import { createHash, randomUUID, sign } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Agent } from "./agent.js";
 import { loadAgentConfig, type AgentConfig } from "./config.js";
 import { GRANT_TEST_PRIVATE_KEY, GRANT_TEST_PUBLIC_KEY } from "./grantVectors.js";
+import type { RelayTransferResult, SendStoredRelayObjectOptions } from "./relayTransport.js";
 import {
   ControlPlaneClient,
   ControlPlaneError,
@@ -17,6 +18,8 @@ import {
   type RepairAssignment,
   type RemovalCompletion,
   type RemovalDirective,
+  type RelayReadAssignment,
+  type RelayReadCompletion,
   type EnrollmentStatus,
   type EnrollmentTicket,
   type HeartbeatResult,
@@ -40,6 +43,24 @@ function sourceGrant(
     exp: 4_102_444_800,
     encryption,
   })).toString("base64url");
+  const signature = sign(null, Buffer.from(encoded), {
+    key: Buffer.from(GRANT_TEST_PRIVATE_KEY, "base64"),
+    format: "der",
+    type: "pkcs8",
+  }).toString("base64url");
+  return `${encoded}.${signature}`;
+}
+
+function nodeRelayTicket(input: {
+  sessionId: string;
+  ticketId: string;
+  storageHash: string;
+  deviceId: string;
+  exp: number;
+  maxBytes: number;
+}): string {
+  const encoded = Buffer.from(JSON.stringify({ v: 1, ...input, op: "get", role: "node" }))
+    .toString("base64url");
   const signature = sign(null, Buffer.from(encoded), {
     key: Buffer.from(GRANT_TEST_PRIVATE_KEY, "base64"),
     format: "der",
@@ -81,6 +102,10 @@ class FakeControlPlane extends ControlPlaneClient {
     sourceDeviceId: string;
     repairAssignmentId: string;
   }> = [];
+  relayReadAssignment: RelayReadAssignment | null = null;
+  relayReadPolls = 0;
+  relayReadCompletions: Array<{ assignmentId: string; outcome: "sent" | "failed" }> = [];
+  removalPolls = 0;
   removalDirective: RemovalDirective | null = null;
   removalCompletions = 0;
   removalCompletion: RemovalCompletion = { status: "removed" };
@@ -172,6 +197,19 @@ class FakeControlPlane extends ControlPlaneClient {
     return this.rebalancingAssignment;
   }
 
+  override async pollRelayRead(): Promise<RelayReadAssignment | null> {
+    this.relayReadPolls += 1;
+    return this.relayReadAssignment;
+  }
+
+  override async completeRelayRead(input: {
+    assignmentId: string;
+    outcome: "sent" | "failed";
+  }): Promise<RelayReadCompletion> {
+    this.relayReadCompletions.push(input);
+    return { status: input.outcome === "sent" ? "completed" : "retrying" };
+  }
+
   override async completeRebalancing(input: {
     objectHash: string;
     assignmentId: string;
@@ -212,6 +250,7 @@ class FakeControlPlane extends ControlPlaneClient {
   }
 
   override async pollRemoval(): Promise<RemovalDirective | null> {
+    this.removalPolls += 1;
     return this.removalDirective;
   }
 
@@ -236,14 +275,15 @@ function config(): AgentConfig {
 }
 
 async function makeAgent(
-  plane = new FakeControlPlane()
+  plane = new FakeControlPlane(),
+  relaySender?: (options: SendStoredRelayObjectOptions) => Promise<RelayTransferResult>
 ): Promise<{ agent: Agent; plane: FakeControlPlane }> {
   const cfg = config();
   const store = new ObjectStore({
     rootDir: cfg.storageDir,
     allocatedBytes: cfg.allocatedBytes,
   });
-  const agent = new Agent(cfg, store, {}, plane);
+  const agent = new Agent(cfg, store, {}, plane, relaySender);
   await agent.initialise();
   return { agent, plane };
 }
@@ -775,6 +815,114 @@ describe("repair", () => {
     expect(plane.repairFailures).toEqual([]);
     expect(plane.possessionReports).toEqual([]);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("relay read assignment", () => {
+  it("serializes a relay stream against repair, GC, rebalancing, removal, and inventory work", async () => {
+    const plane = new FakeControlPlane();
+    const deviceId = "33333333-3333-4333-8333-333333333333";
+    plane.approvedDeviceId = deviceId;
+    let markSenderStarted: (() => void) | undefined;
+    let releaseSender: (() => void) | undefined;
+    const senderStarted = new Promise<void>((resolve) => { markSenderStarted = resolve; });
+    const senderGate = new Promise<void>((resolve) => { releaseSender = resolve; });
+    const relaySender = vi.fn(async (options: SendStoredRelayObjectOptions) => {
+      markSenderStarted?.();
+      await senderGate;
+      return { storageHash: options.storageHash, sizeBytes: options.sizeBytes };
+    });
+    const { agent } = await makeAgent(plane, relaySender);
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+
+    const body = Buffer.from("encrypted serialized relay fixture");
+    const storageHash = createHash("sha256").update(body).digest("hex");
+    await agent.store.put(Readable.from([body]), {
+      expectedHash: storageHash,
+      expectedSize: body.length,
+      encryption: "benzene-encrypted-object-v1",
+    });
+    const sessionId = randomUUID();
+    const assignmentId = randomUUID();
+    plane.relayReadAssignment = {
+      assignmentId,
+      sessionId,
+      relayUrl: "wss://relay.invalid",
+      nodeTicket: nodeRelayTicket({
+        sessionId,
+        ticketId: randomUUID(),
+        storageHash,
+        deviceId,
+        exp: Math.floor(Date.now() / 1000) + 60,
+        maxBytes: body.length,
+      }),
+      storageHash,
+      sizeBytes: body.length,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+
+    const transfer = agent.attemptRelayRead();
+    await senderStarted;
+    plane.heartbeatStatus = "suspected_lost";
+    plane.removalDirective = { status: "erase" };
+
+    await expect(agent.attemptRepair()).resolves.toBe(false);
+    await expect(agent.attemptGarbageCollection()).resolves.toBe(false);
+    await expect(agent.attemptRebalancing()).resolves.toBe(false);
+    await expect(agent.pollRemoval()).resolves.toBe(false);
+    await expect(agent.sendHeartbeat()).resolves.toMatchObject({ status: "suspected_lost" });
+    expect(plane.repairPolls).toBe(0);
+    expect(plane.garbageCollectionPolls).toBe(0);
+    expect(plane.rebalancingPolls).toBe(0);
+    expect(plane.removalPolls).toBe(0);
+    expect(plane.inventorySubmissions).toEqual([]);
+    expect(relaySender).toHaveBeenCalledTimes(1);
+
+    releaseSender?.();
+    await expect(transfer).resolves.toBe(true);
+    expect(plane.relayReadCompletions).toEqual([
+      expect.objectContaining({ assignmentId, outcome: "sent" }),
+    ]);
+  });
+
+  it("claims the signed node assignment, invokes the opaque producer, and reports failure", async () => {
+    const { agent, plane } = await makeAgent();
+    const deviceId = "33333333-3333-4333-8333-333333333333";
+    plane.approvedDeviceId = deviceId;
+    await agent.ensureEnrolled();
+    plane.status = "consumed";
+    await agent.pollEnrollment();
+    const body = Buffer.from("encrypted relay fixture");
+    const storageHash = createHash("sha256").update(body).digest("hex");
+    await agent.store.put(Readable.from([body]), {
+      expectedHash: storageHash,
+      expectedSize: body.length,
+      encryption: "benzene-encrypted-object-v1",
+    });
+    const sessionId = randomUUID();
+    const assignmentId = randomUUID();
+    plane.relayReadAssignment = {
+      assignmentId,
+      sessionId,
+      relayUrl: "https://relay.invalid",
+      nodeTicket: nodeRelayTicket({
+        sessionId,
+        ticketId: randomUUID(),
+        storageHash,
+        deviceId,
+        exp: Math.floor(Date.now() / 1000) + 60,
+        maxBytes: body.length,
+      }),
+      storageHash,
+      sizeBytes: body.length,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+
+    await expect(agent.attemptRelayRead()).rejects.toThrow(/wss/);
+    expect(plane.relayReadPolls).toBe(1);
+    expect(plane.relayReadCompletions).toEqual([expect.objectContaining({ assignmentId, outcome: "failed" })]);
   });
 });
 

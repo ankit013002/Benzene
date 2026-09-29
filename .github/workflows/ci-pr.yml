@@ -62,6 +62,7 @@ jobs:
             relay:
               - 'benzene-relay-service/**'
               - 'benzene-node-agent/src/relayScope*'
+              - 'benzene-control-plane/src/modules/placement/relayScopeVectors.ts'
               - '.github/workflows/**'
             docs:
               - 'README.md'
@@ -565,7 +566,9 @@ jobs:
       - name: Test with shared PostgreSQL state
         run: npm test
       - name: Relay scope vectors match the node agent
-        run: diff -u ../benzene-node-agent/src/relayScopeVectors.ts src/relayScopeVectors.ts
+        run: |
+          diff -u ../benzene-node-agent/src/relayScopeVectors.ts src/relayScopeVectors.ts
+          diff -u ../benzene-control-plane/src/modules/placement/relayScopeVectors.ts src/relayScopeVectors.ts
 
   smoke-agent:
     name: Cross-package smoke (control plane + node agent)
