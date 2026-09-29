@@ -14,9 +14,10 @@ web path can enroll devices, place, repair, garbage-collect and rebalance
 whole-file replicas, and upload and download directly on a development LAN.
 
 The commercial MVP still requires remote/HTTPS transfers, encryption and a key
-recovery design, desktop and mobile clients, and the other blockers listed in
-§9. Do not describe the application as
-complete, MVP-complete or production-ready until those capabilities and the
+recovery design, a desktop client and a complete mobile Vault journey, and the
+other blockers listed in §9. A native mobile foundation exists, but an unsigned
+JavaScript export is not a release-ready client. Do not describe the application
+as complete, MVP-complete or production-ready until those capabilities and the
 open product decisions are resolved and verified.
 
 ### Completion gate
@@ -86,6 +87,7 @@ storage-layer work.
 | `benzene-auth-service/` | Email/password auth, JWT issuance | Node 20, Express 5, TypeScript, PostgreSQL |
 | `nebula-gateway/` | Edge: verifies JWTs, injects identity headers, routes | **Java 21**, Spring Cloud Gateway |
 | `nebulavault-frontend/` | Web app | Next.js 16.3.5, React/react-dom 19.3.0, TypeScript, Tailwind + DaisyUI; routing guard in `src/proxy.ts` |
+| `benzene-mobile/` | Native mobile app | Expo SDK 57, React Native, TypeScript; iOS, Android and web JS exports |
 | `nebulavault-user-service/` | User profiles, quota fields | Java 21, Spring Boot |
 | `infrastructure/terraform/` | S3 bucket + least-privilege IAM | Terraform |
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
@@ -135,6 +137,12 @@ cd nebulavault-frontend
 npm install && npm run dev
 # Requires Node >=20.9. The former Next.js middleware request guard now lives
 # in `src/proxy.ts`.
+
+# native mobile client
+cd benzene-mobile
+npm ci && npm run start
+npm run typecheck && npm run lint && npm test
+npm run export:ios && npm run export:android && npm run export:web
 
 # gateway — see the JDK note below
 cd nebula-gateway && ./mvnw test
@@ -532,10 +540,13 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **372**, agent **127**, auth **90** total
-(**83** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
+Current counts: control plane **372**, agent **127**, auth **92** total
+(**85** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
-**12 `ok` assertions**. The frontend suite has **18 tests** total. The core
+**12 `ok` assertions**. The frontend suite has **18 tests** total. The mobile
+client has **10 tests**, including two dependency-override compatibility
+checks. Local iOS, Android and web JavaScript exports pass; no signed native
+build has been verified. The core
 cross-package smoke has **68 checks**; the
 three-device Protected repair and rebalance smoke has **50 checks**.
 The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
@@ -568,8 +579,10 @@ a host/LAN process. The frontend Docker context
 excludes local `.env*` files while allowing the committed `.env.example`; its
 runtime stage contains only `public`, Next standalone, and `.next/static`
 artifacts. Full `npm audit` reports 0 vulnerabilities for the frontend,
-node-agent and auth-service; the frontend's production-only
-(`npm audit --omit=dev`) audit also reports 0, and the control-plane's
+node-agent, auth-service and mobile client; the mobile lockfile pins patched
+transitive query-string and uuid releases, with compatibility tests and a
+checked-in Expo Router import patch. The
+frontend's production-only (`npm audit --omit=dev`) audit also reports 0, and the control-plane's
 production-only audit reports 0. The control-plane full audit still reports
 four moderate, dev-only `esbuild` findings through `drizzle-kit`; the only
 offered forced fix is a breaking downgrade, so these package-specific results
@@ -700,6 +713,10 @@ the standard to match.
   Benzene-managed entries, and removing the device from the Vault
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
+- Native mobile foundation: secure token storage, native bearer-session
+  integration, Vault/file/device summaries, settings and an account-deletion
+  request screen. File transfers and complete account/Vault erasure remain
+  unfinished.
 - **Uploads route to devices end to end**, with downloads reading back
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct
@@ -744,17 +761,20 @@ the standard to match.
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
   manual migration before enrolling such a store
-- Desktop and mobile apps, filesystem mount, sharing, search, billing
+- Desktop client, complete mobile file transfers, filesystem mount, sharing,
+  search and billing
 - File metadata still in MongoDB, not yet migrated to Postgres
 
 ### Device-first MVP and commercial blockers
 
 The architecture's earliest commercially testable MVP includes desktop, mobile
-and web clients, with optional cloud protection. This branch validates the
-control plane, node agent and web/LAN device-first slice; it is not yet that
-commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
-access, encryption and key recovery, cloud-protection policy and billing,
-chunking, sharing and search remain blockers.
+and web clients, with optional cloud protection. A native mobile foundation now
+exists, and its iOS, Android and web JavaScript bundles export successfully;
+this does not validate a signed native build or complete the Vault journey.
+This branch is not yet that commercial MVP. A desktop client, complete mobile
+file transfers, filesystem mounts, remote/HTTPS access, encryption and key
+recovery, cloud-protection policy and billing, chunking, sharing and search
+remain blockers.
 Availability, single-copy policy and key recovery remain open product
 questions; this status does not resolve them.
 

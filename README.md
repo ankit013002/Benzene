@@ -53,6 +53,7 @@ enrollment and uses Ed25519 request signatures instead.
 | `benzene-control-plane` | Node 20, Express 5, TypeScript, PostgreSQL + MongoDB | 5000 | Vaults, devices, placement and file metadata |
 | `benzene-node-agent` | Node 20, Express 5, TypeScript | 7070 | Device identity, heartbeat and LAN object store |
 | `nebulavault-user-service` | Java 21, Spring Boot, PostgreSQL | 8082 | User profile bootstrap and quota fields |
+| `benzene-mobile` | Expo SDK 57, React Native, TypeScript | — | Native iOS/Android client foundation; unsigned JS bundles only |
 
 The frontend requires Node **20.9 or newer**. The former Next.js middleware
 request guard now lives in `src/proxy.ts`.
@@ -68,8 +69,9 @@ standalone, and `.next/static` artifacts. The frontend, auth-service, gateway,
 control-plane and user-service production runtime images run as dedicated
 non-root `benzene` users. The node agent remains a host/LAN process. Full
 `npm audit` reports 0 vulnerabilities for the frontend, node-agent and
-auth-service; the frontend's production-only (`npm audit --omit=dev`) audit
-also reports 0, and the control-plane's production-only audit reports 0. The
+auth-service and mobile client. The frontend's production-only
+(`npm audit --omit=dev`) audit also reports 0, and the control-plane's
+production-only audit reports 0. The
 control-plane full audit still reports four moderate, dev-only `esbuild`
 findings through `drizzle-kit`; the only offered forced fix is a breaking
 downgrade, so these package-specific results must not be summarized as a
@@ -89,6 +91,10 @@ repository-wide zero.
 - Browser password-recovery pages and same-origin request bridges now exist.
   The same acceptance covers reset requests, reset completion, one-shot token
   rejection, old-password rejection and new-password login.
+- Native mobile foundation: secure token storage, native bearer-session wiring,
+  Vault/file/device summaries, settings and account-deletion request screens.
+  It depends on the native auth contract; it does not yet transfer files or
+  complete account/Vault erasure.
 - Vault creation and device enrollment with a pairing code and explicit user
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
@@ -210,8 +216,8 @@ repository-wide zero.
   manual migration before enrolling such a store.
 - A replication policy of one copy is possible but can lose data when that
   device fails. Whether that choice should remain available is unresolved.
-- Desktop/mobile apps, filesystem mounts, sharing, search, billing and cloud
-  protection policy are not built.
+- A desktop client, complete mobile upload/download flows, filesystem mounts,
+  sharing, search, billing and cloud-protection policy are not built.
 - The control plane still keeps legacy file metadata in MongoDB while its Vault,
   Device and placement graph is in PostgreSQL.
 - Node-agent private keys are protected as `0600` files rather than native
@@ -220,11 +226,13 @@ repository-wide zero.
 ### Device-first MVP and commercial blockers
 
 The architecture's earliest commercially testable MVP includes desktop, mobile
-and web clients, with optional cloud protection. This branch validates the
-control plane, node agent and web/LAN device-first slice; it is not yet that
-commercial MVP. Desktop/mobile clients and filesystem mounts, remote/HTTPS
-access, encryption and key recovery, cloud-protection policy and billing,
-chunking, sharing and search remain blockers.
+and web clients, with optional cloud protection. A native mobile foundation now
+exists, and its iOS, Android and web JavaScript bundles export successfully;
+this does not validate a signed native build or complete the Vault journey.
+This branch is not yet that commercial MVP. A desktop client, complete mobile
+file transfers, filesystem mounts, remote/HTTPS access, encryption and key
+recovery, cloud-protection policy and billing, chunking, sharing and search
+remain blockers.
 Availability, single-copy policy and key recovery remain open product
 questions; this status does not resolve them.
 
@@ -473,11 +481,14 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **372** tests, agent **127**, auth **90** total
-(**83** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
+Verified counts: control plane **372** tests, agent **127**, auth **92** total
+(**85** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
 assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
-checks**. The frontend suite has **18 tests** total.
+checks**. The frontend suite has **18 tests** total. The mobile client has **10
+tests**, including two dependency-override compatibility checks; local iOS,
+Android and web JavaScript exports pass. No signed native build has been
+verified.
 The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
 assertions; its earlier 60-assertion version was green in CI run `34788300450`.
 Default Turbopack and
@@ -493,11 +504,14 @@ including real-Postgres concurrency regressions for refresh-token rotation,
 password-reset consumption, email-verification replacement, and legacy-token
 consumption.
 
-GitHub Actions runs changed-area checks for the frontend, auth service, gateway,
-control plane, node agent, Terraform and the guide files. It runs the
-cross-package smoke when control-plane, node-agent, smoke-script or workflow
-paths change. Frontend lint errors are fatal. Where a package has a lockfile,
-CI uses `npm ci` for reproducibility.
+GitHub Actions runs changed-area checks for the frontend, mobile client, auth
+service, gateway, control plane, node agent, Terraform and the guide files. The
+mobile job installs from its lockfile, audits dependencies, checks Expo SDK
+compatibility, runs typecheck/lint/tests, and exports iOS, Android and web
+JavaScript bundles; it does not sign native binaries. The cross-package smoke
+runs when control-plane, node-agent, smoke-script or workflow paths change.
+Frontend lint errors are fatal. Where a package has a lockfile, CI uses `npm ci`
+for reproducibility.
 
 ## Release coverage
 

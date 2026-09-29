@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       web: ${{ steps.filter.outputs.web }}
+      mobile: ${{ steps.filter.outputs.mobile }}
       auth: ${{ steps.filter.outputs.auth }}
       gateway: ${{ steps.filter.outputs.gateway }}
       control_plane: ${{ steps.filter.outputs.control_plane }}
@@ -36,6 +37,9 @@ jobs:
           filters: |
             web:
               - 'nebulavault-frontend/**'
+            mobile:
+              - 'benzene-mobile/**'
+              - '.github/workflows/**'
             auth:
               - 'benzene-auth-service/**'
             gateway:
@@ -120,6 +124,40 @@ jobs:
             nebulavault-frontend/.next
             nebulavault-frontend/next.config.*
             nebulavault-frontend/package*.json
+
+  mobile:
+    name: Mobile (Expo) — dependencies, tests & platform exports
+    needs: detect-changes
+    if: needs.detect-changes.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: benzene-mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+          cache: npm
+          cache-dependency-path: benzene-mobile/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --include=dev
+      - name: Audit all mobile dependencies
+        run: npm audit --audit-level=moderate
+      - name: Check Expo SDK compatibility
+        run: npx expo install --check
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
+      - name: Export iOS JavaScript bundle
+        run: npm run export:ios
+      - name: Export Android JavaScript bundle
+        run: npm run export:android
+      - name: Export web bundle
+        run: npm run export:web
 
   auth:
     name: Auth (Node/TS) — build & test
