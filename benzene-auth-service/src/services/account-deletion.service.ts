@@ -311,6 +311,28 @@ export async function completeAccountDeletionPhase(
       nextIndex === ACCOUNT_DELETION_CLEANUP_PHASES.length
         ? "complete"
         : ACCOUNT_DELETION_CLEANUP_PHASES[nextIndex] ?? "complete";
+
+    if (claim.phase === "auth_credential") {
+      const credential = await client.query<{ id: string }>(
+        `SELECT id FROM credentials
+         WHERE id = $1 AND account_status = 'deletion_requested'
+         FOR UPDATE`,
+        [claim.credentialId],
+      );
+      if (!credential.rows[0]) {
+        const error = new Error("Account deletion credential is unavailable");
+        error.name = "InvalidDeletionCredentialStateError";
+        throw error;
+      }
+
+      await client.query(
+        `INSERT INTO account_deletion_tombstones
+           (deletion_request_id, credential_id)
+         VALUES ($1, $2)`,
+        [claim.requestId, claim.credentialId],
+      );
+    }
+
     const result = await client.query(
       `
         UPDATE account_deletion_requests
@@ -336,6 +358,17 @@ export async function completeAccountDeletionPhase(
       const error = new Error("Account deletion phase lease is stale");
       error.name = "StaleAccountDeletionLeaseError";
       throw error;
+    }
+    if (claim.phase === "auth_credential") {
+      const deleted = await client.query(
+        "DELETE FROM credentials WHERE id = $1 AND account_status = 'deletion_requested'",
+        [claim.credentialId],
+      );
+      if (deleted.rowCount !== 1) {
+        const error = new Error("Account deletion credential could not be erased");
+        error.name = "InvalidDeletionCredentialStateError";
+        throw error;
+      }
     }
     await client.query("COMMIT");
     return nextPhase;

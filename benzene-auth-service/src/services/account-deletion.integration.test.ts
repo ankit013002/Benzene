@@ -31,6 +31,11 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     if (pool) {
       await Promise.all(
         createdDeletionRequestIds.map((id) =>
+          pool.query("DELETE FROM account_deletion_tombstones WHERE deletion_request_id = $1", [id]),
+        ),
+      );
+      await Promise.all(
+        createdDeletionRequestIds.map((id) =>
           pool.query("DELETE FROM account_deletion_requests WHERE id = $1", [id]),
         ),
       );
@@ -315,5 +320,133 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
       completed_at: null,
       credential_exists: true,
     });
+  });
+
+  it("erases credentials and commits the completion tombstone atomically", async () => {
+    const account = await createCredential();
+    const result = await requestAccountDeletion({
+      email: account.email,
+      password,
+      idempotencyKey: "terminal-credential-deletion-key",
+    });
+    createdDeletionRequestIds.push(result.request.id);
+    const leaseToken = randomUUID();
+    await pool.query(
+      `UPDATE account_deletion_requests
+       SET current_phase = 'auth_credential', status = 'cleanup_pending',
+           lease_token = $2, lease_expires_at = now() + interval '2 minutes'
+       WHERE id = $1`,
+      [result.request.id, leaseToken],
+    );
+
+    const { completeAccountDeletionPhase } = await import("./account-deletion.service");
+    await expect(
+      completeAccountDeletionPhase({
+        requestId: result.request.id,
+        credentialId: account.id,
+        phase: "auth_credential",
+        leaseToken,
+        attempt: 1,
+      }),
+    ).resolves.toBe("complete");
+
+    const persisted = await pool.query(
+      `SELECT r.status, r.current_phase, r.completed_at, r.credential_id,
+              t.credential_id AS tombstoned_credential_id,
+              EXISTS (SELECT 1 FROM credentials c WHERE c.id = $2) AS credential_exists,
+              (SELECT count(*) FROM refresh_tokens WHERE credential_id = $2) AS refresh_count,
+              (SELECT count(*) FROM email_verification_tokens WHERE credential_id = $2) AS verification_count,
+              (SELECT count(*) FROM password_reset_tokens WHERE credential_id = $2) AS reset_count
+       FROM account_deletion_requests r
+       LEFT JOIN account_deletion_tombstones t ON t.deletion_request_id = r.id
+       WHERE r.id = $1`,
+      [result.request.id, account.id],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      status: "completed",
+      current_phase: "complete",
+      credential_id: null,
+      tombstoned_credential_id: account.id,
+      credential_exists: false,
+      refresh_count: "0",
+      verification_count: "0",
+      reset_count: "0",
+    });
+    expect(persisted.rows[0]?.completed_at).toBeInstanceOf(Date);
+
+    const { createCredentials } = await import("./signup.service");
+    const replacement = await createCredentials(
+      `  ${account.email.toUpperCase()}  `,
+      "new-password-hash",
+    );
+    expect(replacement?.id).toBeDefined();
+    expect(replacement?.id).not.toBe(account.id);
+    expect(replacement?.email).toBe(account.email);
+
+    const oldTokens = await pool.query(
+      `SELECT
+         (SELECT count(*) FROM refresh_tokens WHERE credential_id = $1) AS refresh_count,
+         (SELECT count(*) FROM email_verification_tokens WHERE credential_id = $1) AS verification_count,
+         (SELECT count(*) FROM password_reset_tokens WHERE credential_id = $1) AS reset_count,
+         (SELECT count(*) FROM credentials WHERE id = $1) AS old_credential_count,
+         (SELECT count(*) FROM account_deletion_tombstones WHERE deletion_request_id = $2) AS tombstone_count,
+         (SELECT count(*) FROM account_deletion_requests WHERE id = $2 AND status = 'completed') AS completed_request_count`,
+      [account.id, result.request.id],
+    );
+    expect(oldTokens.rows[0]).toMatchObject({
+      refresh_count: "0",
+      verification_count: "0",
+      reset_count: "0",
+      old_credential_count: "0",
+      tombstone_count: "1",
+      completed_request_count: "1",
+    });
+  });
+
+  it("serializes concurrent terminal retries and retains one completed receipt", async () => {
+    const account = await createCredential();
+    const result = await requestAccountDeletion({
+      email: account.email,
+      password,
+      idempotencyKey: "terminal-concurrency-key",
+    });
+    createdDeletionRequestIds.push(result.request.id);
+    const leaseToken = randomUUID();
+    await pool.query(
+      `UPDATE account_deletion_requests
+       SET current_phase = 'auth_credential', status = 'cleanup_pending',
+           lease_token = $2, lease_expires_at = now() + interval '2 minutes'
+       WHERE id = $1`,
+      [result.request.id, leaseToken],
+    );
+    const { completeAccountDeletionPhase } = await import("./account-deletion.service");
+    const claim = {
+      requestId: result.request.id,
+      credentialId: account.id,
+      phase: "auth_credential" as const,
+      leaseToken,
+      attempt: 1,
+    };
+    const outcomes = await Promise.allSettled([
+      completeAccountDeletionPhase(claim),
+      completeAccountDeletionPhase(claim),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+
+    const persisted = await pool.query(
+      `SELECT r.status, r.current_phase, r.completed_at,
+              (SELECT count(*) FROM account_deletion_tombstones WHERE deletion_request_id = r.id) AS tombstone_count,
+              (SELECT count(*) FROM credentials WHERE id = $2) AS credential_count
+       FROM account_deletion_requests r WHERE r.id = $1`,
+      [result.request.id, account.id],
+    );
+    expect(persisted.rows[0]).toMatchObject({
+      status: "completed",
+      current_phase: "complete",
+      tombstone_count: "1",
+      credential_count: "0",
+    });
+    expect(persisted.rows[0]?.completed_at).toBeInstanceOf(Date);
   });
 });

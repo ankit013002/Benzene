@@ -166,6 +166,8 @@ createdb benzene && createdb benzene_auth
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/001_initial.sql
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/002_account_deletion_requests.sql
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/003_account_deletion_worker_leases.sql
+psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/004_account_deletion_credential_phase.sql
+psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/005_account_deletion_tombstones.sql
 
 # One .env per service, from the committed templates
 for d in benzene-control-plane benzene-node-agent benzene-auth-service; do

@@ -10,6 +10,8 @@ export function startAccountDeletionWorkerScheduler(
 ): () => void {
   const handlers = {
     user_profile: createUserProfileDeletionHandler(config.profile),
+    // Credential deletion and its receipt commit together inside PostgreSQL.
+    auth_credential: async () => {},
   };
   let running = false;
   let stopped = false;
@@ -52,7 +54,7 @@ export function startAccountDeletionWorkerScheduler(
   };
 }
 
-/** Starts the opt-in profile-only worker. Later phases remain unconfigured and block safely. */
+/** Starts the opt-in worker. Unconfigured downstream phases block safely. */
 export function startAccountDeletionSchedulerFromEnvironment(): (() => void) | undefined {
   const config = readAccountDeletionWorkerConfig();
   if (!config) {
