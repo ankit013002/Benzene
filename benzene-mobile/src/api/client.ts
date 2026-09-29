@@ -95,10 +95,22 @@ export function clearRefreshCache(): void {
   recentRefreshes.clear();
 }
 
+async function responseError(response: Response, fallback: string): Promise<ApiError> {
+  let message = fallback;
+  try {
+    const payload: unknown = await response.json();
+    if (isRecord(payload) && typeof payload.message === 'string' && payload.message.trim()) message = payload.message;
+  } catch {
+    // Preserve the route-specific fallback if an error response is not JSON.
+  }
+  return new ApiError(message, response.status);
+}
+
 export async function requestJson<T>(
   path: string,
   tokens: TokenPair,
   onTokensUpdated: (tokens: TokenPair) => Promise<void>,
+  requestInit: RequestInit = {},
 ): Promise<T> {
   const origin = gatewayOrigin();
   if (!origin) throw new ApiError('Set a valid HTTPS EXPO_PUBLIC_GATEWAY_ORIGIN to connect Benzene.');
@@ -108,9 +120,16 @@ export async function requestJson<T>(
     await onTokensUpdated(active);
   }
   let response: Response;
+  const authenticatedHeaders = (accessToken: string): Headers => {
+    const headers = new Headers(requestInit.headers);
+    headers.set('accept', 'application/json');
+    headers.set('authorization', `Bearer ${accessToken}`);
+    return headers;
+  };
   try {
     response = await fetch(`${origin}${path}`, {
-      headers: { accept: 'application/json', authorization: `Bearer ${active.accessToken}` },
+      ...requestInit,
+      headers: authenticatedHeaders(active.accessToken),
     });
   } catch {
     throw new ApiError('Could not reach Benzene. Check your connection and try again.');
@@ -120,13 +139,14 @@ export async function requestJson<T>(
     await onTokensUpdated(active);
     try {
       response = await fetch(`${origin}${path}`, {
-        headers: { accept: 'application/json', authorization: `Bearer ${active.accessToken}` },
+        ...requestInit,
+        headers: authenticatedHeaders(active.accessToken),
       });
     } catch {
       throw new ApiError('Could not reach Benzene. Check your connection and try again.');
     }
   }
-  if (!response.ok) throw new ApiError(response.status === 401 ? 'Your session has expired. Sign in again.' : 'Benzene could not load this information.', response.status);
+  if (!response.ok) throw await responseError(response, response.status === 401 ? 'Your session has expired. Sign in again.' : 'Benzene could not load this information.');
   try {
     return await response.json() as T;
   } catch {

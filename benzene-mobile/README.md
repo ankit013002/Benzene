@@ -3,8 +3,9 @@
 Native iOS and Android client built with Expo SDK 57, React Native and Expo
 Router. This is a native app, not a WebView. The current mobile scope is account
 sign-in, Vault summary, file and device lists, configured legal/support links,
-and local session storage. Uploading/downloading files and pairing devices need
-additional client and server work.
+encrypted file upload/download, local Vault-key management, and local session
+storage. Pairing devices and account signup/verification/recovery still need
+additional client work.
 
 ## Local setup
 
@@ -79,16 +80,29 @@ is stolen. Losing both the kit and every device holding the VMK permanently
 loses access to encrypted files. Resetting the account password does not restore
 or change the VMK.
 
-These are cryptographic and local-key foundations, not an end-to-end encrypted
-Vault journey. The mobile upload/download UI does not yet use them, no recovery
-kit save/share/import screens exist, and there is no trusted-device recovery or
-key rotation workflow. The format buffers each whole file in memory. The
+The native Files screen picks one local file, encrypts it, reserves compact
+metadata with the authenticated control plane, PUTs ciphertext to each granted
+reachable device, and completes only after a device confirms possession. A
+download obtains the current compact metadata and physical read plan, tries
+holders in turn, checks the ciphertext hash and GCM authentication locally, and
+opens the iOS/Android share sheet for the decrypted cache copy. Only metadata
+and short-lived API calls use the bearer session; transfer requests send only
+the scoped device grant and ciphertext. The mobile whole-file limit is 25 MiB.
+Uploads require a local VMK and a user-confirmed recovery kit. Existing
+unencrypted files are not decrypted by this path. There is no trusted-device
+recovery or key rotation workflow. The format buffers each whole file in memory. The
 installed Noble packages are from an independently audited project; the public
 upstream audit report covers an earlier release, so it does not certify these
 exact pinned versions or Benzene's integration. This code needs mobile platform
 review and representative-file testing before production use. JavaScript memory
 is managed by the runtime, so clearing temporary byte arrays is best effort and
 cannot guarantee that every copy of a key has been erased from process memory.
+Native transfer uses HTTPS targets. Development builds can explicitly permit
+HTTP only for private/local-network device addresses with
+`EXPO_PUBLIC_ALLOW_INSECURE_LAN_TRANSFERS=true`; this does not provide remote
+access, NAT traversal or a relay. The web export still builds, but encrypted
+picker/transfer/export flows are disabled there; no browser CORS/mixed-content
+or transfer journey has been verified.
 
 ## Configuration ownership
 

@@ -7,7 +7,7 @@ type AuthState = {
   tokens: TokenPair | null;
   startSession(tokens: TokenPair): Promise<void>;
   endSession(): Promise<void>;
-  request<T>(path: string): Promise<T>;
+  request<T>(path: string, init?: RequestInit): Promise<T>;
 };
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -46,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearRefreshCache();
       await secureSessionStore.clear();
     },
-    async request<T>(path: string) {
+    async request<T>(path: string, init?: RequestInit) {
       if (!tokens) throw new Error('Sign in to continue.');
       const requestEpoch = sessionEpoch.current;
       return requestJson<T>(path, tokens, async (updated) => {
@@ -54,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await secureSessionStore.write(updated);
         if (sessionEpoch.current !== requestEpoch) throw new Error('Your session changed. Sign in again.');
         setTokens(updated);
-      });
+      }, init);
     },
   }), [ready, tokens]);
 

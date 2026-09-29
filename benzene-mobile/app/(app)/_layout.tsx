@@ -20,6 +20,7 @@ export default function AppLayout() {
       <Tabs.Screen name="files" options={{ title: 'Files' }} />
       <Tabs.Screen name="devices" options={{ title: 'Devices' }} />
       <Tabs.Screen name="settings" options={{ title: 'Settings' }} />
+      <Tabs.Screen name="recovery" options={{ href: null }} />
     </Tabs>
   );
 }

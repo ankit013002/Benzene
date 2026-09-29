@@ -27,6 +27,7 @@ export type VaultFile = {
   path: string;
   bytes: number;
   contentType?: string;
+  objectHash?: string;
   lastModified: number | null;
   hasContent: boolean;
   protection?: {
@@ -63,6 +64,8 @@ export function isVaultFile(value: unknown): value is VaultFile {
   return typeof item.id === 'string' && typeof item.name === 'string'
     && typeof item.path === 'string' && typeof item.bytes === 'number'
     && typeof item.hasContent === 'boolean'
+    && (item.contentType === undefined || typeof item.contentType === 'string')
+    && (item.objectHash === undefined || typeof item.objectHash === 'string')
     && (typeof item.lastModified === 'number' || item.lastModified === null)
     && (item.protection === undefined || (typeof item.protection === 'object' && item.protection !== null
       && (item.protection.availability === undefined || typeof item.protection.availability === 'string')

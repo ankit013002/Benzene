@@ -92,12 +92,23 @@ test('Vault Master Keys are generated once and persist only as an opaque SecureS
   assert.equal(generations, 1);
   assert.equal(entries.get('benzene.vmk.v1.vault-1'), encodeBase64Url(first));
   assert.deepEqual(await keyStore.loadVaultMasterKey('vault-1'), first);
+  await keyStore.markRecoveryAcknowledged('vault-1');
+  assert.equal(await keyStore.recoveryAcknowledged('vault-1'), true);
   await keyStore.deleteVaultMasterKey('vault-1');
   assert.equal(await keyStore.loadVaultMasterKey('vault-1'), null);
+  assert.equal(await keyStore.recoveryAcknowledged('vault-1'), false);
+  await keyStore.markRecoveryAcknowledged('vault-1');
+  const regenerated = await keyStore.getOrCreateVaultMasterKey('vault-1');
+  assert.equal(regenerated.byteLength, 32);
+  assert.equal(generations, 2);
+  assert.equal(await keyStore.recoveryAcknowledged('vault-1'), false);
 });
 
-test('Vault key import preserves damaged local values and restores exact recovery-key bytes', async () => {
-  const entries = new Map<string, string>([['benzene.vmk.v1.vault-2', 'not-canonical=']]);
+test('damaged Vault keys preserve bytes but invalidate recovery confirmation until explicit import', async () => {
+  const entries = new Map<string, string>([
+    ['benzene.vmk.v1.vault-2', 'not-canonical='],
+    ['benzene.vmk.recovery-ack.v1.vault-2', 'confirmed'],
+  ]);
   const storage = {
     async getItem(key: string) { return entries.get(key) ?? null; },
     async setItem(key: string, value: string) { entries.set(key, value); },
@@ -106,7 +117,9 @@ test('Vault key import preserves damaged local values and restores exact recover
   const keyStore = createVaultKeyStore(storage, async (length) => new Uint8Array(length));
   await assert.rejects(keyStore.loadVaultMasterKey('vault-2'), /damaged/);
   assert.equal(entries.get('benzene.vmk.v1.vault-2'), 'not-canonical=');
+  assert.equal(await keyStore.recoveryAcknowledged('vault-2'), false);
   await keyStore.importVaultMasterKey('vault-2', vmk);
+  assert.equal(entries.get('benzene.vmk.v1.vault-2'), encodeBase64Url(vmk));
   assert.deepEqual(await keyStore.loadVaultMasterKey('vault-2'), vmk);
   assert.throws(() => keyStore.importVaultMasterKey('vault-2', new Uint8Array(31)), /exactly 32 bytes/);
 });

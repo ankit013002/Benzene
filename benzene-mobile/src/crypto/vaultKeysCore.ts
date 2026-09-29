@@ -2,6 +2,7 @@ import { encodeBase64Url, decodeBase64Url } from './bytes';
 
 const VMK_BYTES = 32;
 const KEY_PREFIX = 'benzene.vmk.v1.';
+const RECOVERY_ACK_PREFIX = 'benzene.vmk.recovery-ack.v1.';
 
 export interface SecureKeyValueStore {
   getItem(key: string): Promise<string | null>;
@@ -14,6 +15,8 @@ export type VaultKeyStore = {
   loadVaultMasterKey(vaultId: string): Promise<Uint8Array | null>;
   importVaultMasterKey(vaultId: string, vmk: Uint8Array): Promise<void>;
   deleteVaultMasterKey(vaultId: string): Promise<void>;
+  recoveryAcknowledged(vaultId: string): Promise<boolean>;
+  markRecoveryAcknowledged(vaultId: string): Promise<void>;
 };
 
 function validateVaultId(vaultId: string): void {
@@ -56,6 +59,9 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
       validateVmk(vmk);
       return vmk;
     } catch {
+      // A damaged key cannot justify a prior recovery confirmation. Preserve it
+      // until the user explicitly imports a valid recovery kit.
+      await storage.deleteItem(`${RECOVERY_ACK_PREFIX}${vaultId}`);
       throw new Error('The saved Vault key is damaged. Restore it from your recovery kit before continuing.');
     }
   }
@@ -65,6 +71,12 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
     await storage.setItem(keyName(vaultId), encodeBase64Url(vmk));
   }
 
+  async function storeNewVmk(vaultId: string, vmk: Uint8Array): Promise<void> {
+    await writeVmk(vaultId, vmk);
+    // A prior confirmation may belong to a key that was removed or replaced.
+    await storage.deleteItem(`${RECOVERY_ACK_PREFIX}${vaultId}`);
+  }
+
   return {
     getOrCreateVaultMasterKey(vaultId) {
       return withVaultLock(vaultId, async () => {
@@ -72,7 +84,7 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
         if (existing) return existing;
         const generated = await randomBytes(VMK_BYTES);
         validateVmk(generated);
-        await writeVmk(vaultId, generated);
+        await storeNewVmk(vaultId, generated);
         return generated;
       });
     },
@@ -81,10 +93,21 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
     },
     importVaultMasterKey(vaultId, vmk) {
       validateVmk(vmk);
-      return withVaultLock(vaultId, () => writeVmk(vaultId, vmk));
+      return withVaultLock(vaultId, () => storeNewVmk(vaultId, vmk));
     },
     deleteVaultMasterKey(vaultId) {
-      return withVaultLock(vaultId, () => storage.deleteItem(keyName(vaultId)));
+      return withVaultLock(vaultId, async () => {
+        await storage.deleteItem(keyName(vaultId));
+        await storage.deleteItem(`${RECOVERY_ACK_PREFIX}${vaultId}`);
+      });
+    },
+    async recoveryAcknowledged(vaultId) {
+      validateVaultId(vaultId);
+      return (await storage.getItem(`${RECOVERY_ACK_PREFIX}${vaultId}`)) === 'confirmed';
+    },
+    async markRecoveryAcknowledged(vaultId) {
+      validateVaultId(vaultId);
+      await storage.setItem(`${RECOVERY_ACK_PREFIX}${vaultId}`, 'confirmed');
     },
   };
 }

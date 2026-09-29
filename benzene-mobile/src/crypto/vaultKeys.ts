@@ -17,3 +17,5 @@ export const loadVaultMasterKey = secureStore.loadVaultMasterKey;
 /** Restores the exact VMK from an imported recovery kit on this device. */
 export const importVaultMasterKey = secureStore.importVaultMasterKey;
 export const deleteVaultMasterKey = secureStore.deleteVaultMasterKey;
+export const isRecoveryKitAcknowledged = secureStore.recoveryAcknowledged;
+export const acknowledgeRecoveryKit = secureStore.markRecoveryAcknowledged;

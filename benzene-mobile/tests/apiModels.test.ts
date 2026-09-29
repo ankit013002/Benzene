@@ -40,6 +40,31 @@ test('native sign-in uses the native client contract', async () => {
   }
 });
 
+test('authenticated native JSON requests preserve POST metadata without changing the rotating session contract', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOrigin = process.env.EXPO_PUBLIC_GATEWAY_ORIGIN;
+  process.env.EXPO_PUBLIC_GATEWAY_ORIGIN = 'https://gateway.test';
+  let observed: { method?: string; authorization: string | null; contentType: string | null; body: string | null } | undefined;
+  globalThis.fetch = async (_input, init) => {
+    const headers = new Headers(init?.headers);
+    observed = { method: init?.method, authorization: headers.get('authorization'), contentType: headers.get('content-type'), body: typeof init?.body === 'string' ? init.body : null };
+    return new Response(JSON.stringify({ data: { accepted: true } }), { status: 201, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const result = await requestJson('/files/uploads/device/v1/encrypted', {
+      accessToken: 'native-access', refreshToken: 'native-refresh', accessTokenExpiresAt: Date.now() + 60_000,
+    }, async () => {}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ encryptedObject: { objectId: 'opaque' } }) });
+    assert.deepEqual(result, { data: { accepted: true } });
+    assert.deepEqual(observed, {
+      method: 'POST', authorization: 'Bearer native-access', contentType: 'application/json', body: JSON.stringify({ encryptedObject: { objectId: 'opaque' } }),
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOrigin === undefined) delete process.env.EXPO_PUBLIC_GATEWAY_ORIGIN;
+    else process.env.EXPO_PUBLIC_GATEWAY_ORIGIN = originalOrigin;
+  }
+});
+
 test('native sign-in explains the backend email-verification response', async () => {
   const originalFetch = globalThis.fetch;
   const originalOrigin = process.env.EXPO_PUBLIC_GATEWAY_ORIGIN;

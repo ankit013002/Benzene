@@ -17,6 +17,10 @@ export function gatewayOrigin(): string | null {
   }
 }
 
+export function allowsInsecureLanTransfers(): boolean {
+  return __DEV__ && process.env.EXPO_PUBLIC_ALLOW_INSECURE_LAN_TRANSFERS === 'true';
+}
+
 export function privacyPolicyUrl(): string | null {
   return configuredPublicUrl('EXPO_PUBLIC_PRIVACY_POLICY_URL');
 }

@@ -43,6 +43,8 @@ export default function SettingsScreen() {
       <View style={styles.divider} />
       <SettingRow title="Support" detail="Get help from the Benzene service owner." onPress={() => router.push('/support')} />
       <View style={styles.divider} />
+      <SettingRow title="Encryption recovery" detail="Create or restore this Vault's private key and recovery kit." onPress={() => router.push('./recovery')} />
+      <View style={styles.divider} />
       <SettingRow title="Delete account" detail="See account deletion options and availability." destructive onPress={() => router.push('/account-deletion')} />
     </Card>
     <Pressable onPress={() => void signOut()} disabled={busy} style={({ pressed }) => [styles.signOut, pressed && styles.pressed]}>
