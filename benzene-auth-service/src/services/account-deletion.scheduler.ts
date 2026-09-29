@@ -1,4 +1,5 @@
 import {
+  createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
   readAccountDeletionWorkerConfig,
 } from "./account-deletion-user-profile.adapter";
@@ -10,6 +11,7 @@ export function startAccountDeletionWorkerScheduler(
 ): () => void {
   const handlers = {
     user_profile: createUserProfileDeletionHandler(config.profile),
+    stored_objects: createStoredObjectsDeletionHandler(config.storedObjects),
     // Credential deletion and its receipt commit together inside PostgreSQL.
     auth_credential: async () => {},
   };
@@ -44,7 +46,7 @@ export function startAccountDeletionWorkerScheduler(
   const timer = setInterval(() => void run(), config.intervalSeconds * 1000);
   void run();
   console.info(
-    "Account deletion profile worker enabled",
+    "Account deletion cleanup worker enabled",
     JSON.stringify({ intervalSeconds: config.intervalSeconds }),
   );
 
@@ -58,7 +60,7 @@ export function startAccountDeletionWorkerScheduler(
 export function startAccountDeletionSchedulerFromEnvironment(): (() => void) | undefined {
   const config = readAccountDeletionWorkerConfig();
   if (!config) {
-    console.info("Account deletion worker disabled: service URL, secret, and interval are not configured");
+    console.info("Account deletion worker disabled: downstream URLs, secrets, and interval are not configured");
     return undefined;
   }
   return startAccountDeletionWorkerScheduler(config);

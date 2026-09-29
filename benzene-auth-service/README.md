@@ -120,11 +120,19 @@ device acknowledgement; offline devices keep that phase incomplete, and Vault
 and device metadata must remain available to deliver and acknowledge durable
 deletion assignments. An optional bounded, non-overlapping scheduler executes
 the `user_profile` phase through the user service's private idempotent
-endpoint. The next `stored_objects` phase has no handler, so an enabled worker
-blocks there and does not claim storage cleanup or completion. With no worker
-settings, requests stay at `awaiting_cleanup_operator`. The state machine
-cannot skip a missing phase adapter and status remains incomplete until every
-phase handler reports success.
+endpoint. The `stored_objects` phase calls the control plane's private adapter
+only after the account-deletion request is at least 15 minutes and 60 seconds
+old, allowing issued access JWTs to expire with a clock-skew margin. It then
+purges legacy version objects in bounded batches and releases the matching
+version references; device-backed bytes use the existing durable garbage-
+collection assignments and per-device acknowledgements. The phase stays
+`cleanup_pending` without an error during the token grace period because the
+phase is not claimable yet. It stays blocked after an actual handler failure,
+or while versions, references, or replica rows remain, so an offline device
+keeps account cleanup incomplete. With no worker settings, requests stay at
+`awaiting_cleanup_operator`. The state machine cannot skip a missing phase
+adapter and status remains incomplete until every phase handler reports
+success.
 `POST /api/auth/account-deletion/status`
 requires the same password and returns the persisted phase and a stable error
 code. Existing access JWTs remain usable until their 15-minute expiry because
@@ -133,13 +141,17 @@ tombstone prevents those tokens from recreating the profile, but other services
 may still honor the JWT until expiry. This is still not completed Apple or
 Google account deletion.
 
-Set all three values to opt in; the internal secret must match the user service
-and the interval is 5–3600 seconds. Partial configuration is rejected. In
-production the service URL must use HTTPS.
+Set all five values to opt in; each internal secret must match its target
+service and the interval is 5–3600 seconds. Partial configuration is rejected.
+In production both service URLs must use HTTPS. Configure the control plane's
+`ACCOUNT_DELETION_INTERNAL_SECRET` with the same value as
+`ACCOUNT_DELETION_CONTROL_PLANE_SECRET`.
 
 ```ini
 ACCOUNT_DELETION_USER_SERVICE_URL=http://localhost:8082/internal/account-deletion
 ACCOUNT_DELETION_USER_SERVICE_SECRET=<shared 32-byte-or-longer secret>
+ACCOUNT_DELETION_CONTROL_PLANE_URL=http://localhost:5000/internal/account-deletion
+ACCOUNT_DELETION_CONTROL_PLANE_SECRET=<different shared 32-byte-or-longer secret>
 ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS=30
 ```
 

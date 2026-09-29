@@ -1,57 +1,66 @@
 import type { AccountDeletionPhaseHandler } from "./account-deletion.worker";
+import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
 
 export interface UserProfileDeletionConfig {
   endpoint: URL;
   secret: string;
 }
 
+export interface StoredObjectsDeletionConfig {
+  endpoint: URL;
+  secret: string;
+}
+
+export interface AccountDeletionWorkerConfig {
+  profile: UserProfileDeletionConfig;
+  storedObjects: StoredObjectsDeletionConfig;
+  intervalSeconds: number;
+}
+
 export function readAccountDeletionWorkerConfig(
   env: NodeJS.ProcessEnv = process.env,
   nodeEnvironment = env.NODE_ENV,
-): { profile: UserProfileDeletionConfig; intervalSeconds: number } | undefined {
-  const endpointValue = env.ACCOUNT_DELETION_USER_SERVICE_URL?.trim();
-  const secret = env.ACCOUNT_DELETION_USER_SERVICE_SECRET;
+): AccountDeletionWorkerConfig | undefined {
+  const profileEndpointValue = env.ACCOUNT_DELETION_USER_SERVICE_URL?.trim();
+  const profileSecret = env.ACCOUNT_DELETION_USER_SERVICE_SECRET;
+  const storedObjectsEndpointValue = env.ACCOUNT_DELETION_CONTROL_PLANE_URL?.trim();
+  const storedObjectsSecret = env.ACCOUNT_DELETION_CONTROL_PLANE_SECRET;
   const intervalValue = env.ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS?.trim();
-  const configuredCount = [endpointValue, secret?.trim(), intervalValue].filter(
-    (value) => value !== undefined && value.length > 0,
-  ).length;
+  const configuredCount = [
+    profileEndpointValue,
+    profileSecret?.trim(),
+    storedObjectsEndpointValue,
+    storedObjectsSecret?.trim(),
+    intervalValue,
+  ].filter((value) => value !== undefined && value.length > 0).length;
 
   if (configuredCount === 0) return undefined;
-  if (configuredCount !== 3) {
+  if (configuredCount !== 5) {
     throw new Error(
-      "Account deletion worker URL, secret, and interval must be configured together",
+      "Account deletion user-service URL, secret, control-plane URL, secret, and interval must be configured together",
     );
   }
-  if (!endpointValue || !secret || !intervalValue) {
+  if (
+    !profileEndpointValue || !profileSecret || !storedObjectsEndpointValue ||
+    !storedObjectsSecret || !intervalValue
+  ) {
     throw new Error("Account deletion worker configuration is incomplete");
   }
 
-  const endpoint = new URL(endpointValue);
-  const normalizedPath = endpoint.pathname.replace(/\/$/, "");
-  if (
-    !["http:", "https:"].includes(endpoint.protocol) ||
-    endpoint.username.length > 0 ||
-    endpoint.password.length > 0 ||
-    endpoint.search.length > 0 ||
-    endpoint.hash.length > 0 ||
-    normalizedPath !== "/internal/account-deletion"
-  ) {
-    throw new Error(
-      "Account deletion user-service URL must target /internal/account-deletion without URL credentials or query parameters",
-    );
-  }
-
-  if (nodeEnvironment === "production" && endpoint.protocol !== "https:") {
-    throw new Error(
-      "Production account deletion requires an HTTPS user-service URL",
-    );
-  }
-
-  if (Buffer.byteLength(secret, "utf8") < 32) {
-    throw new Error(
-      "Account deletion user-service secret must contain at least 32 UTF-8 bytes",
-    );
-  }
+  const profileEndpoint = validateEndpoint(
+    profileEndpointValue,
+    "/internal/account-deletion",
+    "user-service",
+    nodeEnvironment,
+  );
+  const storedObjectsEndpoint = validateEndpoint(
+    storedObjectsEndpointValue,
+    "/internal/account-deletion",
+    "control-plane",
+    nodeEnvironment,
+  );
+  validateSecret(profileSecret, "user-service");
+  validateSecret(storedObjectsSecret, "control-plane");
 
   const intervalSeconds = Number(intervalValue);
   if (
@@ -64,7 +73,43 @@ export function readAccountDeletionWorkerConfig(
     );
   }
 
-  return { profile: { endpoint, secret }, intervalSeconds };
+  return {
+    profile: { endpoint: profileEndpoint, secret: profileSecret },
+    storedObjects: { endpoint: storedObjectsEndpoint, secret: storedObjectsSecret },
+    intervalSeconds,
+  };
+}
+
+function validateEndpoint(
+  endpointValue: string,
+  expectedPath: string,
+  service: string,
+  nodeEnvironment: string | undefined,
+): URL {
+  const endpoint = new URL(endpointValue);
+  const normalizedPath = endpoint.pathname.replace(/\/$/, "");
+  if (
+    !["http:", "https:"].includes(endpoint.protocol) ||
+    endpoint.username.length > 0 ||
+    endpoint.password.length > 0 ||
+    endpoint.search.length > 0 ||
+    endpoint.hash.length > 0 ||
+    normalizedPath !== expectedPath
+  ) {
+    throw new Error(
+      `Account deletion ${service} URL must target ${expectedPath} without URL credentials or query parameters`,
+    );
+  }
+  if (nodeEnvironment === "production" && endpoint.protocol !== "https:") {
+    throw new Error(`Production account deletion requires an HTTPS ${service} URL`);
+  }
+  return endpoint;
+}
+
+function validateSecret(secret: string, service: string): void {
+  if (Buffer.byteLength(secret, "utf8") < 32) {
+    throw new Error(`Account deletion ${service} secret must contain at least 32 UTF-8 bytes`);
+  }
 }
 
 export function createUserProfileDeletionHandler(
@@ -84,6 +129,49 @@ export function createUserProfileDeletionHandler(
     });
     if (!response.ok) {
       throw new Error(`User-profile deletion returned HTTP ${response.status}`);
+    }
+  };
+}
+
+export function createStoredObjectsDeletionHandler(
+  config: StoredObjectsDeletionConfig,
+  fetchImplementation: typeof fetch = fetch,
+): AccountDeletionPhaseHandler {
+  return async ({ credentialId, requestedAt }) => {
+    if (!Number.isFinite(requestedAt.getTime())) {
+      throw new Error("Stored-object cleanup requires a valid deletion request timestamp");
+    }
+    const safeAfter = new Date(
+      requestedAt.getTime() +
+        STORED_OBJECTS_DELETION_GRACE_SECONDS * 1000,
+    );
+    if (Date.now() < safeAfter.getTime()) {
+      throw new Error(
+        `Stored-object cleanup is deferred until ${safeAfter.toISOString()} so existing access tokens expire`,
+      );
+    }
+
+    const endpoint = new URL(
+      `${encodeURIComponent(credentialId)}/stored-objects`,
+      `${config.endpoint.href.replace(/\/$/, "")}/`,
+    );
+    const response = await fetchImplementation(endpoint, {
+      method: "POST",
+      headers: { "X-Benzene-Internal-Secret": config.secret },
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
+    if (!response.ok) {
+      throw new Error(`Stored-object deletion returned HTTP ${response.status}`);
+    }
+    const result: unknown = await response.json();
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("complete" in result) ||
+      result.complete !== true
+    ) {
+      throw new Error("Stored-object cleanup remains incomplete");
     }
   };
 }

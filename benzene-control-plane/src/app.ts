@@ -13,6 +13,7 @@ import agentRouter from "./modules/devices/agent.routes.js";
 import devicesRouter from "./modules/devices/devices.routes.js";
 import placementRouter from "./modules/placement/placement.routes.js";
 import vaultsRouter from "./modules/vaults/vaults.routes.js";
+import accountDeletionRouter from "./modules/accountDeletion/accountDeletion.routes.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -49,6 +50,8 @@ export function createApp(): express.Express {
   // Node agents: unauthenticated or device-signature authenticated. The
   // gateway routes this prefix without its session filter.
   app.use("/agent", agentRouter);
+  // Private auth-service adapter; guarded by its dedicated shared secret.
+  app.use("/internal/account-deletion", accountDeletionRouter);
 
   app.use("/vaults", vaultsRouter);
   app.use("/devices", devicesRouter);

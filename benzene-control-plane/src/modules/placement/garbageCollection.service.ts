@@ -93,6 +93,60 @@ export async function releaseObjectReferences(
 }
 
 /**
+ * Repairs the crash window where a Mongo version was removed before its
+ * conservative Postgres reference was released. Account cleanup may do this
+ * immediately after purging that owner's versions; unlike background leak
+ * pruning it verifies each exact owner/version/hash tuple before release.
+ */
+export async function releaseMissingObjectReferences(
+  ownerId: string,
+  limit = 50
+): Promise<number> {
+  const [vault] = await db()
+    .select({ id: vaults.id })
+    .from(vaults)
+    .where(eq(vaults.ownerId, ownerId))
+    .limit(1);
+  if (!vault) return 0;
+
+  const references = await db()
+    .select({ versionId: objectReferences.versionId, objectHash: objectReferences.objectHash })
+    .from(objectReferences)
+    .where(eq(objectReferences.vaultId, vault.id))
+    .orderBy(asc(objectReferences.createdAt))
+    .limit(limit);
+
+  let released = 0;
+  for (const reference of references) {
+    const exactVersionExists = () =>
+      FileVersionModel.exists({
+        _id: reference.versionId,
+        ownerId,
+        objectHash: reference.objectHash,
+      });
+    if (await exactVersionExists()) continue;
+
+    const didRelease = await db().transaction(async (tx) => {
+      await lockObject(tx, vault.id, reference.objectHash);
+      if (await exactVersionExists()) return false;
+      const removed = await tx
+        .delete(objectReferences)
+        .where(
+          and(
+            eq(objectReferences.vaultId, vault.id),
+            eq(objectReferences.versionId, reference.versionId),
+            eq(objectReferences.objectHash, reference.objectHash)
+          )
+        )
+        .returning({ versionId: objectReferences.versionId });
+      return removed.length > 0;
+    });
+    if (didRelease) released += 1;
+  }
+  return released;
+}
+
+/**
  * A crash after Mongo purge but before reference release leaks capacity rather
  * than deleting data. This bounded repair removes only old references whose
  * exact version still does not exist.

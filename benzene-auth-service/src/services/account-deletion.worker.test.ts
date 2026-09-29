@@ -21,6 +21,7 @@ import {
 const claim = {
   requestId: "request-1",
   credentialId: "credential-1",
+  requestedAt: new Date("2026-09-29T12:00:00.000Z"),
   phase: "user_profile" as const,
   leaseToken: "lease-1",
   attempt: 1,
@@ -86,6 +87,7 @@ describe("account deletion phase worker", () => {
     expect(handler).toHaveBeenCalledWith({
       requestId: claim.requestId,
       credentialId: claim.credentialId,
+      requestedAt: claim.requestedAt,
       phase: claim.phase,
       attempt: claim.attempt,
     });
@@ -127,6 +129,36 @@ describe("account deletion phase worker", () => {
     expect(blockAccountDeletionPhase).toHaveBeenCalledWith(
       { ...claim, phase: "stored_objects", attempt: 2 },
       "phase_handler_unavailable",
+    );
+  });
+
+  it("fails closed if the stored-object handler is invoked before token expiry", async () => {
+    vi.mocked(claimNextAccountDeletionPhase).mockResolvedValue({
+      ...claim,
+      phase: "stored_objects",
+    });
+    const deferred = vi.fn().mockRejectedValue(
+      new Error("Stored-object cleanup is deferred until token expiry"),
+    );
+
+    await expect(
+      runNextAccountDeletionPhase({ stored_objects: deferred }),
+    ).resolves.toEqual({
+      outcome: "blocked",
+      requestId: claim.requestId,
+      phase: "stored_objects",
+    });
+    expect(deferred).toHaveBeenCalledWith({
+      requestId: claim.requestId,
+      credentialId: claim.credentialId,
+      requestedAt: claim.requestedAt,
+      phase: "stored_objects",
+      attempt: claim.attempt,
+    });
+    expect(completeAccountDeletionPhase).not.toHaveBeenCalled();
+    expect(blockAccountDeletionPhase).toHaveBeenCalledWith(
+      { ...claim, phase: "stored_objects" },
+      "phase_execution_failed",
     );
   });
 });

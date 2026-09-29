@@ -1,0 +1,1 @@
+export const ACCESS_TOKEN_LIFETIME_SECONDS = 15 * 60;

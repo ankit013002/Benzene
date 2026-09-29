@@ -41,6 +41,15 @@ Once no live or legacy MongoDB version references an object, the control plane
 issues durable, exact per-device garbage-collection assignments and retains
 replica metadata until each agent acknowledges its idempotent local deletion.
 
+The private `POST /internal/account-deletion/:ownerId/stored-objects` adapter
+uses that same purge path in batches of 50 file versions. It returns
+`complete: true` only when the owner's Mongo versions, conservative object
+references, and Vault replica rows are all gone. Device bytes are never removed
+by this endpoint; offline devices keep the auth-service phase incomplete until
+they receive and acknowledge their durable GC assignments. Configure
+`ACCOUNT_DELETION_INTERNAL_SECRET` only when the auth service is enabled, and
+share it with that service's `ACCOUNT_DELETION_CONTROL_PLANE_SECRET` setting.
+
 After protection is satisfied, the control plane may admit one whole-file
 rebalance per Vault cooldown. It selects an online target that reduces
 proportional usage skew, copies and verifies the replacement before marking the

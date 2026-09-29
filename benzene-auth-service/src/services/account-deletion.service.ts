@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import pool from "../db";
+import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
 
 export type AccountDeletionPhase =
   | "awaiting_cleanup_operator"
@@ -40,6 +41,7 @@ export type AccountDeletionCleanupPhase =
 export interface ClaimedAccountDeletionPhase {
   requestId: string;
   credentialId: string;
+  requestedAt: Date;
   phase: AccountDeletionCleanupPhase;
   leaseToken: string;
   attempt: number;
@@ -228,23 +230,28 @@ export async function claimNextAccountDeletionPhase(
     const candidate = await client.query<{
       id: string;
       credential_id: string;
+      requested_at: Date;
       current_phase: AccountDeletionPhase;
       attempt_count: number;
     }>(
       `
-        SELECT id, credential_id, current_phase, attempt_count
+        SELECT id, credential_id, requested_at, current_phase, attempt_count
         FROM account_deletion_requests
         WHERE status IN ('cleanup_pending', 'blocked')
           AND credential_id IS NOT NULL
           AND (lease_expires_at IS NULL OR lease_expires_at <= now())
           AND (retry_after IS NULL OR retry_after <= now())
           AND current_phase <> 'complete'
+          AND (
+            current_phase <> 'stored_objects'
+            OR requested_at + ($2::int * interval '1 second') <= now()
+          )
           AND ($1::uuid IS NULL OR id = $1)
         ORDER BY requested_at, id
         FOR UPDATE SKIP LOCKED
         LIMIT 1
       `,
-      [requestId ?? null],
+      [requestId ?? null, STORED_OBJECTS_DELETION_GRACE_SECONDS],
     );
     const request = candidate.rows[0];
     if (!request?.credential_id) {
@@ -282,6 +289,7 @@ export async function claimNextAccountDeletionPhase(
     return {
       requestId: request.id,
       credentialId: request.credential_id,
+      requestedAt: request.requested_at,
       phase: phase as AccountDeletionCleanupPhase,
       leaseToken,
       attempt: Number(claimed.rows[0]?.attempt_count ?? request.attempt_count + 1),

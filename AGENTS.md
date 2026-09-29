@@ -724,8 +724,9 @@ the standard to match.
   remain unfinished.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
-  handlers block and retry instead of reporting completion; the production
-  scheduler and profile/storage/device/billing/backup handlers are not wired.
+  handlers block and retry instead of reporting completion. The opt-in
+  scheduler now runs the profile and stored-object phases; device-data,
+  vault-metadata, billing, and backup/log handlers remain unwired.
 - **Uploads route to devices end to end**, with downloads reading back
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct

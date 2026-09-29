@@ -13,6 +13,10 @@ describe("account deletion scheduler", () => {
         endpoint: new URL("http://user-service:8082/internal/account-deletion"),
         secret: "shared-test-secret-with-at-least-32-utf8-bytes",
       },
+      storedObjects: {
+        endpoint: new URL("http://control-plane:5000/internal/account-deletion"),
+        secret: "another-shared-secret-with-at-least-32-utf8-bytes",
+      },
       intervalSeconds: 5,
     };
     let releaseCurrentBatch: (() => void) | undefined;

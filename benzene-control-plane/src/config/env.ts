@@ -45,6 +45,8 @@ export interface AppConfig {
    * configured one still serves everything else rather than failing to boot.
    */
   transferSigningKey: string | undefined;
+  /** Shared secret for the private auth-service account-deletion adapter. */
+  accountDeletionInternalSecret: string | undefined;
   /** How long a transfer grant stays usable. */
   transferGrantTtlSeconds: number;
   s3: {
@@ -105,6 +107,13 @@ function resolveDriver(): StorageDriverName {
 
 export function loadConfig(): AppConfig {
   const storageDriver = resolveDriver();
+  const accountDeletionInternalSecret = optional("ACCOUNT_DELETION_INTERNAL_SECRET");
+  if (
+    accountDeletionInternalSecret !== undefined &&
+    Buffer.byteLength(accountDeletionInternalSecret, "utf8") < 32
+  ) {
+    throw new Error("ACCOUNT_DELETION_INTERNAL_SECRET must contain at least 32 UTF-8 bytes");
+  }
   const deviceOfflineAfterSeconds = intFromEnv("DEVICE_OFFLINE_AFTER_SECONDS", 120);
   const deviceExtendedOfflineAfterSeconds = intFromEnv(
     "DEVICE_EXTENDED_OFFLINE_AFTER_SECONDS",
@@ -161,6 +170,7 @@ export function loadConfig(): AppConfig {
       10
     ),
     transferSigningKey: optional("TRANSFER_SIGNING_KEY"),
+    accountDeletionInternalSecret,
     transferGrantTtlSeconds: intFromEnv("TRANSFER_GRANT_TTL_SECONDS", 300),
     storageDriver,
     maxUploadBytes: intFromEnv("MAX_UPLOAD_BYTES", 5 * 1024 * 1024 * 1024),

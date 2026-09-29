@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
 import {
+  createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
   readAccountDeletionWorkerConfig,
 } from "./account-deletion-user-profile.adapter";
@@ -9,6 +11,10 @@ const validEnvironment = {
     "http://user-service:8082/internal/account-deletion",
   ACCOUNT_DELETION_USER_SERVICE_SECRET:
     "shared-test-secret-with-at-least-32-utf8-bytes",
+  ACCOUNT_DELETION_CONTROL_PLANE_URL:
+    "http://control-plane:5000/internal/account-deletion",
+  ACCOUNT_DELETION_CONTROL_PLANE_SECRET:
+    "another-shared-secret-with-at-least-32-utf8-bytes",
   ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS: "30",
 } as NodeJS.ProcessEnv;
 
@@ -45,12 +51,15 @@ describe("account deletion user-profile adapter configuration", () => {
         ...validEnvironment,
         ACCOUNT_DELETION_USER_SERVICE_URL:
           "https://user-service.internal/internal/account-deletion",
+        ACCOUNT_DELETION_CONTROL_PLANE_URL:
+          "https://control-plane.internal/internal/account-deletion",
       },
       "production",
     );
 
     expect(config?.intervalSeconds).toBe(30);
     expect(config?.profile.endpoint.pathname).toBe("/internal/account-deletion");
+    expect(config?.storedObjects.endpoint.pathname).toBe("/internal/account-deletion");
   });
 });
 
@@ -68,6 +77,7 @@ describe("account deletion user-profile adapter", () => {
     await handler({
       requestId: "request-1",
       credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+      requestedAt: new Date(),
       phase: "user_profile",
       attempt: 1,
     });
@@ -101,9 +111,84 @@ describe("account deletion user-profile adapter", () => {
       handler({
         requestId: "request-1",
         credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(),
         phase: "user_profile",
         attempt: 1,
       }),
     ).rejects.toThrow("HTTP 503");
+  });
+
+  it("uses the control-plane adapter and only accepts a completed purge receipt", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ complete: true }), { status: 200 }),
+    );
+    const config = readAccountDeletionWorkerConfig(validEnvironment, "development");
+    if (!config) throw new Error("Expected explicit adapter config");
+    const handler = createStoredObjectsDeletionHandler(
+      config.storedObjects,
+      fetchImplementation,
+    );
+
+    await handler({
+      requestId: "request-1",
+      credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+      requestedAt: new Date(
+        Date.now() - (STORED_OBJECTS_DELETION_GRACE_SECONDS + 1) * 1000,
+      ),
+      phase: "stored_objects",
+      attempt: 2,
+    });
+
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      new URL(
+        "http://control-plane:5000/internal/account-deletion/7e1c77ad-56a0-483f-8eba-52a4f50bf2a1/stored-objects",
+      ),
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "X-Benzene-Internal-Secret": validEnvironment.ACCOUNT_DELETION_CONTROL_PLANE_SECRET,
+        },
+        redirect: "error",
+      }),
+    );
+
+    const incomplete = createStoredObjectsDeletionHandler(
+      config.storedObjects,
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ complete: false }), { status: 200 }),
+      ),
+    );
+    await expect(
+      incomplete({
+        requestId: "request-1",
+        credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(
+          Date.now() - (STORED_OBJECTS_DELETION_GRACE_SECONDS + 1) * 1000,
+        ),
+        phase: "stored_objects",
+        attempt: 3,
+      }),
+    ).rejects.toThrow("remains incomplete");
+  });
+
+  it("defers stored-object cleanup until existing access tokens and clock margin expire", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>();
+    const config = readAccountDeletionWorkerConfig(validEnvironment, "development");
+    if (!config) throw new Error("Expected explicit adapter config");
+    const handler = createStoredObjectsDeletionHandler(
+      config.storedObjects,
+      fetchImplementation,
+    );
+
+    await expect(
+      handler({
+        requestId: "request-1",
+        credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(),
+        phase: "stored_objects",
+        attempt: 1,
+      }),
+    ).rejects.toThrow("so existing access tokens expire");
+    expect(fetchImplementation).not.toHaveBeenCalled();
   });
 });

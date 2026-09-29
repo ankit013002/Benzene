@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import bcrypt from "bcrypt";
 import { randomUUID } from "node:crypto";
+import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
 import { hashToken } from "../lib/tokens";
 
 const databaseUrl = process.env.AUTH_TEST_DATABASE_URL?.trim();
@@ -220,6 +221,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     expect(claim).toMatchObject({
       requestId: result.request.id,
       credentialId: account.id,
+      requestedAt: result.request.requested_at,
       phase: "user_profile",
       attempt: 1,
     });
@@ -269,6 +271,53 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     });
   });
 
+  it("leaves stored-object cleanup pending until the persisted token grace has elapsed", async () => {
+    const account = await createCredential();
+    const result = await requestAccountDeletion({
+      email: account.email,
+      password,
+      idempotencyKey: "stored-object-grace-gate-key",
+    });
+    createdDeletionRequestIds.push(result.request.id);
+
+    await pool.query(
+      `UPDATE account_deletion_requests
+       SET current_phase = 'stored_objects', status = 'cleanup_pending',
+           requested_at = now(), retry_after = NULL, last_error_code = NULL
+       WHERE id = $1`,
+      [result.request.id],
+    );
+
+    const { claimNextAccountDeletionPhase } = await import("./account-deletion.service");
+    await expect(claimNextAccountDeletionPhase(result.request.id)).resolves.toBeNull();
+
+    const waiting = await pool.query(
+      `SELECT status, current_phase, last_error_code, lease_token
+       FROM account_deletion_requests WHERE id = $1`,
+      [result.request.id],
+    );
+    expect(waiting.rows[0]).toMatchObject({
+      status: "cleanup_pending",
+      current_phase: "stored_objects",
+      last_error_code: null,
+      lease_token: null,
+    });
+
+    await pool.query(
+      `UPDATE account_deletion_requests
+       SET requested_at = now() - (($2::int + 1) * interval '1 second')
+       WHERE id = $1`,
+      [result.request.id, STORED_OBJECTS_DELETION_GRACE_SECONDS],
+    );
+    const eligible = await claimNextAccountDeletionPhase(result.request.id);
+    expect(eligible).toMatchObject({
+      requestId: result.request.id,
+      credentialId: account.id,
+      phase: "stored_objects",
+      requestedAt: expect.any(Date),
+    });
+  });
+
   it("cannot report completion before the terminal credential-erasure phase", async () => {
     const account = await createCredential();
     const result = await requestAccountDeletion({
@@ -297,6 +346,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     const next = await completeAccountDeletionPhase({
       requestId: result.request.id,
       credentialId: account.id,
+      requestedAt: result.request.requested_at,
       phase: "backups_and_logs",
       leaseToken,
       attempt: 1,
@@ -344,6 +394,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
       completeAccountDeletionPhase({
         requestId: result.request.id,
         credentialId: account.id,
+        requestedAt: result.request.requested_at,
         phase: "auth_credential",
         leaseToken,
         attempt: 1,
@@ -423,6 +474,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     const claim = {
       requestId: result.request.id,
       credentialId: account.id,
+      requestedAt: result.request.requested_at,
       phase: "auth_credential" as const,
       leaseToken,
       attempt: 1,

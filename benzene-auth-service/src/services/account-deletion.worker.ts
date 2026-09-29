@@ -7,7 +7,10 @@ import {
 } from "./account-deletion.service";
 
 export type AccountDeletionPhaseHandler = (
-  context: Pick<ClaimedAccountDeletionPhase, "requestId" | "credentialId" | "phase" | "attempt">,
+  context: Pick<
+    ClaimedAccountDeletionPhase,
+    "requestId" | "credentialId" | "requestedAt" | "phase" | "attempt"
+  >,
 ) => Promise<void>;
 
 export type AccountDeletionPhaseHandlers = Partial<
@@ -44,6 +47,7 @@ export async function runNextAccountDeletionPhase(
     await handler({
       requestId: claim.requestId,
       credentialId: claim.credentialId,
+      requestedAt: claim.requestedAt,
       phase: claim.phase,
       attempt: claim.attempt,
     });

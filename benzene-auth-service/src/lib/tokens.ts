@@ -1,5 +1,8 @@
 import jwt, { JwtPayload } from "jsonwebtoken";
 import crypto from "crypto";
+import { ACCESS_TOKEN_LIFETIME_SECONDS } from "./token.constants";
+
+export { ACCESS_TOKEN_LIFETIME_SECONDS } from "./token.constants";
 
 /**
  * Utility functions for token generation and hashing. This includes functions to sign JWT access tokens, create opaque refresh tokens, and hash tokens for secure storage. The signing secret is derived from the AUTH_SECRET environment variable, which can be a hex string or a UTF-8 string. The access tokens are signed with the HS256 algorithm and have a short expiration time for security.
@@ -15,8 +18,6 @@ const SIGNING_SECRET = (() => {
     ? Buffer.from(RAW, "hex")
     : Buffer.from(RAW, "utf8");
 })();
-
-export const ACCESS_TOKEN_LIFETIME_SECONDS = 15 * 60;
 
 /**
  * Signs a JWT access token with the provided credential ID and email.
