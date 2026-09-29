@@ -58,6 +58,38 @@ this is not completed erasure. Store review must wait until a complete deletion
 path and the publisher's real privacy, terms and support destinations are
 available.
 
+## Local key and encrypted-object foundation
+
+The app includes the shared `benzene-encrypted-object` v1 format. It uses
+Noble AES-256-GCM, HKDF-SHA-256 and SHA-256 primitives, and Expo's native
+cryptographic random source. The mobile implementation produces the exact
+bytes in `contracts/encrypted-object-v1/vectors.json`. Raw ciphertext and
+compact metadata are distinct values; the caller must send ciphertext directly
+to a storage device and send only metadata to the control plane.
+
+`getOrCreateVaultMasterKey(vaultId)` creates a random 32-byte Vault Master Key
+and stores it through Expo SecureStore with device-only, unlocked access.
+`exportVaultRecoveryKit` creates a portable JSON kit encrypted under a
+passphrase with PBKDF2-HMAC-SHA-256 (600,000 iterations) and AES-256-GCM.
+`importRecoveryKit` authenticates and returns the original VMK, which the caller
+must then write to SecureStore with `importVaultMasterKey`. The kit is a bearer
+secret: keep it offline, use a unique high-entropy passphrase, and do not send
+it to Benzene. A short or reused passphrase can be guessed offline if the kit
+is stolen. Losing both the kit and every device holding the VMK permanently
+loses access to encrypted files. Resetting the account password does not restore
+or change the VMK.
+
+These are cryptographic and local-key foundations, not an end-to-end encrypted
+Vault journey. The mobile upload/download UI does not yet use them, no recovery
+kit save/share/import screens exist, and there is no trusted-device recovery or
+key rotation workflow. The format buffers each whole file in memory. The
+installed Noble packages are from an independently audited project; the public
+upstream audit report covers an earlier release, so it does not certify these
+exact pinned versions or Benzene's integration. This code needs mobile platform
+review and representative-file testing before production use. JavaScript memory
+is managed by the runtime, so clearing temporary byte arrays is best effort and
+cannot guarantee that every copy of a key has been erased from process memory.
+
 ## Configuration ownership
 
 `EXPO_PUBLIC_GATEWAY_ORIGIN`, `EXPO_PUBLIC_PRIVACY_POLICY_URL`,

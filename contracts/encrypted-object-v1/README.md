@@ -1,9 +1,11 @@
 # Benzene encrypted object contract, version 1
 
-This is an executable cryptographic format foundation. The control plane now
-has an additive metadata and placement boundary for this format, but no shipped
-client encrypts or decrypts files through it yet. This is not evidence that
-encryption is live or that Benzene is ready for real user data.
+This is an executable cryptographic format foundation. The control plane has
+an additive metadata and placement boundary, and the native mobile client has
+local encryption/decryption and VMK/recovery-kit primitives that pass the
+shared vectors. No shipped upload/download journey uses them end to end. This
+is not evidence that encryption is live or that Benzene is ready for real user
+data.
 
 ## Format
 
@@ -85,14 +87,16 @@ modified fields, malformed encodings and truncation fail closed.
 
 ## Key lifecycle and scope
 
-The VMK is an input to this primitive, not a password-derived key. The intended
-product direction is a privacy-first recovery kit plus trusted-device recovery:
-the recovery kit and trusted devices may hold VMK-encrypted material; the
-server must not hold a plaintext VMK. A password reset alone therefore cannot
-recover Vault contents. This repo contract does not yet implement VMK creation,
-recovery-kit encoding, trusted-device enrollment/rotation/revocation, or key
-backup. Those flows require their own review and tests before callers persist
-encrypted data.
+The VMK is an input to this primitive, not a password-derived key. The mobile
+foundation generates a random 32-byte VMK, persists it in device-only OS secure
+storage, and can export/import a passphrase-encrypted recovery-kit JSON format.
+The server must not hold a plaintext VMK. A password reset alone therefore
+cannot recover Vault contents. Trusted-device enrollment/rotation/revocation,
+recovery-kit user screens and key backup policy are not implemented. The
+recovery-kit passphrase can be guessed offline if the kit is stolen and the
+passphrase is weak; losing both the kit and every key-holding device means
+permanent data loss. These foundations still need product/security review
+before callers persist encrypted data.
 
 This format buffers complete files in memory and does not support streaming or
 chunk manifests. The compact JSON metadata contains no file bytes; the raw
@@ -127,12 +131,13 @@ The control plane checks the metadata shape, Vault ID and size relationship. It
 does not prove that the metadata decrypts to `objectId`; that proof belongs to
 a client holding the VMK. A signed possession report proves only that a device
 stores bytes matching `storageHash`. Existing web and node clients still use
-the plaintext upload flow. VMK creation/recovery, cryptographic client
-integration, encrypted download/decrypt, old plaintext migration and end-to-end
-security testing remain unimplemented.
+the plaintext upload flow. The mobile crypto module has deterministic vector
+coverage, but mobile upload/download, recovery-kit screens, trusted-device
+recovery, old plaintext migration and end-to-end security testing remain
+unimplemented.
 
 `vectors.json` is a deterministic conformance fixture. Its fixed keys/nonces
 are public test data and must never be used for real objects. Node's WebCrypto
-implementation is executable here; React Native clients must implement the
-same bytes, strings, AAD, HKDF parameters, nonce and tag semantics and pass the
-same vector before they exchange objects.
+implementation and the Expo mobile implementation both pass the same vector.
+Any other client must match the bytes, strings, AAD, HKDF parameters, nonce and
+tag semantics before exchanging objects.

@@ -545,8 +545,8 @@ Current counts: control plane **380**, agent **139**, auth **98** total
 (**90** run without PostgreSQL; **8** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The mobile
-client has **10 tests**, including two dependency-override compatibility
-checks. Local iOS, Android and web JavaScript exports pass; no signed native
+client has **16 tests**, including six crypto/key-lifecycle and two
+dependency-override compatibility checks. Local iOS, Android and web JavaScript exports pass; no signed native
 build has been verified. The core
 cross-package smoke has **68 checks**; the
 three-device Protected repair and rebalance smoke has **50 checks**.
@@ -715,9 +715,11 @@ the standard to match.
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - Native mobile foundation: secure token storage, native bearer-session
-  integration, Vault/file/device summaries, settings and an account-deletion
-  request screen. File transfers and complete account/Vault erasure remain
-  unfinished.
+  integration, Vault/file/device summaries, settings, an account-deletion
+  request screen, vector-compatible local encryption, device-only VMK storage
+  and a passphrase-encrypted recovery-kit primitive. Encrypted file transfers,
+  recovery screens, trusted-device recovery and complete account/Vault erasure
+  remain unfinished.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion; the production

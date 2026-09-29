@@ -92,9 +92,10 @@ repository-wide zero.
   The same acceptance covers reset requests, reset completion, one-shot token
   rejection, old-password rejection and new-password login.
 - Native mobile foundation: secure token storage, native bearer-session wiring,
-  Vault/file/device summaries, settings and account-deletion request screens.
-  It depends on the native auth contract; it does not yet transfer files or
-  complete account/Vault erasure.
+  Vault/file/device summaries, settings and account-deletion request screens,
+  plus vector-compatible local encryption, device-only VMK storage and an
+  encrypted recovery-kit primitive. It does not yet transfer encrypted files,
+  expose recovery screens or complete account/Vault erasure.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion; the production
@@ -490,8 +491,8 @@ Verified counts: control plane **380** tests, agent **139**, auth **98** total
 (**90** run without PostgreSQL; **8** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
 assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
-checks**. The frontend suite has **18 tests** total. The mobile client has **10
-tests**, including two dependency-override compatibility checks; local iOS,
+checks**. The frontend suite has **18 tests** total. The mobile client has **16
+tests**, including six crypto/key-lifecycle and two dependency-override checks; local iOS,
 Android and web JavaScript exports pass. No signed native build has been
 verified.
 The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
