@@ -481,7 +481,7 @@ through the gateway and Next bridge, persisted default profile/quota fields,
 Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
 assertions and was green in CI run `34768007763` at commit `090c7eb`.
 
-Verified counts: control plane **372** tests, agent **127**, auth **92** total
+Verified counts: control plane **380** tests, agent **139**, auth **92** total
 (**85** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
 helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
 assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
@@ -494,8 +494,8 @@ assertions; its earlier 60-assertion version was green in CI run `34788300450`.
 Default Turbopack and
 Webpack production builds pass.
 
-CI run `36468270582` is fully green and verifies the current control-plane and
-node-agent counts, both production builds, five metadata-backup safeguard
+CI run `36507320295` is fully green and verifies the current **380/380**
+control-plane and **139/139** node-agent counts, both production builds, five metadata-backup safeguard
 tests, migration drift, protocol vectors, the 68-check core smoke and the
 50-check protection/rebalance smoke.
 

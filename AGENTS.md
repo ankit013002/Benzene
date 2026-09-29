@@ -540,7 +540,7 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **372**, agent **127**, auth **92** total
+Current counts: control plane **380**, agent **139**, auth **92** total
 (**85** run without PostgreSQL; **7** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
 transfer-helper **8** (five upload, three download), user-profile acceptance
 **12 `ok` assertions**. The frontend suite has **18 tests** total. The mobile
@@ -558,8 +558,8 @@ also caught and fixed CSS import ordering and a missing base selector.
 The separate user-profile acceptance has exactly **12 `ok` assertions** and was
 green in CI run `34768007763` at commit `090c7eb`.
 
-CI run `36468270582` is fully green and verifies exactly **372/372
-control-plane tests**, **127/127 node-agent tests**, both TypeScript production
+CI run `36507320295` is fully green and verifies exactly **380/380
+control-plane tests**, **139/139 node-agent tests**, both TypeScript production
 builds, the five metadata-backup safeguard tests, the **68-check** core smoke
 and the **50-check** Protected
 repair/rebalance smoke. Six real-database rebalancing regressions cover
