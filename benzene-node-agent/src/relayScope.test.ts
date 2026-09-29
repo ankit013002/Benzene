@@ -1,6 +1,7 @@
 import { sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { GRANT_TEST_PRIVATE_KEY, GRANT_TEST_PUBLIC_KEY } from "./grantVectors.js";
+import { RELAY_SCOPE_VECTOR } from "./relayScopeVectors.js";
 import {
   MAX_RELAY_OBJECT_BYTES,
   MAX_RELAY_TICKET_SECONDS,
@@ -42,6 +43,14 @@ function verify(scope: unknown = BASE_SCOPE) {
 }
 
 describe("relay scope contract", () => {
+  it("accepts the exact cross-package conformance vector", () => {
+    expect(verifyRelayScope({
+      token: RELAY_SCOPE_VECTOR.token,
+      controlPlanePublicKey: RELAY_SCOPE_VECTOR.publicKey,
+      now: RELAY_SCOPE_VECTOR.scope.exp - 60,
+    })).toEqual({ ok: true, scope: RELAY_SCOPE_VECTOR.scope });
+  });
+
   it("accepts a valid, short-lived scope", () => {
     expect(verify()).toEqual({ ok: true, scope: BASE_SCOPE });
   });

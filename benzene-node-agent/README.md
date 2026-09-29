@@ -144,8 +144,15 @@ packages assert against it. The agent signs and the control plane verifies, so
 these vectors are what stop two separate deployables drifting apart on the wire
 format. CI diffs the two files.
 
+The relay authorization contract is pinned by `src/relayScopeVectors.ts`, which
+is byte-identical to the relay service's copy. Both verifiers assert against the
+same exact signed ticket. Its Ed25519 public key and signature use the existing
+throwaway test-key fixture only; no production key or private key belongs in
+these vectors.
+
 ## Verification
 
-The current node-agent suite has **127 tests**. The broader verified counts are
-control plane **372**, auth **78**, gateway **18**, **68 core smoke checks** and
-**50 protection/rebalance smoke checks**, all green in CI run `36468270582`.
+The current node-agent suite has **140 tests**, including the relay-ticket
+conformance vector. The last fully green broader baseline before the relay job
+was added is CI run `36508422483`; the repository guide records its exact
+cross-package counts.
