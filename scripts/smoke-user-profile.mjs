@@ -580,7 +580,7 @@ async function main() {
       );
       deletionRow = deletionProof.rows[0];
       if (
-        deletionRow?.status === "blocked" &&
+        deletionRow?.status === "cleanup_pending" &&
         deletionRow?.current_phase === "stored_objects" &&
         deletionRow?.profile_count === "0"
       ) {
@@ -639,11 +639,11 @@ async function main() {
       JSON.stringify(deletionRow),
     );
     check(
-      "deletion remains blocked before storage cleanup",
+      "deletion waits safely for token expiry before storage cleanup",
       statusResponse.status === 200 &&
-        deletionStatusBody?.status === "blocked" &&
+        deletionStatusBody?.status === "cleanup_pending" &&
         deletionStatusBody?.currentPhase === "stored_objects" &&
-        deletionStatusBody?.lastErrorCode === "phase_handler_unavailable" &&
+        deletionStatusBody?.lastErrorCode === null &&
         deletionStatusBody?.deletionComplete === false &&
         deletionRow?.completed_at === null,
       JSON.stringify({ status: deletionStatusBody, persisted: deletionRow }),
