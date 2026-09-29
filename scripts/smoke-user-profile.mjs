@@ -568,31 +568,40 @@ async function main() {
 
     let deletionStatusBody;
     let deletedProfileResponse;
+    let deletionRow;
     const deletionDeadline = Date.now() + REQUEST_TIMEOUT_MS;
     while (Date.now() < deletionDeadline) {
-      const statusResponse = await request(
-        `${gatewayUrl}/auth/account-deletion/status`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email: LOGIN_EMAIL, password: LOGIN_PASSWORD }),
-        },
+      const deletionProof = await pool.query(
+        `SELECT r.status, r.current_phase, r.completed_at, r.last_error_code,
+                (SELECT count(*) FROM users WHERE auth_sub = $2) AS profile_count
+         FROM account_deletion_requests r
+         WHERE r.id = $1`,
+        [deletionBody?.requestId, credentialId],
       );
-      deletionStatusBody = await jsonOrNull(statusResponse);
-      deletedProfileResponse = await request(`${gatewayUrl}/user/me`, {
-        headers: { cookie: cookies },
-      });
-      await deletedProfileResponse.body?.cancel();
+      deletionRow = deletionProof.rows[0];
       if (
-        statusResponse.status === 200 &&
-        deletionStatusBody?.status === "blocked" &&
-        deletionStatusBody?.currentPhase === "stored_objects" &&
-        deletedProfileResponse.status === 404
+        deletionRow?.status === "blocked" &&
+        deletionRow?.current_phase === "stored_objects" &&
+        deletionRow?.profile_count === "0"
       ) {
         break;
       }
       await sleep(250);
     }
+
+    deletedProfileResponse = await request(`${gatewayUrl}/user/me`, {
+      headers: { cookie: cookies },
+    });
+    await deletedProfileResponse.body?.cancel();
+    const statusResponse = await request(
+      `${gatewayUrl}/auth/account-deletion/status`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: LOGIN_EMAIL, password: LOGIN_PASSWORD }),
+      },
+    );
+    deletionStatusBody = await jsonOrNull(statusResponse);
 
     check(
       "real worker removed the user-service profile",
@@ -621,7 +630,7 @@ async function main() {
        WHERE r.id = $1`,
       [deletionBody?.requestId, credentialId],
     );
-    const deletionRow = deletionProof.rows[0];
+    deletionRow = deletionProof.rows[0];
     check(
       "profile removal leaves a durable recreation tombstone",
       deletionRow?.profile_count === "0" &&
@@ -631,7 +640,8 @@ async function main() {
     );
     check(
       "deletion remains blocked before storage cleanup",
-      deletionStatusBody?.status === "blocked" &&
+      statusResponse.status === 200 &&
+        deletionStatusBody?.status === "blocked" &&
         deletionStatusBody?.currentPhase === "stored_objects" &&
         deletionStatusBody?.lastErrorCode === "phase_handler_unavailable" &&
         deletionStatusBody?.deletionComplete === false &&
