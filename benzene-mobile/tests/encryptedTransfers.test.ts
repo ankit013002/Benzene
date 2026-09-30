@@ -19,7 +19,7 @@ test('encrypted upload sends only metadata through the bearer request and cipher
   const requests: { path: string; init?: RequestInit }[] = [];
   const transfers: { url: string; init?: RequestInit }[] = [];
   const result = await uploadEncryptedFile({
-    name: 'secret.txt', path: '', contentType: 'text/plain', plaintext, vaultId: fixture.vaultId,
+    name: 'secret.txt', path: 'Photos/2026/', contentType: 'text/plain', plaintext, vaultId: fixture.vaultId,
     encrypt: async () => ({ metadata: fixture.metadata, ciphertext }),
   }, {
     allowInsecureLanTransfers: false,
@@ -38,6 +38,7 @@ test('encrypted upload sends only metadata through the bearer request and cipher
   assert.equal(requests[0]?.path, '/files/uploads/device/v1/encrypted');
   const reservationBody = JSON.parse(String(requests[0]?.init?.body)) as Record<string, unknown>;
   assert.equal(reservationBody.name, 'secret.txt');
+  assert.equal(reservationBody.path, 'Photos/2026/');
   assert.deepEqual(reservationBody.encryptedObject, fixture.metadata);
   assert.equal('ciphertext' in reservationBody, false);
   assert.equal('plaintext' in reservationBody, false);
