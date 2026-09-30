@@ -13,8 +13,10 @@ slice operates on a development LAN. The native mobile app now has encrypted
 file upload and download flows: it encrypts before device storage, tries direct
 device transfers first, and can request an encrypted WSS relay fallback. The
 relay assignment and ticket path is wired across mobile, control plane and node
-agent, but the deployed relay and a live remote end-to-end journey have not
-been verified.
+agent. A local real-component acceptance now proves assignment, complementary
+tickets, opaque ciphertext streaming, mobile authentication/decryption and
+signed completion, but the deployed relay and a live remote end-to-end journey
+have not been verified.
 
 The commercial MVP still requires production remote/HTTPS access and a tested
 NAT/firewall path, a complete key lifecycle and recovery design, a desktop
@@ -180,6 +182,7 @@ psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migration
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/003_account_deletion_worker_leases.sql
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/004_account_deletion_credential_phase.sql
 psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/005_account_deletion_tombstones.sql
+psql -d benzene_auth -v ON_ERROR_STOP=1 -f benzene-auth-service/src/db/migrations/006_account_deletion_receipts.sql
 
 # One .env per service, from the committed templates
 for d in benzene-control-plane benzene-node-agent benzene-auth-service; do
@@ -511,8 +514,10 @@ vectors and updating every participating package in the same commit.
 - `scripts/metadata-backup.test.mjs` has five database-independent workflow
   tests covering maintenance confirmation, partial-archive cleanup, owner-only
   permissions, checksums before destructive commands and exact target naming.
-  A live isolated restore rehearsal is still required before calling metadata
-  recovery production-verified.
+  A separate CI workflow also creates isolated live PostgreSQL and MongoDB
+  fixtures, backs them up, mutates them destructively, restores the pair and
+  compares SHA-256 projections. This representative rehearsal is not a
+  production-sized disaster-recovery exercise.
 - Frontend transfer-helper tests use Node's built-in `node:test` and
   `node:assert` through `tsx`; eight deterministic tests (five upload and three
   download) cover reservation hashing, direct Protected PUTs and grants,
@@ -521,7 +526,10 @@ vectors and updating every participating package in the same commit.
 - Encrypted relay fallback has 15 focused tests: 11 runnable locally and four
   PostgreSQL integration cases skipped when the test database is unavailable.
   These cover relay ticket/scope behavior, assignment retries and database
-  coordination; they do not replace a deployed relay end-to-end test.
+  coordination. `scripts/smoke-relay-read.mts` adds an 11-check local vertical
+  acceptance across the real control plane, relay server, node object producer
+  and mobile receiver/decryptor. Its WebSocket downgrade is test-only, so it
+  does not replace a deployed public-WSS end-to-end test.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
   plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
   inventory recovery, upload to device, download back, authentication
@@ -569,19 +577,21 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-CI run `36606892325` is fully green at commit `a91cbde`. It verifies
-**398/398 control-plane tests**, **156/156 node-agent tests**, **119/119 auth
-tests**, **15/15 relay-service tests**, and **49 mobile checks** (44 TypeScript
-transfer/crypto tests plus five configuration checks). It also verifies
+CI run `36708847466` is fully green at commit `bbbff0a`. It verifies
+**402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
+tests**, **15/15 relay-service tests**, and **62 mobile checks** (46 TypeScript
+transfer/crypto tests plus 16 JavaScript/configuration checks). It also verifies
 typechecks and production builds, relay contract vectors, all three mobile
 JavaScript exports, five metadata-backup safeguards, the **68-check** core
 smoke, the **50-check** Protected repair/rebalance smoke, the **64-assertion**
 authenticated LAN acceptance and the **17-assertion** user-profile/account-
-deletion acceptance. The relay assignment integration and durable device-data
-deletion tests run against real PostgreSQL in that gate.
+deletion acceptance, plus the **11-check** real-component local relay vertical
+acceptance. The relay assignment integration and durable device-data deletion
+tests run against real PostgreSQL in that gate. Metadata restore rehearsal run
+`36707335396` is separately green at commit `3c2132c`.
 
 The frontend transfer-helper suite has **8 tests** and its full suite has
-**18**. No signed native build or live remote relay acceptance has been
+**20**. No signed native build or live remote relay acceptance has been
 verified. Default Turbopack and Webpack production builds passed in prior
 verification, and a live browser check verified that the landing page renders
 without an overlay and navigates to sign-in; that check also caught and fixed
@@ -726,8 +736,10 @@ the standard to match.
 - Offline metadata backup/restore tooling pairs PostgreSQL and MongoDB archives
   in one checksummed manifest, stages archives atomically, requires explicit
   maintenance and exact destructive-target confirmations, and locks backup
-  permissions. The workflow safeguards are tested, but no production-sized or
-  live-database restore rehearsal has been completed.
+  permissions. The workflow safeguards are tested, and an isolated live-
+  database rehearsal proves paired backup, destructive mutation, restore and
+  projection equality. No production-sized disaster-recovery rehearsal has
+  been completed.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -741,9 +753,13 @@ the standard to match.
   Vault key, upload ciphertext to granted devices, and download by direct
   holders with a bounded encrypted WSS relay fallback. It requires a
   passphrase-encrypted recovery kit before upload. This implementation has
-  deterministic tests, not a live remote relay acceptance; files are limited to
-  25 MiB, transfers buffer whole files, web file flows are disabled, and trusted
-  device recovery, key rotation and release-ready native builds remain open.
+  deterministic tests and an 11-check local real-component relay acceptance,
+  not a live remote relay acceptance; files are limited to 25 MiB, transfers
+  buffer whole files, web file flows are disabled, and trusted-device recovery,
+  key rotation and release-ready native builds remain open. Production/store
+  preflight rejects placeholder identifiers, missing public legal/support/
+  deletion URLs, absent EAS linkage and missing submission credentials. The
+  iOS required-reason API manifest and minimal Android permission set are pinned.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. Its optional
@@ -751,9 +767,12 @@ the standard to match.
   delayed stored-object cleanup through reference-safe garbage collection and
   device-data cleanup. The device-data phase starts the existing safe device
   drain/erase handshake and stays pending until each node supplies its signed
-  acknowledgement; offline devices keep the account pending. Vault-metadata,
-  billing, and backup/log handlers remain unwired, so full account deletion is
-  not complete.
+  acknowledgement; offline devices keep the account pending. Vault metadata is
+  deleted only after Mongo versions, PostgreSQL references/replicas, devices and
+  live relay assignments are gone. Billing and backup/log phases remain blocked
+  unless exact current-inventory no-managed-data attestations are configured.
+  The mobile client retains a device-only opaque receipt so it can verify final
+  completion after credential erasure.
 - The web app uploads and downloads directly on a development LAN. The separate
   mobile path uploads encrypted objects and reads them directly first, with
   control-plane-authorized relay fallback after direct reads fail.
@@ -798,9 +817,11 @@ the standard to match.
   rollout. **Do not entrust real user data yet.**
 - **Production remote access** — the control plane now creates bounded relay
   assignments for encrypted reads, node agents produce over WSS, and mobile
-  consumes the opaque ciphertext fallback after direct reads fail. Production
-  relay deployment/configuration, TLS/DNS and key operations, NAT behavior, and
-  a live remote client-to-device acceptance remain unverified.
+  consumes the opaque ciphertext fallback after direct reads fail. A local
+  vertical acceptance verifies the real control plane, relay, node producer and
+  mobile decryptor, but production relay deployment/configuration, TLS/DNS and
+  key operations, NAT behavior, and a live remote client-to-device acceptance
+  remain unverified.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -814,14 +835,18 @@ the standard to match.
 The architecture's earliest commercially testable MVP includes desktop, mobile
 and web clients, with optional cloud protection. The native mobile app now
 supports encrypted file transfers and its iOS, Android and web JavaScript
-bundles export successfully; this does not validate a signed native build or
-the complete Vault journey.
+bundles export successfully. Release preflight, privacy-manifest/permission
+guards, token-safe browser-to-app handoffs and a public account-deletion page
+are implemented; this does not validate a signed native build or the complete
+Vault journey.
 This branch is not yet that commercial MVP. A desktop client, signed and
 validated mobile builds, deployed and end-to-end verified remote relay access,
 complete key recovery/rotation and plaintext-object migration,
 filesystem mounts, cloud-protection policy and billing, chunking, sharing and
-search remain blockers. Store legal URLs and publisher/release configuration
-also need to be supplied. Availability, single-copy policy and key recovery
+search remain blockers. Store legal/deletion URLs, publisher/release
+configuration, App Store Connect/Play Console records, signing credentials and
+privacy/data-safety declarations also need to be supplied. Availability,
+single-copy policy and key recovery
 remain open product questions; this status does not resolve them.
 
 ### Known limits worth repeating

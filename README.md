@@ -100,9 +100,12 @@ repository-wide zero.
   account-deletion request screen. It encrypts whole files with a device-only
   Vault key, uploads ciphertext to granted devices, and downloads direct-first
   with a bounded encrypted WSS relay fallback. Upload requires a
-  passphrase-encrypted recovery kit. Transfers buffer whole files and are
-  limited to 25 MiB; web file flows are disabled. Key rotation, trusted-device
-  recovery, signed store builds and live remote acceptance remain unfinished.
+  passphrase-encrypted recovery kit. A local real-component acceptance now
+  proves relay assignment, ticket pairing, opaque ciphertext streaming, mobile
+  authentication/decryption and signed completion; public WSS deployment and
+  remote-network acceptance remain unverified. Transfers buffer whole files
+  and are limited to 25 MiB; web file flows are disabled. Key rotation,
+  trusted-device recovery and signed store builds remain unfinished.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. The optional
@@ -110,9 +113,12 @@ repository-wide zero.
   delayed stored-object cleanup through reference-safe garbage collection and
   device-data cleanup. Device cleanup starts the existing safe drain/erase
   handshake and remains pending until every device returns its signed
-  acknowledgement; offline devices keep deletion pending. Vault-metadata,
-  billing, and backup/log phases remain unwired, so full account deletion is
-  not complete.
+  acknowledgement; offline devices keep deletion pending. Vault metadata is
+  removed only after file versions, references, replicas, devices and live
+  relay work are gone. Billing and backup/log phases remain blocked unless an
+  operator supplies their exact current-inventory absence attestations. A
+  private device-only receipt lets the signed-out mobile client verify final
+  completion after its credential has been erased.
 - Vault creation and device enrollment with a pairing code and explicit user
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
@@ -152,7 +158,9 @@ repository-wide zero.
 - Offline metadata backup/restore tooling creates paired, checksummed
   PostgreSQL and MongoDB archives with owner-only permissions and requires
   explicit maintenance-window and destructive-target confirmation. The
-  safeguards are tested; a live production-sized restore rehearsal is not.
+  safeguards are tested, and CI performs an isolated live-database backup,
+  destructive mutation, paired restore and projection comparison. A
+  production-sized disaster-recovery exercise remains outstanding.
 - Coordinated whole-file drain and safe final device removal: capacity is
   preflighted, draining replicas leave protection counts, repair may copy from
   the draining source, and a signed, retry-safe node handshake waits for
@@ -227,11 +235,12 @@ repository-wide zero.
   plaintext-object migration are not complete. Do not entrust real user data
   before those paths are resolved and verified.
 - The mobile encrypted-read relay fallback is wired across the control plane,
-  node agent and client. It is not deployed or verified over a live remote
-  network; production WSS/TLS/DNS/key configuration and NAT behavior remain
-  unverified. Browser CORS works for the HTTP LAN development path and the
-  agent can terminate explicitly configured HTTPS, but that alone is not an
-  automatic remote-access solution.
+  node agent and client, and the 11-check local vertical acceptance exercises
+  the real services and mobile decryption. It is not deployed or verified over
+  a live remote network; production WSS/TLS/DNS/key configuration and NAT
+  behavior remain unverified. Browser CORS works for the HTTP LAN development
+  path and the agent can terminate explicitly configured HTTPS, but that alone
+  is not an automatic remote-access solution.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -250,8 +259,12 @@ repository-wide zero.
 The architecture's earliest commercially testable MVP includes desktop, mobile
 and web clients, with optional cloud protection. The native mobile app now
 supports encrypted file transfers and its iOS, Android and web JavaScript
-bundles export successfully; this does not validate a signed native build or
-the complete Vault journey.
+bundles export successfully. Production/store preflight now fails closed on
+placeholder identifiers, private or missing service/legal/deletion URLs,
+missing EAS linkage and absent submission credentials. Required-reason privacy
+APIs and minimal Android permissions are pinned, and a public deletion-
+information page describes the implemented lifecycle. None of this validates a
+signed native build or the complete Vault journey.
 This branch is not yet that commercial MVP. A desktop client, signed and
 validated mobile releases, deployed and end-to-end verified remote relay
 access, complete key recovery/rotation and plaintext-object migration,
@@ -510,18 +523,20 @@ Next anonymous redirect and gateway anonymous 401, then password-confirmed
 account deletion, real profile cleanup, recreation blocking and the storage
 cleanup grace period. It has exactly 17 `ok` assertions.
 
-CI run `36606892325` is fully green at commit `a91cbde`. It verifies
-**398/398 control-plane tests**, **156/156 node-agent tests**, **119/119 auth
-tests**, **15/15 relay-service tests**, and **49 mobile checks** (44 TypeScript
-transfer/crypto tests plus five configuration checks). It also verifies
+CI run `36708847466` is fully green at commit `bbbff0a`. It verifies
+**402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
+tests**, **15/15 relay-service tests**, and **62 mobile checks** (46 TypeScript
+transfer/crypto tests plus 16 JavaScript/configuration checks). It also verifies
 typechecks and production builds, relay contract vectors, all three mobile
 JavaScript exports, five metadata-backup safeguards, the **68-check** core
 smoke, the **50-check** protection/rebalance smoke, the **64-assertion**
-authenticated LAN acceptance and the **17-assertion** user-profile/account-
-deletion acceptance. The relay assignment integration and durable device-data
-deletion tests run against real PostgreSQL in that gate.
+authenticated LAN acceptance, the **17-assertion** user-profile/account-
+deletion acceptance and the **11-check** real-component local relay vertical
+acceptance. The relay assignment integration and durable device-data deletion
+tests run against real PostgreSQL in that gate. Metadata restore rehearsal run
+`36707335396` is separately green.
 
-The frontend transfer helpers have **8 tests** and its full suite has **18**.
+The frontend transfer helpers have **8 tests** and its full suite has **20**.
 The mobile suite and JavaScript exports do not establish signed native builds
 or a live remote relay journey. Default Turbopack and Webpack production builds
 passed in prior verification.
