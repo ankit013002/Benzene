@@ -10,6 +10,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
   let pool: typeof import("../db").default;
   let requestAccountDeletion: typeof import("./account-deletion.service").requestAccountDeletion;
   let getAccountDeletionStatus: typeof import("./account-deletion.service").getAccountDeletionStatus;
+  let getAccountDeletionStatusByReceipt: typeof import("./account-deletion.service").getAccountDeletionStatusByReceipt;
   let loginController: typeof import("../controller/login.controller").default;
   let createRefreshToken: typeof import("./refresh.service").createRefreshToken;
   const createdCredentialIds: string[] = [];
@@ -19,7 +20,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
   beforeAll(async () => {
     process.env.DATABASE_URL = databaseUrl;
     ({ default: pool } = await import("../db"));
-    ({ requestAccountDeletion, getAccountDeletionStatus } = await import(
+    ({ requestAccountDeletion, getAccountDeletionStatus, getAccountDeletionStatusByReceipt } = await import(
       "./account-deletion.service"
     ));
     ({ default: loginController } = await import(
@@ -96,6 +97,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     createdDeletionRequestIds.push(result.request.id);
 
     expect(result.created).toBe(true);
+    expect(result.receipt).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(result.request).toMatchObject({
       status: "cleanup_pending",
       current_phase: "awaiting_cleanup_operator",
@@ -137,6 +139,7 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     });
     expect(duplicate.created).toBe(false);
     expect(duplicate.request.id).toBe(result.request.id);
+    expect(duplicate.receipt).toBe(result.receipt);
 
     const status = await getAccountDeletionStatus({
       email: account.email,
@@ -144,6 +147,13 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     });
     expect(status.id).toBe(result.request.id);
     expect(status.completed_at).toBeNull();
+
+    const storedReceipt = await pool.query<{ receipt_hash: Buffer }>(
+      "SELECT receipt_hash FROM account_deletion_requests WHERE id = $1",
+      [result.request.id],
+    );
+    expect(storedReceipt.rows[0]?.receipt_hash).toBeInstanceOf(Buffer);
+    expect(storedReceipt.rows[0]?.receipt_hash.toString("base64url")).not.toBe(result.receipt);
   });
 
   it("does not create a request or revoke sessions when reauthentication fails", async () => {
@@ -400,6 +410,17 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
         attempt: 1,
       }),
     ).resolves.toBe("complete");
+
+    const receiptStatus = await getAccountDeletionStatusByReceipt({
+      requestId: result.request.id,
+      receipt: result.receipt,
+    });
+    expect(receiptStatus.status).toBe("completed");
+    expect(receiptStatus.completed_at).toBeInstanceOf(Date);
+    await expect(getAccountDeletionStatusByReceipt({
+      requestId: result.request.id,
+      receipt: `${result.receipt.slice(0, -1)}A`,
+    })).rejects.toMatchObject({ name: "InvalidDeletionRequestError" });
 
     const persisted = await pool.query(
       `SELECT r.status, r.current_phase, r.completed_at, r.credential_id,

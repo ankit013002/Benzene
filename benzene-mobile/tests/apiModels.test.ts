@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { clearRefreshCache, NativeAuthContractError, parseNativeTokens, requestJson, signIn } from '../src/api/client';
 import { formatBytes, isDeviceSummary, isVaultFile, isVaultSummary } from '../src/api/models';
-import { requestAccountDeletion } from '../src/api/nativeSession';
+import { readAccountDeletionStatusByReceipt, requestAccountDeletion } from '../src/api/nativeSession';
 
 test('native token responses require a complete rotating token pair and bounded expiry', () => {
   assert.deepEqual(parseNativeTokens({ accessToken: 'access', refreshToken: 'refresh', tokenType: 'Bearer', expiresInSeconds: 900 }, 1000), {
@@ -179,6 +179,7 @@ test('account-deletion request sends credentials and stable idempotency key over
     requestBody = JSON.parse(String(init?.body));
     return new Response(JSON.stringify({
       requestId: 'deletion-1',
+      receipt: 'a'.repeat(43),
       status: 'cleanup_pending',
       currentPhase: 'awaiting_cleanup_operator',
       requestedAt: '2026-09-28T12:00:00.000Z',
@@ -190,9 +191,45 @@ test('account-deletion request sends credentials and stable idempotency key over
   try {
     const result = await requestAccountDeletion('person@example.com', 'password', 'stable-idempotency-key');
     assert.equal(result.deletionComplete, false);
+    assert.equal(result.receipt, 'a'.repeat(43));
     assert.equal(result.downstreamCleanupStarted, false);
     assert.deepEqual(requestBody, {
       email: 'person@example.com', password: 'password', idempotencyKey: 'stable-idempotency-key',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalOrigin === undefined) delete process.env.EXPO_PUBLIC_GATEWAY_ORIGIN;
+    else process.env.EXPO_PUBLIC_GATEWAY_ORIGIN = originalOrigin;
+  }
+});
+
+test('signed-out deletion status lookup sends only its request ID and opaque receipt', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalOrigin = process.env.EXPO_PUBLIC_GATEWAY_ORIGIN;
+  let observed: { url: string; body: unknown } | undefined;
+  process.env.EXPO_PUBLIC_GATEWAY_ORIGIN = 'https://gateway.test';
+  globalThis.fetch = async (input, init) => {
+    observed = {
+      url: String(input),
+      body: JSON.parse(String(init?.body)),
+    };
+    return new Response(JSON.stringify({
+      requestId: 'deletion-1',
+      status: 'completed',
+      currentPhase: 'complete',
+      requestedAt: '2026-09-28T12:00:00.000Z',
+      updatedAt: '2026-09-28T12:10:00.000Z',
+      completedAt: '2026-09-28T12:10:00.000Z',
+      deletionComplete: true,
+      downstreamCleanupStarted: true,
+    }), { status: 200, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
+  };
+  try {
+    const result = await readAccountDeletionStatusByReceipt('deletion-1', 'a'.repeat(43));
+    assert.equal(result.deletionComplete, true);
+    assert.deepEqual(observed, {
+      url: 'https://gateway.test/auth/account-deletion/receipt-status',
+      body: { requestId: 'deletion-1', receipt: 'a'.repeat(43) },
     });
   } finally {
     globalThis.fetch = originalFetch;

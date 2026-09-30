@@ -4,6 +4,7 @@ import { isRecord } from './client';
 
 export type DeletionStatus = {
   requestId: string;
+  receipt?: string;
   status: string;
   currentPhase: string;
   requestedAt: string;
@@ -23,6 +24,7 @@ function parseDeletionStatus(payload: unknown): DeletionStatus {
   }
   return {
     requestId: payload.requestId,
+    ...(typeof payload.receipt === 'string' ? { receipt: payload.receipt } : {}),
     status: payload.status,
     currentPhase: payload.currentPhase,
     requestedAt: payload.requestedAt,
@@ -34,7 +36,7 @@ function parseDeletionStatus(payload: unknown): DeletionStatus {
   };
 }
 
-async function accountDeletionPost(path: string, body: Record<string, string>): Promise<DeletionStatus> {
+async function accountDeletionPost(path: string, body: Record<string, string>, requiresReceipt = false): Promise<DeletionStatus> {
   const origin = gatewayOrigin();
   if (!origin) throw new Error('Benzene connection is not configured.');
   let response: Response;
@@ -53,15 +55,23 @@ async function accountDeletionPost(path: string, body: Record<string, string>): 
     if (response.status === 429) throw new Error('Too many requests. Wait a moment and try again.');
     throw new Error('Benzene could not process this account-deletion request.');
   }
-  return parseDeletionStatus(await response.json());
+  const result = parseDeletionStatus(await response.json());
+  if (requiresReceipt && (!result.receipt || !/^[A-Za-z0-9_-]{43}$/.test(result.receipt))) {
+    throw new Error('The server did not return a valid deletion receipt.');
+  }
+  return result;
 }
 
 export function requestAccountDeletion(email: string, password: string, idempotencyKey: string): Promise<DeletionStatus> {
-  return accountDeletionPost('/auth/account-deletion', { email, password, idempotencyKey });
+  return accountDeletionPost('/auth/account-deletion', { email, password, idempotencyKey }, true);
 }
 
 export function readAccountDeletionStatus(email: string, password: string): Promise<DeletionStatus> {
   return accountDeletionPost('/auth/account-deletion/status', { email, password });
+}
+
+export function readAccountDeletionStatusByReceipt(requestId: string, receipt: string): Promise<DeletionStatus> {
+  return accountDeletionPost('/auth/account-deletion/receipt-status', { requestId, receipt });
 }
 
 export async function revokeNativeSession(tokens: TokenPair): Promise<void> {

@@ -85,19 +85,25 @@ on a loosely inferred user agent.
 Run the numbered SQL migrations against the Benzene auth PostgreSQL database
 before starting. Migrations 002 and 003 add the account-deletion ledger and
 retry-safe phase leases; migration 005 adds the minimal durable credential-
-deletion tombstone. A password-confirmed request blocks new sessions.
+deletion tombstone, and migration 006 adds hashed status receipts. A password-
+confirmed request blocks new sessions.
 
 ```
 credentials              — email, password_hash, email_verified
 refresh_tokens           — token_hash, expires_at (7 days)
 email_verification_tokens — token_hash, expires_at (24 hrs)
 password_reset_tokens    — token_hash, expires_at (1 hr), used_at
-account_deletion_requests — durable cleanup status, phase leases, retry counts
+account_deletion_requests — durable cleanup status, phase leases, retry counts,
+  and a SHA-256 hash of its private completion-status receipt
 auth_account_deletion_tombstones — deletion request ID, former credential ID, deletion time
 ```
 
 `POST /api/auth/account-deletion` requires the account email, current password,
-and an idempotency key. It records one durable request, revokes refresh tokens,
+and an idempotency key. It records one durable request and returns a high-entropy
+opaque status receipt. The receipt is derived by a domain-separated HMAC from
+the stable request and credential IDs, while only its SHA-256 hash is stored.
+This lets retries return the same receipt after a lost response without
+retaining its plaintext. The endpoint revokes refresh tokens,
 and prevents later login, refresh, and password-reset completion. The phase
 runner claims one step using a two-minute database lease, executes its handler,
 then advances only if that exact lease is still current. Expired leases can be
@@ -134,9 +140,14 @@ keeps account cleanup incomplete. With no worker settings, requests stay at
 `awaiting_cleanup_operator`. The state machine cannot skip a missing phase
 adapter and status remains incomplete until every phase handler reports
 success.
-`POST /api/auth/account-deletion/status`
-requires the same password and returns the persisted phase and a stable error
-code. Existing access JWTs remain usable until their 15-minute expiry because
+`POST /api/auth/account-deletion/receipt-status` accepts only the request ID and
+opaque receipt, so a signed-out client can check progress after its credential
+is erased. The receipt is compared in constant time and the response is
+`no-store`; the route has a bounded 120-check/hour IP limit for receipt polling.
+Mobile stores the receipt in device-only SecureStore and removes it after
+completion. The legacy `POST /api/auth/account-deletion/status` still requires
+the email and password. Existing access JWTs remain usable until their
+15-minute expiry because
 the gateway does not check account state on every request. The profile-deletion
 tombstone prevents those tokens from recreating the profile, but other services
 may still honor the JWT until expiry. This is still not completed Apple or
@@ -223,6 +234,7 @@ psql "$DATABASE_URL" -f src/db/migrations/002_account_deletion_requests.sql
 psql "$DATABASE_URL" -f src/db/migrations/003_account_deletion_worker_leases.sql
 psql "$DATABASE_URL" -f src/db/migrations/004_account_deletion_credential_phase.sql
 psql "$DATABASE_URL" -f src/db/migrations/005_account_deletion_tombstones.sql
+psql "$DATABASE_URL" -f src/db/migrations/006_account_deletion_receipts.sql
 ```
 
 ### 3. Configure email delivery (optional)
@@ -276,7 +288,8 @@ src/
 │       ├── 002_account_deletion_requests.sql — deletion request ledger
 │       ├── 003_account_deletion_worker_leases.sql — durable worker leases and retries
 │       ├── 004_account_deletion_credential_phase.sql — adds final credential erasure phase
-│       └── 005_account_deletion_tombstones.sql — retains minimal credential-deletion tombstones
+│       ├── 005_account_deletion_tombstones.sql — retains minimal credential-deletion tombstones
+│       └── 006_account_deletion_receipts.sql — stores only hashed status receipts
 ├── lib/
 │   ├── tokens.ts              — JWT signing/verification, opaque token generation, SHA-256 hashing
 │   ├── cookies.ts             — httpOnly cookie helpers (set/clear)

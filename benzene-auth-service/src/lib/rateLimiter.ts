@@ -51,3 +51,13 @@ export const accountDeletionLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Receipt values have 256 bits of entropy, so polling can use a higher bounded
+// limit than password-backed request and status checks.
+export const accountDeletionReceiptLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 120,
+  message: "Too many account deletion status checks, please try again later",
+  standardHeaders: true,
+  legacyHeaders: false,
+});

@@ -3,6 +3,11 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import pool from "../db";
 import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
+import {
+  accountDeletionReceiptMatches,
+  deriveAccountDeletionReceipt,
+  hashAccountDeletionReceipt,
+} from "./account-deletion.receipt";
 
 export type AccountDeletionPhase =
   | "awaiting_cleanup_operator"
@@ -99,7 +104,7 @@ export async function requestAccountDeletion(input: {
   email: string;
   password: string;
   idempotencyKey: string;
-}): Promise<{ request: AccountDeletionRequest; created: boolean }> {
+}): Promise<{ request: AccountDeletionRequest; created: boolean; receipt: string }> {
   const client = await pool.connect();
 
   try {
@@ -110,9 +115,9 @@ export async function requestAccountDeletion(input: {
       input.password,
     );
 
-    const existing = await client.query<AccountDeletionRequest>(
+    const existing = await client.query<AccountDeletionRequest & { receipt_hash: Buffer | null }>(
       `
-        SELECT id, status, current_phase, requested_at, updated_at, completed_at, last_error_code
+      SELECT id, status, current_phase, requested_at, updated_at, completed_at, last_error_code, receipt_hash
         FROM account_deletion_requests
         WHERE credential_id = $1
       `,
@@ -120,8 +125,16 @@ export async function requestAccountDeletion(input: {
     );
 
     if (existing.rows[0]) {
+      const request = existing.rows[0];
+      const receipt = deriveAccountDeletionReceipt(request.id, credential.id);
+      if (!request.receipt_hash) {
+        await client.query(
+          "UPDATE account_deletion_requests SET receipt_hash = $2 WHERE id = $1 AND receipt_hash IS NULL",
+          [request.id, hashAccountDeletionReceipt(receipt)],
+        );
+      }
       await client.query("COMMIT");
-      return { request: existing.rows[0], created: false };
+      return { request, created: false, receipt };
     }
 
     if (credential.account_status !== "active") {
@@ -151,19 +164,21 @@ export async function requestAccountDeletion(input: {
       [credential.id],
     );
 
+    const requestId = randomUUID();
+    const receipt = deriveAccountDeletionReceipt(requestId, credential.id);
     const inserted = await client.query<AccountDeletionRequest>(
       `
-        INSERT INTO account_deletion_requests (credential_id, idempotency_key)
-        VALUES ($1, $2)
+        INSERT INTO account_deletion_requests (id, credential_id, idempotency_key, receipt_hash)
+        VALUES ($1, $2, $3, $4)
         RETURNING id, status, current_phase, requested_at, updated_at, completed_at
       `,
-      [credential.id, input.idempotencyKey],
+      [requestId, credential.id, input.idempotencyKey, hashAccountDeletionReceipt(receipt)],
     );
     const request = inserted.rows[0];
     if (!request) throw new Error("Deletion request insert returned no row");
 
     await client.query("COMMIT");
-    return { request, created: true };
+    return { request, created: true, receipt };
   } catch (error) {
     try {
       await client.query("ROLLBACK");
@@ -174,6 +189,29 @@ export async function requestAccountDeletion(input: {
   } finally {
     client.release();
   }
+}
+
+/** Verifies a high-entropy receipt without consulting credentials or email. */
+export async function getAccountDeletionStatusByReceipt(input: {
+  requestId: string;
+  receipt: string;
+}): Promise<AccountDeletionRequest> {
+  const result = await pool.query<AccountDeletionRequest & { receipt_hash: Buffer | null }>(
+    `SELECT id, status, current_phase, requested_at, updated_at, completed_at,
+            last_error_code, receipt_hash
+     FROM account_deletion_requests WHERE id = $1`,
+    [input.requestId],
+  );
+  const request = result.rows[0];
+  const hasStoredHash = Boolean(request?.receipt_hash);
+  const receiptMatches = accountDeletionReceiptMatches(
+    input.receipt,
+    request?.receipt_hash ?? Buffer.alloc(32),
+  );
+  if (!request || !hasStoredHash || !receiptMatches) {
+    throw invalidDeletionRequestError();
+  }
+  return request;
 }
 
 /** Reauthenticates before returning deletion progress to a signed-out user. */

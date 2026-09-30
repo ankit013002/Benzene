@@ -33,3 +33,10 @@ export const accountDeletionStatusSchema = z
     password: z.string().min(1, "Password is required"),
   })
   .strict();
+
+export const accountDeletionReceiptStatusSchema = z
+  .object({
+    requestId: z.string().uuid(),
+    receipt: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  })
+  .strict();

@@ -373,6 +373,7 @@ psql -d benzene_auth -f benzene-auth-service/src/db/migrations/002_account_delet
 psql -d benzene_auth -f benzene-auth-service/src/db/migrations/003_account_deletion_worker_leases.sql
 psql -d benzene_auth -f benzene-auth-service/src/db/migrations/004_account_deletion_credential_phase.sql
 psql -d benzene_auth -f benzene-auth-service/src/db/migrations/005_account_deletion_tombstones.sql
+psql -d benzene_auth -f benzene-auth-service/src/db/migrations/006_account_deletion_receipts.sql
 psql -d benzene -f nebulavault-user-service/src/main/resources/schema.sql
 ```
 

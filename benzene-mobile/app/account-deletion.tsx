@@ -1,9 +1,10 @@
 import { Link } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, Text, TextInput } from 'react-native';
-import { readAccountDeletionStatus, requestAccountDeletion, type DeletionStatus } from '../src/api/nativeSession';
+import { readAccountDeletionStatus, readAccountDeletionStatusByReceipt, requestAccountDeletion, type DeletionStatus } from '../src/api/nativeSession';
 import { ActionButton } from '../src/components/ActionButton';
 import { Body, Card, PageTitle, Screen } from '../src/components/Screen';
+import { clearAccountDeletionReceipt, readAccountDeletionReceipt, saveAccountDeletionReceipt, type AccountDeletionReceipt } from '../src/session/accountDeletionReceiptStore';
 import { useAuth } from '../src/session/AuthContext';
 import { palette, type } from '../src/theme';
 
@@ -13,8 +14,42 @@ export default function AccountDeletionScreen() {
   const [status, setStatus] = useState<DeletionStatus | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [savedReceipt, setSavedReceipt] = useState<AccountDeletionReceipt | null>(null);
   const idempotencyKey = useRef<string | null>(null);
   const { endSession } = useAuth();
+
+  const refreshWithReceipt = useCallback(async (receipt: AccountDeletionReceipt) => {
+    const result = await readAccountDeletionStatusByReceipt(receipt.requestId, receipt.receipt);
+    setError('');
+    setStatus(result);
+    if (result.deletionComplete) {
+      await clearAccountDeletionReceipt();
+      setSavedReceipt(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void readAccountDeletionReceipt()
+      .then((receipt) => { if (active) setSavedReceipt(receipt); })
+      .catch(() => { if (active) setError('Could not read the saved deletion receipt.'); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!savedReceipt || status?.deletionComplete) return;
+    let active = true;
+    const poll = async () => {
+      try {
+        if (active) await refreshWithReceipt(savedReceipt);
+      } catch {
+        // Keep the receipt so a temporary network failure can be retried.
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 60_000);
+    return () => { active = false; clearInterval(timer); };
+  }, [refreshWithReceipt, savedReceipt, status?.deletionComplete]);
 
   function getIdempotencyKey(): string {
     if (!idempotencyKey.current) {
@@ -29,7 +64,20 @@ export default function AccountDeletionScreen() {
     try {
       const result = await requestAccountDeletion(email.trim(), password, getIdempotencyKey());
       setStatus(result);
-      setPassword('');
+      let receiptSaved = false;
+      if (result.receipt) {
+        const receipt = { requestId: result.requestId, receipt: result.receipt };
+        // Keep polling for this app session even if the OS keystore is
+        // temporarily unavailable. Persistence still fails visibly below.
+        setSavedReceipt(receipt);
+        try {
+          await saveAccountDeletionReceipt(receipt);
+          receiptSaved = true;
+        } catch {
+          setError('The deletion request was recorded, but this device could not securely save its status receipt. You can re-enter your credentials to check progress.');
+        }
+      }
+      if (receiptSaved) setPassword('');
       await endSession();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not request account deletion.');
@@ -40,11 +88,11 @@ export default function AccountDeletionScreen() {
 
   function confirmRequest() {
     Alert.alert(
-      'Record an account-deletion request?',
-      'This revokes refresh credentials and records a request. An already-issued access token can remain valid for up to 15 minutes. It does not delete your Vault or associated files; cleanup is still pending.',
+      'Request account deletion?',
+      'This revokes refresh credentials and starts the cleanup process. An already-issued access token can remain valid for up to 15 minutes. Cleanup can take time while devices acknowledge removal; this screen will check progress automatically.',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Record request', style: 'destructive', onPress: () => void submitRequest() },
+        { text: 'Start cleanup', style: 'destructive', onPress: () => void submitRequest() },
       ],
     );
   }
@@ -53,8 +101,12 @@ export default function AccountDeletionScreen() {
     setBusy(true);
     setError('');
     try {
-      setStatus(await readAccountDeletionStatus(email.trim(), password));
-      setPassword('');
+      if (savedReceipt) {
+        await refreshWithReceipt(savedReceipt);
+      } else {
+        setStatus(await readAccountDeletionStatus(email.trim(), password));
+        setPassword('');
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not check account-deletion status.');
     } finally {
@@ -66,19 +118,21 @@ export default function AccountDeletionScreen() {
     <PageTitle title="Delete account" detail="You control the data in your Benzene account." />
     <Card>
       <Text style={styles.heading}>Request account deletion</Text>
-      <Body>This verifies your password and revokes refresh credentials. An already-issued access token can remain valid for up to 15 minutes. It records a request for cleanup; it does not delete your account, Vault or files.</Body>
+      <Body>Confirm with your password to revoke refresh credentials and start account cleanup. An already-issued access token can remain valid for up to 15 minutes. Cleanup may take time while connected devices acknowledge removal.</Body>
       <Text style={styles.label}>Account email</Text>
       <TextInput value={email} onChangeText={setEmail} autoCapitalize="none" autoComplete="email" keyboardType="email-address" textContentType="emailAddress" placeholder="you@example.com" placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel="Account email" />
-      <Text style={styles.label}>{status ? 'Password to check status' : 'Password'}</Text>
-      <TextInput value={password} onChangeText={setPassword} autoCapitalize="none" autoComplete="current-password" secureTextEntry textContentType="password" placeholder={status ? 'Re-enter your password' : 'Your password'} placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel={status ? 'Password to check deletion status' : 'Password'} />
+      {!savedReceipt ? <>
+        <Text style={styles.label}>{status ? 'Password to check status' : 'Password'}</Text>
+        <TextInput value={password} onChangeText={setPassword} autoCapitalize="none" autoComplete="current-password" secureTextEntry textContentType="password" placeholder={status ? 'Re-enter your password' : 'Your password'} placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel={status ? 'Password to check deletion status' : 'Password'} />
+      </> : <Body>A private status receipt is saved on this device. Benzene checks cleanup progress without retaining your password.</Body>}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-      <ActionButton title="Request account deletion" onPress={confirmRequest} busy={busy} disabled={!email.trim() || !password} />
-      <ActionButton title="Check request status" onPress={() => void checkStatus()} secondary busy={busy} disabled={!email.trim() || !password} />
+      {!status?.deletionComplete ? <ActionButton title="Request account deletion" onPress={confirmRequest} busy={busy} disabled={!email.trim() || !password || !!savedReceipt} /> : null}
+      <ActionButton title="Check cleanup status" onPress={() => void checkStatus()} secondary busy={busy} disabled={savedReceipt ? false : !email.trim() || !password} />
     </Card>
     {status ? <Card>
       <Text style={styles.heading}>{status.deletionComplete ? 'Service reports completion' : 'Request recorded · cleanup pending'}</Text>
       <Body>{status.message ?? `Current phase: ${status.currentPhase.replaceAll('_', ' ')}.`}</Body>
-      {!status.deletionComplete ? <Body style={styles.warning}>Your account data has not been deleted. Cleanup {status.downstreamCleanupStarted ? 'has started' : 'has not started'}.</Body> : null}
+      {!status.deletionComplete ? <Body style={styles.warning}>Cleanup {status.downstreamCleanupStarted ? 'has started' : 'is queued'} and is not complete yet.</Body> : null}
       <Text selectable style={styles.requestId}>Request ID · {status.requestId}</Text>
     </Card> : null}
     <Link href="/(app)/settings" style={styles.back}>Back to Settings</Link>

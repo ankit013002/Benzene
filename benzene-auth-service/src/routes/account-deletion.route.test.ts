@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../services/account-deletion.service", () => ({
   requestAccountDeletion: vi.fn(),
   getAccountDeletionStatus: vi.fn(),
+  getAccountDeletionStatusByReceipt: vi.fn(),
 }));
 
 import {
   getAccountDeletionStatus,
+  getAccountDeletionStatusByReceipt,
   requestAccountDeletion,
 } from "../services/account-deletion.service";
 import router from "./account-deletion.route";
@@ -48,6 +50,7 @@ describe("account deletion routes", () => {
   it("returns a durable pending state without claiming associated data was deleted", async () => {
     vi.mocked(requestAccountDeletion).mockResolvedValue({
       created: true,
+      receipt: "a".repeat(43),
       request: {
         id: "request-id",
         status: "cleanup_pending",
@@ -73,6 +76,7 @@ describe("account deletion routes", () => {
     expect(res.set).toHaveBeenCalledWith("Cache-Control", "no-store");
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
+        receipt: "a".repeat(43),
         status: "cleanup_pending",
         currentPhase: "awaiting_cleanup_operator",
         deletionComplete: false,
@@ -120,5 +124,31 @@ describe("account deletion routes", () => {
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(res.json).toHaveBeenCalledWith({ error: "Invalid credentials" });
+  });
+
+  it("returns receipt status without credentials and disables caching", async () => {
+    vi.mocked(getAccountDeletionStatusByReceipt).mockResolvedValue({
+      id: "f2dce0df-28f6-458c-8ab7-e7b2e64f3b1a",
+      status: "completed",
+      current_phase: "complete",
+      requested_at: new Date("2026-09-28T12:00:00Z"),
+      updated_at: new Date("2026-09-28T12:10:00Z"),
+      completed_at: new Date("2026-09-28T12:10:00Z"),
+    });
+    const res = response();
+
+    await registeredHandler("/account-deletion/receipt-status")(
+      request({ requestId: "f2dce0df-28f6-458c-8ab7-e7b2e64f3b1a", receipt: "a".repeat(43) }),
+      res,
+      vi.fn(),
+    );
+
+    expect(getAccountDeletionStatusByReceipt).toHaveBeenCalledWith({
+      requestId: "f2dce0df-28f6-458c-8ab7-e7b2e64f3b1a",
+      receipt: "a".repeat(43),
+    });
+    expect(res.set).toHaveBeenCalledWith("Cache-Control", "no-store");
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ deletionComplete: true }));
   });
 });
