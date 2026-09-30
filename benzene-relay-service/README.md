@@ -1,10 +1,12 @@
 # Benzene relay service
 
-This package provides an opaque WebSocket byte-forwarding transport for the
-future encrypted-object data plane. It is not integrated into current uploads,
-downloads, repair, or mobile flows. No relay traffic is considered a supported
-remote-access feature until the control plane and clients issue/use these
-scopes only for encrypted ciphertext.
+This package provides the opaque WebSocket byte-forwarding transport for the
+encrypted-object data plane. Mobile downloads remain direct-first, then may ask
+the control plane for complementary client/node tickets; the selected node
+claims its durable assignment and produces the encrypted object through this
+relay. Upload, repair and ordinary direct reads do not use it. The wired path
+has package and real-database integration coverage, but no production relay has
+been deployed and no live remote client-to-device journey has been verified.
 
 The relay does not accept filenames, `objectId`, plaintext size, encryption
 metadata, or Vault keys. A signed scope contains only `storageHash` (the
@@ -37,10 +39,11 @@ or ticket expiry. `maxBytes` is the exact encrypted ciphertext length and may
 not exceed 1 GiB. Stream handling pauses the source while the destination
 drains; per-socket queued frames and buffered sends have fixed ceilings.
 
-`src/relayScopeVectors.ts` is byte-identical to the node-agent copy. Both
-verifiers test the exact signed ticket. The vector uses the repository's
-existing throwaway test-key fixture only; its private key is not used by the
-relay service and must never be used for production tickets.
+`src/relayScopeVectors.ts` is byte-identical to the node-agent and
+control-plane copies. All three packages test the exact signed ticket and CI
+diffs the copies. The vector uses the repository's existing throwaway test-key
+fixture only; its private key is not used by the relay service and must never be
+used for production tickets.
 
 ## Shared durable state
 
@@ -94,7 +97,9 @@ npm start
 
 The suite has deterministic scope and transport tests. If `TEST_DATABASE_URL`
 is set, it also creates an isolated schema and exercises shared-instance and
-restart replay claims against real PostgreSQL. These tests do not make the
-service production-ready: control-plane issuance, client/agent dialing,
-encrypted-object integration, TLS deployment, abuse controls, operational
-monitoring, and end-to-end remote transfer acceptance remain outstanding.
+restart replay claims against real PostgreSQL. CI run `36606892325` passed all
+15 relay-service tests together with the control-plane assignment and
+node/mobile contract suites. These tests do not make the service
+production-ready: a container/deployment, TLS termination and DNS, abuse
+controls, operational monitoring, client-to-node remote acceptance and
+representative network-failure testing remain outstanding.

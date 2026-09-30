@@ -38,10 +38,12 @@ flowchart LR
 
 The control plane answers who, what and where. It stores Vault, Device,
 allocation, policy and replica metadata; it does not relay file bytes. Node
-agents own the bytes and expose short-lived, scoped transfer targets on the
-local network. The gateway verifies user sessions and injects identity headers;
-the `/agent/**` path deliberately remains available to devices during
-enrollment and uses Ed25519 request signatures instead.
+agents own the bytes and expose short-lived, scoped transfer targets. Mobile
+encrypted downloads try direct targets first and can request a one-use,
+control-plane-authorized WSS relay fallback; the separately deployed relay
+handles opaque ciphertext. The gateway verifies user sessions and injects
+identity headers; the `/agent/**` path deliberately remains available to
+devices during enrollment and uses Ed25519 request signatures instead.
 
 ## Services and ports
 
@@ -52,8 +54,9 @@ enrollment and uses Ed25519 request signatures instead.
 | `benzene-auth-service` | Node 20, Express 5, TypeScript, PostgreSQL | 4000 | Email/password auth and cookies |
 | `benzene-control-plane` | Node 20, Express 5, TypeScript, PostgreSQL + MongoDB | 5000 | Vaults, devices, placement and file metadata |
 | `benzene-node-agent` | Node 20, Express 5, TypeScript | 7070 | Device identity, heartbeat and LAN object store |
+| `benzene-relay-service` | Node 20, WebSocket, TypeScript, PostgreSQL | 8090 | Opaque encrypted-read fallback; not deployed |
 | `nebulavault-user-service` | Java 21, Spring Boot, PostgreSQL | 8082 | User profile bootstrap and quota fields |
-| `benzene-mobile` | Expo SDK 57, React Native, TypeScript | — | Native iOS/Android client foundation; unsigned JS bundles only |
+| `benzene-mobile` | Expo SDK 57, React Native, TypeScript | — | Native mobile app with encrypted file transfers; unsigned JS exports only |
 
 The frontend requires Node **20.9 or newer**. The former Next.js middleware
 request guard now lives in `src/proxy.ts`.
@@ -61,7 +64,8 @@ request guard now lives in `src/proxy.ts`.
 The frontend, auth service, gateway, control plane and user service have
 production Dockerfiles and are published by the release workflow. The node
 agent intentionally remains a host/LAN process; it is not containerized because
-it contributes storage from the user's own computer.
+it contributes storage from the user's own computer. The relay service also
+lacks a production image and deployment today.
 
 The frontend Docker context excludes local `.env*` files while allowing the
 committed `.env.example`; its runtime stage contains only `public`, Next
@@ -91,15 +95,24 @@ repository-wide zero.
 - Browser password-recovery pages and same-origin request bridges now exist.
   The same acceptance covers reset requests, reset completion, one-shot token
   rejection, old-password rejection and new-password login.
-- Native mobile foundation: secure token storage, native bearer-session wiring,
-  Vault/file/device summaries, settings and account-deletion request screens,
-  plus vector-compatible local encryption, device-only VMK storage and an
-  encrypted recovery-kit primitive. It does not yet transfer encrypted files,
-  expose recovery screens or complete account/Vault erasure.
+- Native mobile app: secure token storage and bearer sessions, signup/email
+  verification/password recovery, Vault/file/device screens, settings and an
+  account-deletion request screen. It encrypts whole files with a device-only
+  Vault key, uploads ciphertext to granted devices, and downloads direct-first
+  with a bounded encrypted WSS relay fallback. Upload requires a
+  passphrase-encrypted recovery kit. Transfers buffer whole files and are
+  limited to 25 MiB; web file flows are disabled. Key rotation, trusted-device
+  recovery, signed store builds and live remote acceptance remain unfinished.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
-  handlers block and retry instead of reporting completion; the production
-  scheduler and profile/storage/device/billing/backup handlers are not wired.
+  handlers block and retry instead of reporting completion. The optional
+  scheduler supports profile cleanup and, when both services are configured,
+  delayed stored-object cleanup through reference-safe garbage collection and
+  device-data cleanup. Device cleanup starts the existing safe drain/erase
+  handshake and remains pending until every device returns its signed
+  acknowledgement; offline devices keep deletion pending. Vault-metadata,
+  billing, and backup/log phases remain unwired, so full account deletion is
+  not complete.
 - Vault creation and device enrollment with a pairing code and explicit user
   approval.
 - Device heartbeats, online/offline presence and configurable contributed
@@ -163,12 +176,12 @@ repository-wide zero.
   verification through loopback SMTP. This is not a browser-runtime test;
   frontend helper execution, CORS/mixed-content/browser enforcement,
   remote/TLS transfer, encryption and garbage collection remain outside this
-  60-assertion LAN acceptance; the user service has a separate acceptance below.
+  64-assertion LAN acceptance; the user service has a separate acceptance below.
 - The user-profile acceptance signs up through Next, captures SMTP delivery,
   verifies pre-bootstrap 404 behavior, bootstraps and reads the persisted
   profile through the gateway and Next bridge, checks default profile/quota
-  fields, and verifies anonymous redirects/401 responses. It has exactly 12
-  `ok` assertions and is green in CI run `34768007763` at commit `090c7eb`.
+  fields, verifies anonymous redirects/401 responses, and exercises the durable
+  account-deletion/profile-cleanup journey. It has exactly 17 `ok` assertions.
 - Frontend transfer helpers have eight deterministic `node:test`/`tsx` tests
   (five upload and three download) for hashing and reservation, direct
   Protected uploads, completion gating, pending/shortfall errors, download
@@ -208,21 +221,25 @@ repository-wide zero.
   multi-object queue or chunk-level resumption yet.
 - Objects are whole files; chunking, manifests and streaming browser hashing are
   future work. The browser currently hashes a complete file in memory.
-- Encryption at rest and key recovery are not implemented. Stored objects are
-  plaintext and the recovery design must be settled before real user data is
-  entrusted to the system.
-- Remote peer discovery, certificate provisioning/trust, NAT traversal and
-  relay are not implemented. Browser CORS works for the HTTP LAN development
-  path and the agent can terminate explicitly configured HTTPS, but that alone
-  is not an automatic remote-access solution.
+- The mobile client now stores encrypted whole-file objects and offers a
+  passphrase-encrypted recovery kit. The web and legacy paths can still create
+  unencrypted objects, and key rotation, trusted-device recovery, and a
+  plaintext-object migration are not complete. Do not entrust real user data
+  before those paths are resolved and verified.
+- The mobile encrypted-read relay fallback is wired across the control plane,
+  node agent and client. It is not deployed or verified over a live remote
+  network; production WSS/TLS/DNS/key configuration and NAT behavior remain
+  unverified. Browser CORS works for the HTTP LAN development path and the
+  agent can terminate explicitly configured HTTPS, but that alone is not an
+  automatic remote-access solution.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
   manual migration before enrolling such a store.
 - A replication policy of one copy is possible but can lose data when that
   device fails. Whether that choice should remain available is unresolved.
-- A desktop client, complete mobile upload/download flows, filesystem mounts,
-  sharing, search, billing and cloud-protection policy are not built.
+- A desktop client, signed/reviewed native mobile releases, filesystem mounts,
+  sharing, search, billing and cloud-protection policy are not complete.
 - The control plane still keeps legacy file metadata in MongoDB while its Vault,
   Device and placement graph is in PostgreSQL.
 - Node-agent private keys are protected as `0600` files rather than native
@@ -231,15 +248,17 @@ repository-wide zero.
 ### Device-first MVP and commercial blockers
 
 The architecture's earliest commercially testable MVP includes desktop, mobile
-and web clients, with optional cloud protection. A native mobile foundation now
-exists, and its iOS, Android and web JavaScript bundles export successfully;
-this does not validate a signed native build or complete the Vault journey.
-This branch is not yet that commercial MVP. A desktop client, complete mobile
-file transfers, filesystem mounts, remote/HTTPS access, encryption and key
-recovery, cloud-protection policy and billing, chunking, sharing and search
-remain blockers.
-Availability, single-copy policy and key recovery remain open product
-questions; this status does not resolve them.
+and web clients, with optional cloud protection. The native mobile app now
+supports encrypted file transfers and its iOS, Android and web JavaScript
+bundles export successfully; this does not validate a signed native build or
+the complete Vault journey.
+This branch is not yet that commercial MVP. A desktop client, signed and
+validated mobile releases, deployed and end-to-end verified remote relay
+access, complete key recovery/rotation and plaintext-object migration,
+filesystem mounts, cloud-protection policy and billing, chunking, sharing and
+search remain blockers. Store legal URLs and publisher/release configuration
+also need to be supplied. Availability, single-copy policy and key recovery
+remain open product questions; this status does not resolve them.
 
 ## Security model
 
@@ -479,38 +498,32 @@ recovery requests and reset completion, one-shot token rejection, old-password
 rejection and new-password login. It is an HTTP route/topology harness, not a
 browser-runtime test: it does not execute frontend helpers or validate CORS,
 mixed-content, or other browser enforcement. Remote/TLS transfer, encryption
-and garbage collection are not covered by this 60-assertion LAN harness; the
-user service has a separate 12-assertion acceptance.
+and garbage collection are not covered by this 64-assertion LAN harness; the
+user service has a separate 17-assertion acceptance.
 
 The user-profile acceptance (`node scripts/smoke-user-profile.mjs`) starts the
 real auth service, gateway, user service and Next frontend. It covers real
 signup/session, SMTP delivery, pre-bootstrap 404, profile bootstrap and reads
 through the gateway and Next bridge, persisted default profile/quota fields,
-Next anonymous redirect and gateway anonymous 401. It has exactly 12 `ok`
-assertions and was green in CI run `34768007763` at commit `090c7eb`.
+Next anonymous redirect and gateway anonymous 401, then password-confirmed
+account deletion, real profile cleanup, recreation blocking and the storage
+cleanup grace period. It has exactly 17 `ok` assertions.
 
-Verified counts: control plane **380** tests, agent **139**, auth **98** total
-(**90** run without PostgreSQL; **8** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend transfer
-helpers **8** (five upload, three download), user-profile acceptance **12 `ok`
-assertions**, **68 core smoke checks**, and **50 protection/rebalance smoke
-checks**. The frontend suite has **18 tests** total. The mobile client has **16
-tests**, including six crypto/key-lifecycle and two dependency-override checks; local iOS,
-Android and web JavaScript exports pass. No signed native build has been
-verified.
-The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
-assertions; its earlier 60-assertion version was green in CI run `34788300450`.
-Default Turbopack and
-Webpack production builds pass.
+CI run `36606892325` is fully green at commit `a91cbde`. It verifies
+**398/398 control-plane tests**, **156/156 node-agent tests**, **119/119 auth
+tests**, **15/15 relay-service tests**, and **49 mobile checks** (44 TypeScript
+transfer/crypto tests plus five configuration checks). It also verifies
+typechecks and production builds, relay contract vectors, all three mobile
+JavaScript exports, five metadata-backup safeguards, the **68-check** core
+smoke, the **50-check** protection/rebalance smoke, the **64-assertion**
+authenticated LAN acceptance and the **17-assertion** user-profile/account-
+deletion acceptance. The relay assignment integration and durable device-data
+deletion tests run against real PostgreSQL in that gate.
 
-CI run `36507320295` is fully green and verifies the current **380/380**
-control-plane and **139/139** node-agent counts, both production builds, five metadata-backup safeguard
-tests, migration drift, protocol vectors, the 68-check core smoke and the
-50-check protection/rebalance smoke.
-
-CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
-including real-Postgres concurrency regressions for refresh-token rotation,
-password-reset consumption, email-verification replacement, and legacy-token
-consumption.
+The frontend transfer helpers have **8 tests** and its full suite has **18**.
+The mobile suite and JavaScript exports do not establish signed native builds
+or a live remote relay journey. Default Turbopack and Webpack production builds
+passed in prior verification.
 
 GitHub Actions runs changed-area checks for the frontend, mobile client, auth
 service, gateway, control plane, node agent, Terraform and the guide files. The

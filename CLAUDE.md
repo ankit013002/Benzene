@@ -8,33 +8,39 @@ are byte-identical and CI enforces that — edit one, copy it to the other.
 ## Project status — read this first
 
 **Benzene is not fully complete, is not the architecture §105 commercial MVP,
-and is not production-ready for real user data.** What is verified is a
-device-first **local/LAN development slice**: the control plane, node agent and
-web path can enroll devices, place, repair, garbage-collect and rebalance
-whole-file replicas, and upload and download directly on a development LAN.
+and is not production-ready for real user data.** The verified web/control-plane
+slice operates on a development LAN. The native mobile app now has encrypted
+file upload and download flows: it encrypts before device storage, tries direct
+device transfers first, and can request an encrypted WSS relay fallback. The
+relay assignment and ticket path is wired across mobile, control plane and node
+agent, but the deployed relay and a live remote end-to-end journey have not
+been verified.
 
-The commercial MVP still requires remote/HTTPS transfers, encryption and a key
-recovery design, a desktop client and a complete mobile Vault journey, and the
-other blockers listed in §9. A native mobile foundation exists, but an unsigned
-JavaScript export is not a release-ready client. Do not describe the application
-as complete, MVP-complete or production-ready until those capabilities and the
-open product decisions are resolved and verified.
+The commercial MVP still requires production remote/HTTPS access and a tested
+NAT/firewall path, a complete key lifecycle and recovery design, a desktop
+client, signed and validated mobile releases, and the other blockers in §9.
+Mobile encrypted transfers are bounded to 25 MiB and the web export does not
+provide those file flows. An unsigned JavaScript export is not a release-ready
+client. Do not describe the application as complete, MVP-complete or
+production-ready until the capabilities and open product decisions are
+resolved and verified.
 
 ### Completion gate
 
 The status above may change only when all of the following are true and backed
 by end-to-end evidence, not merely scaffolding or unit tests:
 
-- Files can be uploaded, repaired and retrieved securely outside the local LAN,
-  including the chosen NAT/firewall fallback, without accidentally turning the
-  control plane into the normal byte path.
-- Data is encrypted before permanent storage, with an implemented key lifecycle
-  and a tested recovery design. Plaintext-era object compatibility and migration
-  are explicit.
+- The implemented encrypted relay path is deployed and end-to-end verified
+  outside the local LAN, including the chosen NAT/firewall fallback, without
+  turning the control plane into the normal byte path.
+- All intended clients encrypt data before permanent storage, with an
+  implemented key lifecycle and tested recovery design. Plaintext-era object
+  compatibility and migration are explicit.
 - Reference-safe garbage collection and automatic, rate-limited rebalancing are
   implemented and tested against interruption, offline devices and retries.
 - Installable desktop and mobile clients complete the intended Vault journey;
-  web-only development behavior is not treated as equivalent client coverage.
+  unsigned JavaScript exports and unverified native transfer flows are not
+  treated as release coverage.
 - Cloud Protection, availability expectations, billing boundaries and the
   single-copy policy have documented product decisions and matching behavior.
 - Control-plane metadata has a tested backup/restore story, and the remaining
@@ -84,6 +90,7 @@ storage-layer work.
 | --- | --- | --- |
 | `benzene-control-plane/` | Vaults, devices, files, placement, protection | Node 20, Express 5, TypeScript (strict), **PostgreSQL** via Drizzle, plus Mongo for legacy file metadata |
 | `benzene-node-agent/` | Runs on a user's computer; contributes storage | Node 20, Express 5, TypeScript (strict) |
+| `benzene-relay-service/` | Opaque encrypted-transfer fallback | Node 20, WebSocket, TypeScript, PostgreSQL |
 | `benzene-auth-service/` | Email/password auth, JWT issuance | Node 20, Express 5, TypeScript, PostgreSQL |
 | `nebula-gateway/` | Edge: verifies JWTs, injects identity headers, routes | **Java 21**, Spring Cloud Gateway |
 | `nebulavault-frontend/` | Web app | Next.js 16.3.5, React/react-dom 19.3.0, TypeScript, Tailwind + DaisyUI; routing guard in `src/proxy.ts` |
@@ -117,6 +124,7 @@ deliberately deferred as its own change. The GitHub repo is
 | Control plane | 5000 |
 | User service | 8082 |
 | Node agent transfer server | 7070 |
+| Relay service | 8090 |
 
 ### Commands
 
@@ -143,6 +151,10 @@ cd benzene-mobile
 npm ci && npm run start
 npm run typecheck && npm run lint && npm test
 npm run export:ios && npm run export:android && npm run export:web
+
+# opaque relay
+cd benzene-relay-service
+npm ci && npm run typecheck && npm test && npm run build
 
 # gateway — see the JDK note below
 cd nebula-gateway && ./mvnw test
@@ -229,6 +241,7 @@ MONGOOSE_URI=mongodb://…         # required — legacy file metadata
 STORAGE_DRIVER=local|s3          # default local
 TRANSFER_SIGNING_KEY=<base64 PKCS8 Ed25519>   # required for device uploads
 AUTH_SECRET=<≥32 chars>
+RELAY_PUBLIC_URL=wss://relay.example.com
 ```
 
 Node agent:
@@ -244,6 +257,10 @@ Gateway and auth service both need the **same** `AUTH_SECRET`, ≥32 chars. Both
 fail fast without it — deliberately, since a weak shared key silently
 undermines every downstream identity claim.
 
+The relay service uses a separate PostgreSQL database and the public half of
+the control-plane transfer-signing key. It currently has no production image or
+deployment; see `benzene-relay-service/.env.example` and its README.
+
 ---
 
 ## 4. Architecture
@@ -256,7 +273,9 @@ The separation is fundamental.
   which devices are online, which devices hold which object, whether protection
   is satisfied. It stores metadata and **never carries file bytes**.
 - **Data plane** moves bytes: browser ↔ device, device ↔ device. Direct
-  transfers, never relayed through the control plane if avoidable.
+  transfers are preferred. For an explicit encrypted mobile read fallback,
+  node and client stream opaque ciphertext through a separately deployed WSS
+  relay; the control plane issues and tracks tickets but never handles bytes.
 
 If you find yourself streaming file content through the control plane, you have
 almost certainly taken a wrong turn.
@@ -300,6 +319,7 @@ Three distinct authentication mechanisms. Do not confuse them.
 | **User → gateway** | HS256 JWT in an `httpOnly` cookie | `nebula-gateway` |
 | **Device → control plane** | Ed25519 signature per request | `/agent/**` |
 | **Browser/peer → device** | Ed25519 transfer grant | agent transfer server |
+| **Mobile ↔ relay ↔ device** | Complementary signed, one-use client and node tickets | WSS relay |
 
 ### Identity headers
 
@@ -455,23 +475,24 @@ exposes a user endpoint with no session check.
 
 ## 6. Cross-package contracts
 
-The control plane and node agent are **separate deployables** that each hold
-their own copy of two wire formats. If they drift, authentication breaks in a
-way *neither package's own tests would catch* — each still passes against
-itself.
+The control plane, node agent and relay are separate deployables that keep
+copies of shared signed wire formats. If they drift, authentication breaks in
+a way one package's tests may not catch.
 
-Two byte-identical vector files pin them:
+Byte-identical vector files pin them:
 
-| Contract | Control plane | Agent |
-| --- | --- | --- |
-| Request signing | `src/modules/devices/protocolVectors.ts` | `src/protocolVectors.ts` |
-| Transfer grants | `src/modules/placement/grantVectors.ts` | `src/grantVectors.ts` |
+| Contract | Control plane | Agent | Relay |
+| --- | --- | --- | --- |
+| Request signing | `src/modules/devices/protocolVectors.ts` | `src/protocolVectors.ts` | — |
+| Transfer grants | `src/modules/placement/grantVectors.ts` | `src/grantVectors.ts` | — |
+| Relay tickets | `src/modules/placement/relayScopeVectors.ts` | `src/relayScopeVectors.ts` | `src/relayScopeVectors.ts` |
 
-Both packages assert against them, **and CI diffs the files.** Ed25519 signing
-is deterministic, so the vectors pin an exact signature, not merely a valid one.
+The relevant packages assert against the vectors, **and CI diffs every copy.**
+Ed25519 signing is deterministic, so the vectors pin an exact signature, not
+merely a valid one.
 
 **Never edit one copy alone.** Changing a wire format means regenerating the
-vectors and updating both files in the same commit.
+vectors and updating every participating package in the same commit.
 
 ---
 
@@ -497,6 +518,10 @@ vectors and updating both files in the same commit.
   download) cover reservation hashing, direct Protected PUTs and grants,
   completion gating, pending and shortfall errors, download fallback,
   unresponsive-holder timeout/fallback, and safe browser download cleanup.
+- Encrypted relay fallback has 15 focused tests: 11 runnable locally and four
+  PostgreSQL integration cases skipped when the test database is unavailable.
+  These cover relay ticket/scope behavior, assignment retries and database
+  coordination; they do not replace a deployed relay end-to-end test.
 - `scripts/smoke-agent.mjs` runs the **real agent against the real control
   plane** over HTTP: enrollment, approval, signed heartbeat, presumed-lost
   inventory recovery, upload to device, download back, authentication
@@ -522,15 +547,16 @@ vectors and updating both files in the same commit.
   is an HTTP route/topology harness, not a browser-runtime test: frontend
   helper execution, CORS, mixed-content and other browser enforcement are not
   covered. Remote/TLS transfer, encryption and garbage collection are outside
-  this 60-assertion LAN smoke. The user service has a separate acceptance. It
+  this 64-assertion LAN smoke. The user service has a separate acceptance. It
   also checks gateway identity header stripping and anonymous rejection.
 
 The separate `scripts/smoke-user-profile.mjs` acceptance starts the real auth
 service, gateway, user service and Next frontend. It covers real signup/session,
 SMTP delivery, pre-bootstrap 404, profile bootstrap and reads through the
 gateway and Next bridge, persisted default profile/quota fields, Next anonymous
-redirect and gateway anonymous 401 in exactly 12 `ok` assertions. It was green
-in CI run `34768007763` at commit `090c7eb`.
+redirect and gateway anonymous 401, then exercises password-confirmed account
+deletion, real profile cleanup, recreation blocking and storage-cleanup grace
+in exactly 17 `ok` assertions.
 
 ```bash
 # control plane
@@ -543,38 +569,31 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-Current counts: control plane **380**, agent **139**, auth **98** total
-(**90** run without PostgreSQL; **8** require `AUTH_TEST_DATABASE_URL`), gateway **18**, frontend
-transfer-helper **8** (five upload, three download), user-profile acceptance
-**12 `ok` assertions**. The frontend suite has **18 tests** total. The mobile
-client has **16 tests**, including six crypto/key-lifecycle and two
-dependency-override compatibility checks. Local iOS, Android and web JavaScript exports pass; no signed native
-build has been verified. The core
-cross-package smoke has **68 checks**; the
-three-device Protected repair and rebalance smoke has **50 checks**.
-The integrated authenticated LAN acceptance harness now has exactly **64 `ok`
-assertions; its earlier 60-assertion version was green in CI run `34788300450`.
-Default Turbopack
-and Webpack production builds pass, and a live browser check verified that the
-landing page renders without an overlay and navigates to sign-in; that check
-also caught and fixed CSS import ordering and a missing base selector.
-The separate user-profile acceptance has exactly **12 `ok` assertions** and was
-green in CI run `34768007763` at commit `090c7eb`.
+CI run `36606892325` is fully green at commit `a91cbde`. It verifies
+**398/398 control-plane tests**, **156/156 node-agent tests**, **119/119 auth
+tests**, **15/15 relay-service tests**, and **49 mobile checks** (44 TypeScript
+transfer/crypto tests plus five configuration checks). It also verifies
+typechecks and production builds, relay contract vectors, all three mobile
+JavaScript exports, five metadata-backup safeguards, the **68-check** core
+smoke, the **50-check** Protected repair/rebalance smoke, the **64-assertion**
+authenticated LAN acceptance and the **17-assertion** user-profile/account-
+deletion acceptance. The relay assignment integration and durable device-data
+deletion tests run against real PostgreSQL in that gate.
 
-CI run `36507320295` is fully green and verifies exactly **380/380
-control-plane tests**, **139/139 node-agent tests**, both TypeScript production
-builds, the five metadata-backup safeguard tests, the **68-check** core smoke
-and the **50-check** Protected
-repair/rebalance smoke. Six real-database rebalancing regressions cover
-copy-before-delete, retry identity, Vault-wide rate limiting, protection
-priority, GC exclusion, corrupt sources and draining targets. Nine
-garbage-collection regressions retain live and deduplicated reference, durable
-acknowledgement and cross-operation race coverage.
+The frontend transfer-helper suite has **8 tests** and its full suite has
+**18**. No signed native build or live remote relay acceptance has been
+verified. Default Turbopack and Webpack production builds passed in prior
+verification, and a live browser check verified that the landing page renders
+without an overlay and navigates to sign-in; that check also caught and fixed
+CSS import ordering and a missing base selector.
 
-CI run `34788722098` is fully green and verifies exactly **78/78 auth tests**,
-including real-Postgres concurrency regressions for refresh-token rotation,
-password-reset consumption, email-verification replacement, and legacy-token
-consumption.
+Six real-database rebalancing regressions cover copy-before-delete, retry
+identity, Vault-wide rate limiting, protection priority, GC exclusion, corrupt
+sources and draining targets. Nine garbage-collection regressions retain live
+and deduplicated reference, durable acknowledgement and cross-operation race
+coverage. Auth has real-Postgres concurrency regressions for refresh-token
+rotation, password-reset consumption, email-verification replacement and
+legacy-token consumption.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
@@ -716,19 +735,28 @@ the standard to match.
   Benzene-managed entries, and removing the device from the Vault
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
-- Native mobile foundation: secure token storage, native bearer-session
-  integration, Vault/file/device summaries, settings, an account-deletion
-  request screen, vector-compatible local encryption, device-only VMK storage
-  and a passphrase-encrypted recovery-kit primitive. Encrypted file transfers,
-  recovery screens, trusted-device recovery and complete account/Vault erasure
-  remain unfinished.
+- Native mobile app: secure token storage and bearer sessions, signup/email
+  verification/password recovery, Vault/file/device screens, settings and an
+  account-deletion request screen. It can encrypt whole files with a device-only
+  Vault key, upload ciphertext to granted devices, and download by direct
+  holders with a bounded encrypted WSS relay fallback. It requires a
+  passphrase-encrypted recovery kit before upload. This implementation has
+  deterministic tests, not a live remote relay acceptance; files are limited to
+  25 MiB, transfers buffer whole files, web file flows are disabled, and trusted
+  device recovery, key rotation and release-ready native builds remain open.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
-  handlers block and retry instead of reporting completion. The opt-in
-  scheduler runs profile cleanup and can run stored-object cleanup when the
-  optional control-plane adapter is configured; device-data, vault-metadata,
-  billing, and backup/log handlers remain unwired.
-- **Uploads route to devices end to end**, with downloads reading back
+  handlers block and retry instead of reporting completion. Its optional
+  scheduler supports profile cleanup and, when both services are configured,
+  delayed stored-object cleanup through reference-safe garbage collection and
+  device-data cleanup. The device-data phase starts the existing safe device
+  drain/erase handshake and stays pending until each node supplies its signed
+  acknowledgement; offline devices keep the account pending. Vault-metadata,
+  billing, and backup/log handlers remain unwired, so full account deletion is
+  not complete.
+- The web app uploads and downloads directly on a development LAN. The separate
+  mobile path uploads encrypted objects and reads them directly first, with
+  control-plane-authorized relay fallback after direct reads fail.
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct
   immutable version numbers, and reverse-order completion leaves the highest
@@ -747,7 +775,8 @@ the standard to match.
 - The user-profile acceptance covers real signup/session, SMTP delivery,
   pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,
   persisted default profile/quota fields, Next anonymous redirect and gateway
-  anonymous 401 in exactly 12 `ok` assertions.
+  anonymous 401, plus the durable account-deletion/profile-cleanup journey, in
+  exactly 17 `ok` assertions.
 - Devices screen and vault summary in the web app
 - File and folder removal confirmation, including an explicit recursive-folder
   warning
@@ -761,33 +790,39 @@ the standard to match.
   moves one whole file per Vault cooldown. It has no power awareness, bandwidth
   budget, user schedule, multi-object work queue or chunk-level resumption yet.
 - **Chunking and manifests** — whole-file placement only
-- **Encryption at rest** — objects are stored as plaintext. The object format
-  records `v` and `encryption: "none"` so encrypted objects can coexist later
-  without a migration, but the key hierarchy and recovery story (§33) are
-  undesigned. **Design this before real user data lands.**
-- **Remote peer discovery / NAT traversal / relay** — the agent can terminate
-  configured HTTPS, but certificate provisioning/trust and automatic remote
-  connectivity are not implemented
+- **Complete encryption/key lifecycle** — mobile writes AES-GCM encrypted
+  objects and can export/import a passphrase-encrypted recovery kit, but key
+  rotation, trusted-device recovery, all-client encryption, and recovery under
+  device loss have not been designed and verified. Existing `none` and
+  `unknown` objects need an explicit migration/reconciliation plan before broad
+  rollout. **Do not entrust real user data yet.**
+- **Production remote access** — the control plane now creates bounded relay
+  assignments for encrypted reads, node agents produce over WSS, and mobile
+  consumes the opaque ciphertext fallback after direct reads fail. Production
+  relay deployment/configuration, TLS/DNS and key operations, NAT behavior, and
+  a live remote client-to-device acceptance remain unverified.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
   manual migration before enrolling such a store
-- Desktop client, complete mobile file transfers, filesystem mount, sharing,
-  search and billing
+- Desktop client, signed/reviewed mobile store builds, filesystem mount,
+  sharing, search and billing
 - File metadata still in MongoDB, not yet migrated to Postgres
 
 ### Device-first MVP and commercial blockers
 
 The architecture's earliest commercially testable MVP includes desktop, mobile
-and web clients, with optional cloud protection. A native mobile foundation now
-exists, and its iOS, Android and web JavaScript bundles export successfully;
-this does not validate a signed native build or complete the Vault journey.
-This branch is not yet that commercial MVP. A desktop client, complete mobile
-file transfers, filesystem mounts, remote/HTTPS access, encryption and key
-recovery, cloud-protection policy and billing, chunking, sharing and search
-remain blockers.
-Availability, single-copy policy and key recovery remain open product
-questions; this status does not resolve them.
+and web clients, with optional cloud protection. The native mobile app now
+supports encrypted file transfers and its iOS, Android and web JavaScript
+bundles export successfully; this does not validate a signed native build or
+the complete Vault journey.
+This branch is not yet that commercial MVP. A desktop client, signed and
+validated mobile builds, deployed and end-to-end verified remote relay access,
+complete key recovery/rotation and plaintext-object migration,
+filesystem mounts, cloud-protection policy and billing, chunking, sharing and
+search remain blockers. Store legal URLs and publisher/release configuration
+also need to be supplied. Availability, single-copy policy and key recovery
+remain open product questions; this status does not resolve them.
 
 ### Known limits worth repeating
 
