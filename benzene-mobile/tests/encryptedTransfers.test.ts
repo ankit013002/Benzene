@@ -86,6 +86,7 @@ test('encrypted upload gives an explicit unreachable-device error without comple
 test('encrypted download falls back to another holder and exports only authenticated plaintext', async () => {
   const requested: string[] = [];
   const direct: string[] = [];
+  let relayRequested = false;
   let exported: Uint8Array | undefined;
   await downloadEncryptedCurrentFile({
     nodeId: 'file-node', filename: 'secret.txt', contentType: 'text/plain', availability: 'available',
@@ -111,9 +112,11 @@ test('encrypted download falls back to another holder and exports only authentic
       const body = url.includes('device-a') ? new Uint8Array(ciphertext.length).fill(0) : ciphertext;
       return new Response(body.slice().buffer, { status: 200 });
     },
+    relayFallback: async () => { relayRequested = true; return null; },
   });
   assert.deepEqual(requested, ['/files/file-node/encrypted-object', `/placement/download-targets/${fixture.metadata.storageHash}`]);
   assert.equal(direct.length, 4);
+  assert.equal(relayRequested, false, 'a valid direct copy must finish before encrypted relay fallback is considered');
   assert.deepEqual(exported, plaintext);
 });
 

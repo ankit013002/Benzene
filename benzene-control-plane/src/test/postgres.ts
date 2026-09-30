@@ -51,7 +51,7 @@ async function withAdminClient<T>(fn: (client: Client) => Promise<T>): Promise<T
   }
 }
 
-export async function setupTestDb(): Promise<NodePgDatabase<typeof schema>> {
+export async function setupTestDb(): Promise<NodePgDatabase<typeof schema> & { $client: Pool }> {
   createdDatabase = `benzene_test_${randomBytes(6).toString("hex")}`;
 
   await withAdminClient(async (client) => {

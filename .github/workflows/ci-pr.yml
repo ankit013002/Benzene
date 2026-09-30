@@ -73,8 +73,12 @@ jobs:
             smoke:
               - 'benzene-control-plane/**'
               - 'benzene-node-agent/**'
+              - 'benzene-mobile/src/crypto/encryptedObjectCore.ts'
+              - 'benzene-mobile/src/files/relayCiphertext.ts'
+              - 'benzene-relay-service/**'
               - 'scripts/smoke-agent.mjs'
               - 'scripts/smoke-protection.mjs'
+              - 'benzene-control-plane/scripts/smoke-relay-read.mts'
               - '.github/workflows/**'
             acceptance:
               - 'benzene-auth-service/**'
@@ -579,11 +583,11 @@ jobs:
           diff -u ../benzene-control-plane/src/modules/placement/relayScopeVectors.ts src/relayScopeVectors.ts
 
   smoke-agent:
-    name: Cross-package smoke (control plane + node agent)
+    name: Local storage acceptance (control plane + node + mobile + relay)
     needs: detect-changes
     if: needs.detect-changes.outputs.smoke == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -609,6 +613,8 @@ jobs:
           cache-dependency-path: |
             benzene-control-plane/package-lock.json
             benzene-node-agent/package-lock.json
+            benzene-mobile/package-lock.json
+            benzene-relay-service/package-lock.json
       # mongodb-memory-server downloads its MongoDB binary on the first smoke
       # run. Cache that binary separately from npm so repeated CI runs stay
       # bounded without hiding a dependency change.
@@ -623,6 +629,12 @@ jobs:
       - name: Install node agent dependencies
         working-directory: benzene-node-agent
         run: npm ci --include=dev
+      - name: Install relay dependencies
+        working-directory: benzene-relay-service
+        run: npm ci --include=dev
+      - name: Install mobile dependencies
+        working-directory: benzene-mobile
+        run: npm ci --include=dev
       - name: Build control plane
         working-directory: benzene-control-plane
         run: npm run build
@@ -633,6 +645,14 @@ jobs:
         run: node scripts/smoke-agent.mjs
       - name: Run protection repair smoke
         run: node scripts/smoke-protection.mjs
+      - name: Typecheck encrypted relay vertical acceptance
+        working-directory: benzene-control-plane
+        run: npx tsc -p tsconfig.smoke.json
+      - name: Run encrypted relay vertical acceptance
+        working-directory: benzene-control-plane
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: npx tsx scripts/smoke-relay-read.mts
 
   docs:
     name: Agent guides are in sync
