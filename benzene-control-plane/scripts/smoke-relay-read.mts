@@ -258,12 +258,14 @@ async function main(): Promise<void> {
     if (httpServer?.listening) await cleanup("control-plane server", () => new Promise<void>((resolve, reject) => {
       httpServer?.close((error) => error ? reject(error) : resolve());
     }));
-    if (mongoConnected) await cleanup("MongoDB connection", () => mongoose.disconnect());
-    if (testDb) {
+    if (mongoConnected) {
       await cleanup("MongoDB fixture removal", async () => {
-        await FileVersionModel.deleteMany({});
-        await DriveNodeModel.deleteMany({});
+        await FileVersionModel.deleteMany({ ownerId: OWNER });
+        await DriveNodeModel.deleteMany({ ownerId: OWNER });
       });
+      await cleanup("MongoDB connection", () => mongoose.disconnect());
+    }
+    if (testDb) {
       await cleanup("PostgreSQL fixture truncation", () => truncateAll(testDb as NonNullable<typeof testDb>));
       await cleanup("isolated PostgreSQL database", () => teardownTestDb());
     }
