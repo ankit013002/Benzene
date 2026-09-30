@@ -78,20 +78,22 @@ jobs:
           actual_fingerprint="$(gpg --batch --with-colons --show-keys /tmp/mongodb-tools-release-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
           test "$actual_fingerprint" = "$expected_fingerprint"
           gpg --batch --import /tmp/mongodb-tools-release-key.asc
+          mongodb_tools_version='100.19.1'
+          mongodb_tools_archive="mongodb-database-tools-ubuntu2404-x86_64-${mongodb_tools_version}.tgz"
           curl --fail --location --silent --show-error \
-            https://s3.amazonaws.com/downloads.mongodb.org/tools/db/mongodb-database-tools-ubuntu2404-x86_64-100.19.0.tgz \
+            "https://fastdl.mongodb.org/tools/db/${mongodb_tools_archive}" \
             --output /tmp/mongodb-database-tools.tgz
           curl --fail --location --silent --show-error \
-            https://s3.amazonaws.com/downloads.mongodb.org/tools/db/mongodb-database-tools-ubuntu2404-x86_64-100.19.0.tgz.sig \
+            "https://s3.amazonaws.com/downloads.mongodb.org/tools/db/${mongodb_tools_archive}.sig" \
             --output /tmp/mongodb-database-tools.tgz.sig
           gpg --batch --verify /tmp/mongodb-database-tools.tgz.sig /tmp/mongodb-database-tools.tgz
           mkdir --parents /tmp/mongodb-database-tools
           tar --extract --gzip --file /tmp/mongodb-database-tools.tgz --directory /tmp/mongodb-database-tools
           sudo install --mode=0755 \
-            /tmp/mongodb-database-tools/mongodb-database-tools-ubuntu2404-x86_64-100.19.0/bin/mongodump \
+            "/tmp/mongodb-database-tools/mongodb-database-tools-ubuntu2404-x86_64-${mongodb_tools_version}/bin/mongodump" \
             /usr/local/bin/mongodump
           sudo install --mode=0755 \
-            /tmp/mongodb-database-tools/mongodb-database-tools-ubuntu2404-x86_64-100.19.0/bin/mongorestore \
+            "/tmp/mongodb-database-tools/mongodb-database-tools-ubuntu2404-x86_64-${mongodb_tools_version}/bin/mongorestore" \
             /usr/local/bin/mongorestore
       - name: Install control-plane database clients and migrator
         working-directory: benzene-control-plane
