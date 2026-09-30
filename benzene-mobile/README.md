@@ -49,9 +49,24 @@ review of the final signed native binaries.
 
 Run `npm run check:store-config` to resolve the production Expo native config
 with fixture identifiers and URLs and verify the identifier guards, transport
-policy, permission list and EAS build-number settings. The fixture values only
-exercise validation; the publisher must provide real owned identifiers and
-service URLs for an actual build. The app icon is a Benzene-owned, static rendering
+policy, permission list and EAS build-number settings. `npm run check:store-build`
+is the live release gate: it requires publisher-owned iOS/Android identifiers,
+the linked EAS project UUID, public HTTPS service/legal URLs, and a production
+EAS profile configured for store distribution. Create or link the EAS project
+with `eas init`, then set its ID as `EAS_PROJECT_ID` in local and EAS production
+build environments. `EAS_OWNER` is optional; EAS Build uses the linked project
+UUID to identify the project.
+
+Before upload, configure `submit.production.ios` in `eas.json` with the numeric
+App Store Connect app ID, API key ID/issuer ID and a path to the publisher's
+`.p8` key. Configure `submit.production.android` with the Play track and path to
+the publisher's service-account JSON. Keep credential files outside source
+control. `npm run check:store-submit` validates the non-secret IDs, platform ID
+matches and credential file paths; it checks that files exist without reading
+or printing their contents. EAS and the store owners must still verify account
+access, signing certificates, provisioning, Play Console access, and app-record
+readiness. Fixture values in `check:store-config` only exercise config safety;
+they cannot pass the live release gate. The app icon is a Benzene-owned, static rendering
 of the same outer ring, hexagon and aromatic circle used by the web wordmark. Its
 iOS image is opaque; Android's foreground and monochrome layers use transparent
 backgrounds and keep the full mark within the adaptive-icon safe area. Regenerate
@@ -74,13 +89,14 @@ and new passwords after a successful reset. Verification email links currently
 open the configured web app; the user returns to mobile and confirms completion
 manually. Reset tokens can be pasted into the app from the reset URL. Native
 app/universal links are not configured, so verification and reset links do not
-yet reopen the app automatically. The in-app account-deletion
-screen can record a password-verified request and check its phase. The service
-revokes refresh credentials, but an already-issued access token can remain valid
-for up to 15 minutes. Account/Vault cleanup is still pending for an operator;
-this is not completed erasure. Store review must wait until a complete deletion
-path and the publisher's real privacy, terms and support destinations are
-available.
+yet reopen the app automatically. The in-app account-deletion screen can record
+a password-verified request and check its phase using a private receipt retained
+in device-only SecureStore. The receipt is removed when the service reports
+completion. The service revokes refresh credentials, but an already-issued
+access token can remain valid for up to 15 minutes. Cleanup can remain pending
+until every configured phase, including device acknowledgements, completes.
+Store review still requires a validated production deletion flow and the
+publisher's real privacy, terms and support destinations.
 
 ## Local key and encrypted-object foundation
 
@@ -168,5 +184,6 @@ authentication before export. Relay is never selected as the default byte path.
 `EXPO_PUBLIC_TERMS_OF_SERVICE_URL` and `EXPO_PUBLIC_SUPPORT_URL` are public
 runtime configuration, not secrets. The app bundle identifiers are placeholders
 until the publisher chooses identifiers. EAS project IDs, signing credentials,
-production URLs, legal/support URLs, and store account credentials are
-deliberately unset.
+production URLs, legal/support URLs, App Store Connect IDs and Google Play
+credentials are deliberately unset. The live store checks fail until the
+publisher provides these values.

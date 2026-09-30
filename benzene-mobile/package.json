@@ -56,6 +56,8 @@
     "export:android": "expo export --platform android --output-dir dist/android",
     "export:web": "expo export --platform web",
     "check:store-config": "node --test tests/storeConfig.test.mjs",
+    "check:store-build": "node scripts/store-preflight.mjs build",
+    "check:store-submit": "node scripts/store-preflight.mjs submit",
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
     "lint": "eslint app src tests --max-warnings 0",

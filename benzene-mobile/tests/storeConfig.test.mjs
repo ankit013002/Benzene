@@ -16,12 +16,13 @@ function productionConfig(extraEnvironment = {}) {
     env: {
       ...process.env,
       EAS_BUILD_PROFILE: 'production',
+      EAS_PROJECT_ID: '123e4567-e89b-42d3-a456-426614174000',
       IOS_BUNDLE_IDENTIFIER: 'com.benzene.releasecheck.ios',
       ANDROID_APPLICATION_ID: 'com.benzene.releasecheck.android',
-      EXPO_PUBLIC_GATEWAY_ORIGIN: 'https://gateway.example.com',
-      EXPO_PUBLIC_PRIVACY_POLICY_URL: 'https://example.com/privacy',
-      EXPO_PUBLIC_TERMS_OF_SERVICE_URL: 'https://example.com/terms',
-      EXPO_PUBLIC_SUPPORT_URL: 'https://example.com/support',
+      EXPO_PUBLIC_GATEWAY_ORIGIN: 'https://gateway.benzene-release-check.com',
+      EXPO_PUBLIC_PRIVACY_POLICY_URL: 'https://benzene-release-check.com/privacy',
+      EXPO_PUBLIC_TERMS_OF_SERVICE_URL: 'https://benzene-release-check.com/terms',
+      EXPO_PUBLIC_SUPPORT_URL: 'https://benzene-release-check.com/support',
       ...extraEnvironment,
     },
   });
@@ -34,6 +35,16 @@ test('production Expo config requires publisher-owned identifiers', () => {
   assert.match(result.stderr, /IOS_BUNDLE_IDENTIFIER must be set/);
 });
 
+test('production Expo config rejects invalid Android IDs and non-public gateway hosts', () => {
+  const badPackage = productionConfig({ ANDROID_APPLICATION_ID: 'com.publisher.Bad-App' });
+  assert.notEqual(badPackage.status, 0);
+  assert.match(badPackage.stderr, /ANDROID_APPLICATION_ID must be set/);
+
+  const privateGateway = productionConfig({ EXPO_PUBLIC_GATEWAY_ORIGIN: 'https://192.168.1.50' });
+  assert.notEqual(privateGateway.status, 0);
+  assert.match(privateGateway.stderr, /EXPO_PUBLIC_GATEWAY_ORIGIN must be a public HTTPS URL/);
+});
+
 test('production native config keeps transport and permissions narrowly scoped', () => {
   const result = productionConfig();
   assert.equal(result.status, 0, result.stderr);
@@ -41,6 +52,7 @@ test('production native config keeps transport and permissions narrowly scoped',
 
   assert.equal(config.ios.bundleIdentifier, 'com.benzene.releasecheck.ios');
   assert.equal(config.android.package, 'com.benzene.releasecheck.android');
+  assert.equal(config.extra.eas.projectId, '123e4567-e89b-42d3-a456-426614174000');
   assert.equal(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads, false);
   assert.equal(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsLocalNetworking, true);
   assert.equal('NSFaceIDUsageDescription' in config.ios.infoPlist, false);
