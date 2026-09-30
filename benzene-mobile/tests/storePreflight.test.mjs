@@ -13,6 +13,7 @@ const environment = {
   EXPO_PUBLIC_PRIVACY_POLICY_URL: 'https://benzene-release-check.com/privacy',
   EXPO_PUBLIC_TERMS_OF_SERVICE_URL: 'https://benzene-release-check.com/terms',
   EXPO_PUBLIC_SUPPORT_URL: 'https://benzene-release-check.com/support',
+  EXPO_PUBLIC_ACCOUNT_DELETION_URL: 'https://benzene-release-check.com/account-deletion',
 };
 
 function buildConfig() {
@@ -65,6 +66,22 @@ test('store build preflight rejects documentation placeholder domains', () => {
     eas: buildConfig(),
   });
   assert.equal(errors.some((error) => error.includes('EXPO_PUBLIC_SUPPORT_URL')), true);
+});
+
+test('store build preflight requires a public HTTPS account-deletion page', () => {
+  const missing = validateStorePreflight({
+    mode: 'build',
+    environment: { ...environment, EXPO_PUBLIC_ACCOUNT_DELETION_URL: '' },
+    eas: buildConfig(),
+  });
+  assert.equal(missing.some((error) => error.includes('EXPO_PUBLIC_ACCOUNT_DELETION_URL')), true);
+
+  const local = validateStorePreflight({
+    mode: 'build',
+    environment: { ...environment, EXPO_PUBLIC_ACCOUNT_DELETION_URL: 'http://localhost:3000/account-deletion' },
+    eas: buildConfig(),
+  });
+  assert.equal(local.some((error) => error.includes('EXPO_PUBLIC_ACCOUNT_DELETION_URL')), true);
 });
 
 test('store submission preflight validates non-secret ASC and Play config and local key paths', () => {

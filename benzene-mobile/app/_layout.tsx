@@ -12,6 +12,7 @@ export default function RootLayout() {
         <Stack.Screen name="sign-in" />
         <Stack.Screen name="register" />
         <Stack.Screen name="forgot-password" />
+        <Stack.Screen name="verify-email" />
         <Stack.Screen name="reset-password" />
         <Stack.Screen name="(app)" />
         <Stack.Screen name="privacy" options={{ headerShown: true, title: 'Privacy', headerBackTitle: 'Settings' }} />

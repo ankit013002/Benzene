@@ -50,6 +50,7 @@ function validateBuild(environment, eas) {
     ['EXPO_PUBLIC_PRIVACY_POLICY_URL', false],
     ['EXPO_PUBLIC_TERMS_OF_SERVICE_URL', false],
     ['EXPO_PUBLIC_SUPPORT_URL', false],
+    ['EXPO_PUBLIC_ACCOUNT_DELETION_URL', false],
   ]) {
     if (!publicHttpsUrl(environment[name]?.trim(), { originOnly })) errors.push(`${name} must be a public HTTPS ${originOnly ? 'origin' : 'URL'} without placeholder, local, credential, query, or fragment values.`);
   }

@@ -23,13 +23,18 @@ export default async function Page({ searchParams }: ResetPasswordPageProps) {
       title="Choose a new password"
       subtitle="Set a new password to return to your Benzene Vault."
       footer={
-        <p className="text-sm text-bz-muted">
-          Need a new reset link?{" "}
-          <Link href="/forgot-password" className="link link-hover">
-            Request one
-          </Link>
-          .
-        </p>
+        <div className="space-y-2 text-sm text-bz-muted">
+          <p>
+            Need a new reset link?{" "}
+            <Link href="/forgot-password" className="link link-hover">
+              Request one
+            </Link>
+            .
+          </p>
+          <p>
+            To reset in the app, <a href="benzene://reset-password" className="link link-hover">open Benzene</a> and paste this HTTPS link there.
+          </p>
+        </div>
       }
     >
       <ResetPasswordForm hasToken={hasToken} />

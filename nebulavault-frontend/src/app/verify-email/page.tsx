@@ -86,9 +86,16 @@ export default async function VerifyEmailPage({
         {status === "pending" ? (
           <VerificationPendingActions />
         ) : (
-          <Link href="/login" className="btn btn-neutral w-full">
-            Continue to sign in
-          </Link>
+          <div className="space-y-3">
+            {status === "success" ? (
+              <a href="benzene://verify-email?status=success" className="btn btn-outline w-full">
+                Open Benzene
+              </a>
+            ) : null}
+            <Link href="/login" className="btn btn-neutral w-full">
+              Continue to sign in
+            </Link>
+          </div>
         )}
       </div>
     </AuthShell>

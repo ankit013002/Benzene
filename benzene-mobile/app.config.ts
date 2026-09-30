@@ -61,6 +61,7 @@ requireProductionUrl('EXPO_PUBLIC_GATEWAY_ORIGIN', true);
 requireProductionUrl('EXPO_PUBLIC_PRIVACY_POLICY_URL');
 requireProductionUrl('EXPO_PUBLIC_TERMS_OF_SERVICE_URL');
 requireProductionUrl('EXPO_PUBLIC_SUPPORT_URL');
+requireProductionUrl('EXPO_PUBLIC_ACCOUNT_DELETION_URL');
 
 const config: ExpoConfig = {
   name: 'Benzene',

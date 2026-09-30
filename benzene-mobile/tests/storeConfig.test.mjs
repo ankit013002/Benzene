@@ -23,6 +23,7 @@ function productionConfig(extraEnvironment = {}) {
       EXPO_PUBLIC_PRIVACY_POLICY_URL: 'https://benzene-release-check.com/privacy',
       EXPO_PUBLIC_TERMS_OF_SERVICE_URL: 'https://benzene-release-check.com/terms',
       EXPO_PUBLIC_SUPPORT_URL: 'https://benzene-release-check.com/support',
+      EXPO_PUBLIC_ACCOUNT_DELETION_URL: 'https://benzene-release-check.com/account-deletion',
       ...extraEnvironment,
     },
   });
@@ -33,6 +34,12 @@ test('production Expo config requires publisher-owned identifiers', () => {
   const result = productionConfig({ IOS_BUNDLE_IDENTIFIER: '' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /IOS_BUNDLE_IDENTIFIER must be set/);
+});
+
+test('production Expo config requires a public account-deletion information URL', () => {
+  const result = productionConfig({ EXPO_PUBLIC_ACCOUNT_DELETION_URL: '' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EXPO_PUBLIC_ACCOUNT_DELETION_URL must be set for production builds/);
 });
 
 test('production Expo config rejects invalid Android IDs and non-public gateway hosts', () => {
@@ -52,21 +59,29 @@ test('production native config keeps transport and permissions narrowly scoped',
 
   assert.equal(config.ios.bundleIdentifier, 'com.benzene.releasecheck.ios');
   assert.equal(config.android.package, 'com.benzene.releasecheck.android');
+  assert.equal(config.scheme, 'benzene');
   assert.equal(config.extra.eas.projectId, '123e4567-e89b-42d3-a456-426614174000');
   assert.equal(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads, false);
   assert.equal(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsLocalNetworking, true);
   assert.equal('NSFaceIDUsageDescription' in config.ios.infoPlist, false);
 
+  assert.deepEqual(config.ios.privacyManifests.NSPrivacyAccessedAPITypes, [
+    {
+      NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+      NSPrivacyAccessedAPITypeReasons: ['C617.1', '3B52.1'],
+    },
+    {
+      NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+      NSPrivacyAccessedAPITypeReasons: ['35F9.1'],
+    },
+    {
+      NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+      NSPrivacyAccessedAPITypeReasons: ['CA92.1'],
+    },
+  ]);
+
   const permissions = config.android.permissions ?? [];
-  assert.equal(permissions.includes('android.permission.INTERNET'), true);
-  for (const permission of [
-    'android.permission.READ_EXTERNAL_STORAGE',
-    'android.permission.WRITE_EXTERNAL_STORAGE',
-    'android.permission.SYSTEM_ALERT_WINDOW',
-    'android.permission.VIBRATE',
-  ]) {
-    assert.equal(permissions.includes(permission), false, `${permission} should not ship`);
-  }
+  assert.deepEqual(permissions, ['android.permission.INTERNET']);
 });
 
 test('EAS production profile uses monotonically incremented local store build numbers', () => {

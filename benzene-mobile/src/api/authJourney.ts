@@ -65,6 +65,22 @@ export function resetPassword(token: string, newPassword: string): Promise<AuthR
   return postAuth('/auth/reset-password', { token: token.trim(), newPassword }, 'Benzene could not reset your password.');
 }
 
+export function resetTokenFromInput(value: string): string | null {
+  const input = value.trim();
+  if (!input) return null;
+  if (!/^https?:\/\//i.test(input)) {
+    return /^[a-z][a-z0-9+.-]*:\/\//i.test(input) ? null : input;
+  }
+
+  try {
+    const link = new URL(input);
+    if (!['http:', 'https:'].includes(link.protocol) || !link.pathname.endsWith('/reset-password')) return null;
+    return link.searchParams.get('token')?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }

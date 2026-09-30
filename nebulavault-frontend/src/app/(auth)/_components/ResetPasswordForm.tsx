@@ -81,6 +81,9 @@ export default function ResetPasswordForm({ hasToken }: ResetPasswordFormProps) 
         <Link href="/login" className="btn btn-neutral">
           Sign in
         </Link>
+        <a href="benzene://sign-in" className="btn btn-outline">
+          Open Benzene
+        </a>
       </div>
     );
   }

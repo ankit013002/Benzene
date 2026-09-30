@@ -57,6 +57,21 @@ with `eas init`, then set its ID as `EAS_PROJECT_ID` in local and EAS production
 build environments. `EAS_OWNER` is optional; EAS Build uses the linked project
 UUID to identify the project.
 
+The native config includes the app-level iOS required-reason API entries used
+by the file picker/cache flow and React Native runtime: file metadata in the
+app container and user-selected files (`C617.1`, `3B52.1`), runtime timers
+(`35F9.1`), and app-private user defaults (`CA92.1`). Expo's own privacy
+manifests remain part of the native dependency build; the app manifest does not
+copy the SDK-only `0A2A.1` reason. Android's resolved permission list is pinned
+to `INTERNET`; document selection uses the system picker, and legacy storage,
+overlay, and vibration permissions remain blocked. See [Expo's privacy manifest
+guide](https://docs.expo.dev/guides/apple-privacy/), [Apple's required-reason
+API list](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype),
+and [Android's Storage Access Framework guide](https://developer.android.com/training/data-storage/shared/documents-files).
+The app-level manifest intentionally makes no collected-data or tracking
+declarations; the publisher must complete the App Store Connect privacy and
+Google Play Data safety forms from the final service/data-flow inventory.
+
 Before upload, configure `submit.production.ios` in `eas.json` with the numeric
 App Store Connect app ID, API key ID/issuer ID and a path to the publisher's
 `.p8` key. Configure `submit.production.android` with the Play track and path to
@@ -181,9 +196,12 @@ authentication before export. Relay is never selected as the default byte path.
 ## Configuration ownership
 
 `EXPO_PUBLIC_GATEWAY_ORIGIN`, `EXPO_PUBLIC_PRIVACY_POLICY_URL`,
-`EXPO_PUBLIC_TERMS_OF_SERVICE_URL` and `EXPO_PUBLIC_SUPPORT_URL` are public
-runtime configuration, not secrets. The app bundle identifiers are placeholders
-until the publisher chooses identifiers. EAS project IDs, signing credentials,
-production URLs, legal/support URLs, App Store Connect IDs and Google Play
-credentials are deliberately unset. The live store checks fail until the
-publisher provides these values.
+`EXPO_PUBLIC_TERMS_OF_SERVICE_URL`, `EXPO_PUBLIC_SUPPORT_URL` and
+`EXPO_PUBLIC_ACCOUNT_DELETION_URL` are public runtime configuration, not
+secrets. Set the deletion URL to the published public HTTPS
+`/account-deletion` information page; production Expo config and store preflight
+reject missing, local, placeholder or non-HTTPS values. The app bundle
+identifiers are placeholders until the publisher chooses identifiers. EAS
+project IDs, signing credentials, production URLs, legal/support URLs, App Store
+Connect IDs and Google Play credentials are deliberately unset. The live store
+checks fail until the publisher provides these values.

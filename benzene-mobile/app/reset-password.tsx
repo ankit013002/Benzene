@@ -1,7 +1,7 @@
 import { Link, router, type Href } from 'expo-router';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
-import { passwordLengthError, resetPassword } from '../src/api/authJourney';
+import { passwordLengthError, resetPassword, resetTokenFromInput } from '../src/api/authJourney';
 import { ActionButton } from '../src/components/ActionButton';
 import { Body, Screen, Wordmark } from '../src/components/Screen';
 import { palette, type } from '../src/theme';
@@ -15,19 +15,20 @@ export default function ResetPasswordScreen() {
   const [error, setError] = useState('');
   async function submit() {
     setError('');
-    if (!token.trim()) { setError('Paste the token from your reset link.'); return; }
+    const submittedToken = resetTokenFromInput(token);
+    if (!submittedToken) { setError('Paste the token or complete HTTPS reset link from your email.'); return; }
     const lengthError = passwordLengthError(password);
     if (lengthError) { setError(lengthError); return; }
     if (password !== confirmation) { setError('The passwords do not match.'); return; }
     setBusy(true);
-    try { await resetPassword(token, password); setComplete(true); setToken(''); setPassword(''); setConfirmation(''); }
+    try { await resetPassword(submittedToken, password); setComplete(true); setToken(''); setPassword(''); setConfirmation(''); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Benzene could not reset your password.'); }
     finally { setBusy(false); }
   }
   return <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen><Wordmark subtitle="Account recovery" />
-      <View style={styles.intro}><Text style={styles.title}>{complete ? 'Password updated.' : 'Choose a new password.'}</Text><Body style={styles.copy}>{complete ? 'You can now sign in with your new password.' : 'Open the reset email in your browser, copy the token value from its URL, and paste it below.'}</Body></View>
-      {!complete ? <View style={styles.form}><Text style={styles.label}>Reset token</Text><TextInput autoCapitalize="none" autoCorrect={false} value={token} onChangeText={setToken} placeholder="Paste reset token" placeholderTextColor={palette.muted} style={[styles.input, styles.token]} accessibilityLabel="Reset token" />
+      <View style={styles.intro}><Text style={styles.title}>{complete ? 'Password updated.' : 'Choose a new password.'}</Text><Body style={styles.copy}>{complete ? 'You can now sign in with your new password.' : 'Open the reset link from your email. If it opened in a browser, you can paste its token here.'}</Body></View>
+      {!complete ? <View style={styles.form}><Text style={styles.label}>Reset token or link</Text><TextInput autoCapitalize="none" autoCorrect={false} secureTextEntry value={token} onChangeText={setToken} placeholder="Paste reset token or email link" placeholderTextColor={palette.muted} style={[styles.input, styles.token]} accessibilityLabel="Reset token or link" />
         <Text style={styles.label}>New password</Text><TextInput autoCapitalize="none" autoComplete="new-password" secureTextEntry textContentType="newPassword" value={password} onChangeText={setPassword} placeholder="At least 8 characters" placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel="New password" />
         <Text style={styles.label}>Confirm new password</Text><TextInput autoCapitalize="none" autoComplete="new-password" secureTextEntry textContentType="newPassword" value={confirmation} onChangeText={setConfirmation} placeholder="Enter it again" placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel="Confirm new password" onSubmitEditing={() => void submit()} />
         {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}<ActionButton title="Reset password" onPress={() => void submit()} busy={busy} disabled={!token || !password || !confirmation} />

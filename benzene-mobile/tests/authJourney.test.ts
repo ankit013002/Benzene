@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isValidEmail, mapAuthJourneyError, passwordLengthError, requestPasswordReset, resetPassword, resendVerification, signUp } from '../src/api/authJourney';
+import { isValidEmail, mapAuthJourneyError, passwordLengthError, requestPasswordReset, resetPassword, resendVerification, resetTokenFromInput, signUp } from '../src/api/authJourney';
 
 const genericSuccess = () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -37,6 +37,13 @@ test('auth form helpers validate email and enforce the server password minimum',
   assert.equal(isValidEmail('not-an-email'), false);
   assert.equal(passwordLengthError('1234567'), 'Use at least 8 characters for your password.');
   assert.equal(passwordLengthError('12345678'), null);
+});
+
+test('reset form accepts a pasted HTTPS reset URL without accepting other web destinations', () => {
+  assert.equal(resetTokenFromInput('  one-time-token  '), 'one-time-token');
+  assert.equal(resetTokenFromInput('https://vault.example/reset-password?token=one%2Ftime'), 'one/time');
+  assert.equal(resetTokenFromInput('https://vault.example/login?token=one-time-token'), null);
+  assert.equal(resetTokenFromInput('benzene://reset-password?token=one-time-token'), null);
 });
 
 test('authentication error mapping stays useful without echoing server details', async () => {
