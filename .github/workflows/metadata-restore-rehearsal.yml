@@ -1,0 +1,100 @@
+name: Metadata restore rehearsal
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/metadata-backup.mjs'
+      - 'scripts/metadata-backup.restore-rehearsal.mjs'
+      - 'scripts/metadata-backup.test.mjs'
+      - 'benzene-control-plane/drizzle/**'
+      - 'benzene-control-plane/src/db/schema.ts'
+      - 'benzene-control-plane/package.json'
+      - 'benzene-control-plane/package-lock.json'
+      - '.github/workflows/metadata-restore-rehearsal.yml'
+  push:
+    branches: ['**']
+    paths:
+      - 'scripts/metadata-backup.mjs'
+      - 'scripts/metadata-backup.restore-rehearsal.mjs'
+      - 'scripts/metadata-backup.test.mjs'
+      - 'benzene-control-plane/drizzle/**'
+      - 'benzene-control-plane/src/db/schema.ts'
+      - 'benzene-control-plane/package.json'
+      - 'benzene-control-plane/package-lock.json'
+      - '.github/workflows/metadata-restore-rehearsal.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metadata-restore-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-restore:
+    name: Paired PostgreSQL + MongoDB restore
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: benzene_metadata_rehearsal_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mongodb:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      METADATA_REHEARSAL_POSTGRES_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/benzene_metadata_rehearsal_admin
+      METADATA_REHEARSAL_MONGODB_ADMIN_URI: mongodb://127.0.0.1:27017/benzene_metadata_rehearsal_admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: benzene-control-plane/package-lock.json
+      - name: Install native PostgreSQL and MongoDB database tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gnupg postgresql-client-16
+          curl --fail --location --silent --show-error \
+            https://pgp.mongodb.com/server-Tools.asc \
+            --output /tmp/mongodb-tools-release-key.asc
+          expected_fingerprint='D4E45C292A5C94962F0D10E13132835C1D925D5B'
+          actual_fingerprint="$(gpg --batch --with-colons --show-keys /tmp/mongodb-tools-release-key.asc | awk -F: '$1 == "fpr" { print $10; exit }')"
+          test "$actual_fingerprint" = "$expected_fingerprint"
+          gpg --batch --import /tmp/mongodb-tools-release-key.asc
+          curl --fail --location --silent --show-error \
+            https://s3.amazonaws.com/downloads.mongodb.org/tools/db/mongodb-database-tools-ubuntu2404-x86_64-100.19.0.tgz \
+            --output /tmp/mongodb-database-tools.tgz
+          curl --fail --location --silent --show-error \
+            https://s3.amazonaws.com/downloads.mongodb.org/tools/db/mongodb-database-tools-ubuntu2404-x86_64-100.19.0.tgz.sig \
+            --output /tmp/mongodb-database-tools.tgz.sig
+          gpg --batch --verify /tmp/mongodb-database-tools.tgz.sig /tmp/mongodb-database-tools.tgz
+          mkdir --parents /tmp/mongodb-database-tools
+          tar --extract --gzip --file /tmp/mongodb-database-tools.tgz --directory /tmp/mongodb-database-tools
+          sudo install --mode=0755 \
+            /tmp/mongodb-database-tools/mongodb-database-tools-ubuntu2404-x86_64-100.19.0/bin/mongodump \
+            /usr/local/bin/mongodump
+          sudo install --mode=0755 \
+            /tmp/mongodb-database-tools/mongodb-database-tools-ubuntu2404-x86_64-100.19.0/bin/mongorestore \
+            /usr/local/bin/mongorestore
+      - name: Install control-plane database clients and migrator
+        working-directory: benzene-control-plane
+        run: npm ci --include=dev
+      - name: Rehearse an isolated paired restore
+        run: node scripts/metadata-backup.restore-rehearsal.mjs
