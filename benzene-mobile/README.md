@@ -51,8 +51,11 @@ Run `npm run check:store-config` to resolve the production Expo native config
 with fixture identifiers and URLs and verify the identifier guards, transport
 policy, permission list and EAS build-number settings. The fixture values only
 exercise validation; the publisher must provide real owned identifiers and
-service URLs for an actual build. The default icons are scaffold assets and
-need Benzene-owned artwork before review.
+service URLs for an actual build. The app icon is a Benzene-owned, static rendering
+of the same outer ring, hexagon and aromatic circle used by the web wordmark. Its
+iOS image is opaque; Android's foreground and monochrome layers use transparent
+backgrounds and keep the full mark within the adaptive-icon safe area. Regenerate
+all three PNGs on macOS with `swift assets/images/generate-icons.swift assets/images`.
 
 ## Native authentication contract
 

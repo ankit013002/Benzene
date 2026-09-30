@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { PNG } from 'pngjs';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -61,4 +62,48 @@ test('EAS production profile uses monotonically incremented local store build nu
   assert.equal(eas.cli.appVersionSource, 'local');
   assert.equal(eas.build.production.autoIncrement, true);
   assert.equal(eas.build.production.distribution, undefined);
+});
+
+test('store icon assets have platform dimensions, opaque iOS background and Android safe-zone artwork', () => {
+  const images = path.join(appDirectory, 'assets/images');
+  const ios = PNG.sync.read(readFileSync(path.join(images, 'icon.png')));
+  const foreground = PNG.sync.read(readFileSync(path.join(images, 'android-icon-foreground.png')));
+  const monochrome = PNG.sync.read(readFileSync(path.join(images, 'android-icon-monochrome.png')));
+
+  assert.equal(ios.width, 1024);
+  assert.equal(ios.height, 1024);
+  assert.equal(foreground.width, 432);
+  assert.equal(foreground.height, 432);
+  assert.equal(monochrome.width, 432);
+  assert.equal(monochrome.height, 432);
+
+  for (let index = 3; index < ios.data.length; index += 4) {
+    assert.equal(ios.data[index], 255, 'iOS app icon must not contain transparent pixels');
+  }
+
+  for (const image of [foreground, monochrome]) {
+    let minX = image.width;
+    let maxX = -1;
+    let minY = image.height;
+    let maxY = -1;
+    for (let y = 0; y < image.height; y += 1) {
+      for (let x = 0; x < image.width; x += 1) {
+        const alpha = image.data[(y * image.width + x) * 4 + 3];
+        if (alpha === 0) continue;
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+      }
+    }
+    assert.ok(maxX >= minX && maxY >= minY, 'Android artwork must be visible');
+    assert.ok(maxX - minX + 1 <= image.width * 0.66, 'Android artwork must stay in adaptive-icon horizontal safe area');
+    assert.ok(maxY - minY + 1 <= image.height * 0.66, 'Android artwork must stay in adaptive-icon vertical safe area');
+  }
+
+  for (let index = 0; index < monochrome.data.length; index += 4) {
+    assert.equal(monochrome.data[index], 0, 'monochrome artwork must use black RGB');
+    assert.equal(monochrome.data[index + 1], 0, 'monochrome artwork must use black RGB');
+    assert.equal(monochrome.data[index + 2], 0, 'monochrome artwork must use black RGB');
+  }
 });
