@@ -81,6 +81,29 @@ export function resetTokenFromInput(value: string): string | null {
   }
 }
 
+export function resetTokenFromIncomingLink(url: string | null, routeToken: string | string[] | undefined, appLinkOrigin: string | undefined): string | null {
+  const token = typeof routeToken === 'string' ? routeToken.trim() : '';
+  if (!url || !token || !appLinkOrigin) return null;
+  try {
+    const incoming = new URL(url);
+    const configuredOrigin = new URL(appLinkOrigin);
+    if (
+      incoming.protocol !== 'https:' ||
+      configuredOrigin.protocol !== 'https:' ||
+      incoming.origin !== configuredOrigin.origin ||
+      incoming.pathname !== '/reset-password' ||
+      incoming.username ||
+      incoming.password ||
+      incoming.hash ||
+      incoming.searchParams.getAll('token').length !== 1 ||
+      incoming.searchParams.get('token') !== token
+    ) return null;
+    return token;
+  } catch {
+    return null;
+  }
+}
+
 export function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }

@@ -20,6 +20,7 @@ function productionConfig(extraEnvironment = {}) {
       IOS_BUNDLE_IDENTIFIER: 'com.benzene.releasecheck.ios',
       ANDROID_APPLICATION_ID: 'com.benzene.releasecheck.android',
       EXPO_PUBLIC_GATEWAY_ORIGIN: 'https://gateway.benzene-release-check.com',
+      EXPO_PUBLIC_APP_LINK_ORIGIN: 'https://benzene-release-check.com',
       EXPO_PUBLIC_PRIVACY_POLICY_URL: 'https://benzene-release-check.com/privacy',
       EXPO_PUBLIC_TERMS_OF_SERVICE_URL: 'https://benzene-release-check.com/terms',
       EXPO_PUBLIC_SUPPORT_URL: 'https://benzene-release-check.com/support',
@@ -42,6 +43,12 @@ test('production Expo config requires a public account-deletion information URL'
   assert.match(result.stderr, /EXPO_PUBLIC_ACCOUNT_DELETION_URL must be set for production builds/);
 });
 
+test('production Expo config requires a public HTTPS app-link origin', () => {
+  const result = productionConfig({ EXPO_PUBLIC_APP_LINK_ORIGIN: '' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /EXPO_PUBLIC_APP_LINK_ORIGIN must be set for production builds/);
+});
+
 test('production Expo config rejects invalid Android IDs and non-public gateway hosts', () => {
   const badPackage = productionConfig({ ANDROID_APPLICATION_ID: 'com.publisher.Bad-App' });
   assert.notEqual(badPackage.status, 0);
@@ -60,6 +67,13 @@ test('production native config keeps transport and permissions narrowly scoped',
   assert.equal(config.ios.bundleIdentifier, 'com.benzene.releasecheck.ios');
   assert.equal(config.android.package, 'com.benzene.releasecheck.android');
   assert.equal(config.scheme, 'benzene');
+  assert.deepEqual(config.ios.associatedDomains, ['applinks:benzene-release-check.com']);
+  assert.deepEqual(config.android.intentFilters, [{
+    action: 'VIEW',
+    autoVerify: true,
+    data: [{ scheme: 'https', host: 'benzene-release-check.com', pathPrefix: '/reset-password' }],
+    category: ['BROWSABLE', 'DEFAULT'],
+  }]);
   assert.equal(config.extra.eas.projectId, '123e4567-e89b-42d3-a456-426614174000');
   assert.equal(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsArbitraryLoads, false);
   assert.equal(config.ios.infoPlist.NSAppTransportSecurity.NSAllowsLocalNetworking, true);

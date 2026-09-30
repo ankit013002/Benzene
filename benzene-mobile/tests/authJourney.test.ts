@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isValidEmail, mapAuthJourneyError, passwordLengthError, requestPasswordReset, resetPassword, resendVerification, resetTokenFromInput, signUp } from '../src/api/authJourney';
+import { isValidEmail, mapAuthJourneyError, passwordLengthError, requestPasswordReset, resetPassword, resendVerification, resetTokenFromInput, resetTokenFromIncomingLink, signUp } from '../src/api/authJourney';
 
 const genericSuccess = () => new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -44,6 +44,18 @@ test('reset form accepts a pasted HTTPS reset URL without accepting other web de
   assert.equal(resetTokenFromInput('https://vault.example/reset-password?token=one%2Ftime'), 'one/time');
   assert.equal(resetTokenFromInput('https://vault.example/login?token=one-time-token'), null);
   assert.equal(resetTokenFromInput('benzene://reset-password?token=one-time-token'), null);
+});
+
+test('incoming reset links require the configured HTTPS origin and matching Expo Router token', () => {
+  const origin = 'https://vault.benzene.example';
+  const url = 'https://vault.benzene.example/reset-password?token=one%2Ftime';
+  assert.equal(resetTokenFromIncomingLink(url, 'one/time', origin), 'one/time');
+  assert.equal(resetTokenFromIncomingLink('benzene://reset-password?token=one-time-token', 'one-time-token', origin), null);
+  assert.equal(resetTokenFromIncomingLink(url, 'different-token', origin), null);
+  assert.equal(resetTokenFromIncomingLink(url, ['one/time', 'second'], origin), null);
+  assert.equal(resetTokenFromIncomingLink('https://evil.example/reset-password?token=one%2Ftime', 'one/time', origin), null);
+  assert.equal(resetTokenFromIncomingLink('https://vault.benzene.example/other?token=one%2Ftime', 'one/time', origin), null);
+  assert.equal(resetTokenFromIncomingLink('https://vault.benzene.example/reset-password?token=one&token=two', 'one', origin), null);
 });
 
 test('authentication error mapping stays useful without echoing server details', async () => {

@@ -10,6 +10,7 @@ const environment = {
   ANDROID_APPLICATION_ID: 'com.publisher.benzene.android',
   EAS_PROJECT_ID: '123e4567-e89b-42d3-a456-426614174000',
   EXPO_PUBLIC_GATEWAY_ORIGIN: 'https://gateway.benzene-release-check.com',
+  EXPO_PUBLIC_APP_LINK_ORIGIN: 'https://benzene-release-check.com',
   EXPO_PUBLIC_PRIVACY_POLICY_URL: 'https://benzene-release-check.com/privacy',
   EXPO_PUBLIC_TERMS_OF_SERVICE_URL: 'https://benzene-release-check.com/terms',
   EXPO_PUBLIC_SUPPORT_URL: 'https://benzene-release-check.com/support',
@@ -82,6 +83,17 @@ test('store build preflight requires a public HTTPS account-deletion page', () =
     eas: buildConfig(),
   });
   assert.equal(local.some((error) => error.includes('EXPO_PUBLIC_ACCOUNT_DELETION_URL')), true);
+});
+
+test('store build preflight requires a public HTTPS app-link origin', () => {
+  for (const value of ['', 'http://benzene-release-check.com', 'https://192.168.1.20', 'https://example.com/path']) {
+    const errors = validateStorePreflight({
+      mode: 'build',
+      environment: { ...environment, EXPO_PUBLIC_APP_LINK_ORIGIN: value },
+      eas: buildConfig(),
+    });
+    assert.equal(errors.some((error) => error.includes('EXPO_PUBLIC_APP_LINK_ORIGIN')), true, value);
+  }
 });
 
 test('store submission preflight validates non-secret ASC and Play config and local key paths', () => {

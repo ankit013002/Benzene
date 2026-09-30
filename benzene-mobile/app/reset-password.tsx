@@ -1,21 +1,32 @@
 import { Link, router, type Href } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
+import { useLinkingURL } from 'expo-linking';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
-import { passwordLengthError, resetPassword, resetTokenFromInput } from '../src/api/authJourney';
+import { passwordLengthError, resetPassword, resetTokenFromIncomingLink, resetTokenFromInput } from '../src/api/authJourney';
 import { ActionButton } from '../src/components/ActionButton';
 import { Body, Screen, Wordmark } from '../src/components/Screen';
 import { palette, type } from '../src/theme';
 
 export default function ResetPasswordScreen() {
+  const { token: routeToken } = useLocalSearchParams<{ token?: string | string[] }>();
+  const linkingUrl = useLinkingURL();
   const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
   const [complete, setComplete] = useState(false);
   const [error, setError] = useState('');
+  const incomingToken = resetTokenFromIncomingLink(
+    linkingUrl,
+    routeToken,
+    process.env.EXPO_PUBLIC_APP_LINK_ORIGIN,
+  );
+  const effectiveToken = token || incomingToken || '';
+  const invalidIncomingLink = Boolean(linkingUrl && routeToken && !incomingToken);
   async function submit() {
     setError('');
-    const submittedToken = resetTokenFromInput(token);
+    const submittedToken = resetTokenFromInput(effectiveToken);
     if (!submittedToken) { setError('Paste the token or complete HTTPS reset link from your email.'); return; }
     const lengthError = passwordLengthError(password);
     if (lengthError) { setError(lengthError); return; }
@@ -28,10 +39,10 @@ export default function ResetPasswordScreen() {
   return <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Screen><Wordmark subtitle="Account recovery" />
       <View style={styles.intro}><Text style={styles.title}>{complete ? 'Password updated.' : 'Choose a new password.'}</Text><Body style={styles.copy}>{complete ? 'You can now sign in with your new password.' : 'Open the reset link from your email. If it opened in a browser, you can paste its token here.'}</Body></View>
-      {!complete ? <View style={styles.form}><Text style={styles.label}>Reset token or link</Text><TextInput autoCapitalize="none" autoCorrect={false} secureTextEntry value={token} onChangeText={setToken} placeholder="Paste reset token or email link" placeholderTextColor={palette.muted} style={[styles.input, styles.token]} accessibilityLabel="Reset token or link" />
+      {!complete ? <View style={styles.form}><Text style={styles.label}>Reset token or link</Text><TextInput autoCapitalize="none" autoCorrect={false} secureTextEntry value={effectiveToken} onChangeText={setToken} placeholder="Paste reset token or email link" placeholderTextColor={palette.muted} style={[styles.input, styles.token]} accessibilityLabel="Reset token or link" />
         <Text style={styles.label}>New password</Text><TextInput autoCapitalize="none" autoComplete="new-password" secureTextEntry textContentType="newPassword" value={password} onChangeText={setPassword} placeholder="At least 8 characters" placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel="New password" />
         <Text style={styles.label}>Confirm new password</Text><TextInput autoCapitalize="none" autoComplete="new-password" secureTextEntry textContentType="newPassword" value={confirmation} onChangeText={setConfirmation} placeholder="Enter it again" placeholderTextColor={palette.muted} style={styles.input} accessibilityLabel="Confirm new password" onSubmitEditing={() => void submit()} />
-        {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}<ActionButton title="Reset password" onPress={() => void submit()} busy={busy} disabled={!token || !password || !confirmation} />
+        {error || invalidIncomingLink ? <Text accessibilityRole="alert" style={styles.error}>{error || 'This reset link is not a valid Benzene HTTPS link. Open the reset email in your browser.'}</Text> : null}<ActionButton title="Reset password" onPress={() => void submit()} busy={busy} disabled={!effectiveToken || !password || !confirmation} />
       </View> : <View style={styles.form}><ActionButton title="Go to sign in" onPress={() => router.replace('/sign-in')} /></View>}
       <Link href={'/forgot-password' as Href} style={styles.link}>Request another reset email</Link>
     </Screen>

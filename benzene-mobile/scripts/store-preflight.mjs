@@ -47,6 +47,7 @@ function validateBuild(environment, eas) {
   }
   for (const [name, originOnly] of [
     ['EXPO_PUBLIC_GATEWAY_ORIGIN', true],
+    ['EXPO_PUBLIC_APP_LINK_ORIGIN', true],
     ['EXPO_PUBLIC_PRIVACY_POLICY_URL', false],
     ['EXPO_PUBLIC_TERMS_OF_SERVICE_URL', false],
     ['EXPO_PUBLIC_SUPPORT_URL', false],

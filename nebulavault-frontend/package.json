@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test src/utils/file-system/uploadFiles.test.ts src/utils/file-system/deviceUpload.test.ts src/utils/auth/authDestination.test.ts src/utils/auth/verificationResendMessage.test.ts src/proxy.test.ts src/legalPages.test.ts"
+    "test": "tsx --test src/utils/file-system/uploadFiles.test.ts src/utils/file-system/deviceUpload.test.ts src/utils/auth/authDestination.test.ts src/utils/auth/verificationResendMessage.test.ts src/proxy.test.ts src/legalPages.test.ts src/app/.well-known/appLinks.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",

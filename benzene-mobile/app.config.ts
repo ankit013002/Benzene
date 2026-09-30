@@ -58,10 +58,26 @@ function requireProductionUrl(environmentName: string, originOnly = false): void
 }
 
 requireProductionUrl('EXPO_PUBLIC_GATEWAY_ORIGIN', true);
+requireProductionUrl('EXPO_PUBLIC_APP_LINK_ORIGIN', true);
 requireProductionUrl('EXPO_PUBLIC_PRIVACY_POLICY_URL');
 requireProductionUrl('EXPO_PUBLIC_TERMS_OF_SERVICE_URL');
 requireProductionUrl('EXPO_PUBLIC_SUPPORT_URL');
 requireProductionUrl('EXPO_PUBLIC_ACCOUNT_DELETION_URL');
+
+const appLinkOrigin = process.env.EXPO_PUBLIC_APP_LINK_ORIGIN?.trim();
+let appLinkHost: string | undefined;
+if (appLinkOrigin) {
+  let parsed: URL;
+  try {
+    parsed = new URL(appLinkOrigin);
+  } catch {
+    throw new Error('EXPO_PUBLIC_APP_LINK_ORIGIN must be a public HTTPS origin.');
+  }
+  if (parsed.protocol !== 'https:' || (parsed.port !== '' && parsed.port !== '443') || parsed.pathname !== '/' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('EXPO_PUBLIC_APP_LINK_ORIGIN must be a public HTTPS origin.');
+  }
+  appLinkHost = parsed.hostname;
+}
 
 const config: ExpoConfig = {
   name: 'Benzene',
@@ -74,6 +90,7 @@ const config: ExpoConfig = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: appIdentifier('IOS_BUNDLE_IDENTIFIER'),
+    ...(appLinkHost ? { associatedDomains: [`applinks:${appLinkHost}`] } : {}),
     buildNumber: '1',
     privacyManifests: {
       NSPrivacyAccessedAPITypes: [
@@ -102,6 +119,14 @@ const config: ExpoConfig = {
   },
   android: {
     package: appIdentifier('ANDROID_APPLICATION_ID'),
+    ...(appLinkHost ? {
+      intentFilters: [{
+        action: 'VIEW',
+        autoVerify: true,
+        data: [{ scheme: 'https', host: appLinkHost, pathPrefix: '/reset-password' }],
+        category: ['BROWSABLE', 'DEFAULT'],
+      }],
+    } : {}),
     versionCode: 1,
     blockedPermissions: [
       'android.permission.READ_EXTERNAL_STORAGE',
