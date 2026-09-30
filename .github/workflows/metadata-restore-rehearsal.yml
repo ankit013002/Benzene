@@ -84,7 +84,7 @@ jobs:
             "https://fastdl.mongodb.org/tools/db/${mongodb_tools_archive}" \
             --output /tmp/mongodb-database-tools.tgz
           curl --fail --location --silent --show-error \
-            "https://s3.amazonaws.com/downloads.mongodb.org/tools/db/${mongodb_tools_archive}.sig" \
+            "https://fastdl.mongodb.org/tools/db/${mongodb_tools_archive}.sig" \
             --output /tmp/mongodb-database-tools.tgz.sig
           gpg --batch --verify /tmp/mongodb-database-tools.tgz.sig /tmp/mongodb-database-tools.tgz
           mkdir --parents /tmp/mongodb-database-tools
