@@ -19,6 +19,7 @@ jobs:
     outputs:
       web: ${{ steps.filter.outputs.web }}
       mobile: ${{ steps.filter.outputs.mobile }}
+      store_deployment_probe: ${{ steps.filter.outputs.store_deployment_probe }}
       encrypted_contract: ${{ steps.filter.outputs.encrypted_contract }}
       auth: ${{ steps.filter.outputs.auth }}
       gateway: ${{ steps.filter.outputs.gateway }}
@@ -41,6 +42,12 @@ jobs:
               - 'nebulavault-frontend/**'
             mobile:
               - 'benzene-mobile/**'
+              - '.github/workflows/**'
+            store_deployment_probe:
+              - 'scripts/verify-mobile-store-deployment.mjs'
+              - 'scripts/verify-mobile-store-deployment.test.mjs'
+              - 'nebulavault-frontend/src/app/.well-known/**'
+              - 'benzene-mobile/app.config.ts'
               - '.github/workflows/**'
             encrypted_contract:
               - 'contracts/encrypted-object-v1/**'
@@ -95,6 +102,19 @@ jobs:
               - 'nebulavault-user-service/**'
               - 'scripts/smoke-user-profile.mjs'
               - '.github/workflows/**'
+
+  store-deployment-probe:
+    name: Mobile store deployment probe — tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.store_deployment_probe == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+      - name: Test fail-closed public deployment verification
+        run: node --test scripts/verify-mobile-store-deployment.test.mjs
 
   web:
     name: Frontend (Next.js) — build
