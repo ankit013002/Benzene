@@ -47,10 +47,13 @@ used for production tickets.
 
 ## Shared durable state
 
-Apply `migrations/001_relay_sessions.sql` once to the relay database before
-starting a release. The service does not migrate at startup. Every instance
-must use the same PostgreSQL database and `RELAY_MAX_SESSIONS`. A transaction
-advisory lock serializes ticket claims and global capacity admission;
+Apply the schema as an explicit release step before starting or updating the
+service. After building, run `npm run db:migrate:runtime` with the relay
+`DATABASE_URL`; this uses the SQL shipped in `migrations/` and does not run when
+the server starts. The command is safe to retry and serializes concurrent
+release jobs with a PostgreSQL advisory lock. Every instance must use the same
+PostgreSQL database and `RELAY_MAX_SESSIONS`. A separate transaction advisory
+lock serializes ticket claims and global capacity admission;
 `ticket_id` and `(session_id, role)` are unique in PostgreSQL. Claims survive
 process restarts and reject replay on every instance. Expired session rows and
 their ticket tombstones are removed during subsequent claims, after ticket
@@ -83,15 +86,26 @@ policies that allow only the service and operators to reach the database. The
 health endpoint is process liveness only; it does not validate database
 readiness.
 
+The multi-stage `Dockerfile` builds the TypeScript service and runs only its
+production dependencies as the non-root `benzene` user. The image binds to
+`0.0.0.0:8090` inside its container; keep that port private behind the TLS
+terminator. Its default command starts the relay and never migrates the
+database. Run the migration as a one-off release job using the same image and
+database credentials, overriding the command with `node built/migrate.js`.
+The image is published to GHCR as
+`ghcr.io/<repository-owner>/benzene-relay-service` using the same SHA, branch,
+semver and default-branch `latest` tags as the other services. A buildable and
+published image does not mean the relay is deployed or remotely verified.
+
 ## Local use
 
 ```sh
 npm ci
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/001_relay_sessions.sql
 cp .env.example .env
 npm run typecheck
 npm test
 npm run build
+npm run db:migrate:runtime
 npm start
 ```
 
@@ -100,6 +114,6 @@ is set, it also creates an isolated schema and exercises shared-instance and
 restart replay claims against real PostgreSQL. CI run `36606892325` passed all
 15 relay-service tests together with the control-plane assignment and
 node/mobile contract suites. These tests do not make the service
-production-ready: a container/deployment, TLS termination and DNS, abuse
-controls, operational monitoring, client-to-node remote acceptance and
+production-ready: a real container release, deployment, TLS termination and
+DNS, abuse controls, operational monitoring, client-to-node remote acceptance and
 representative network-failure testing remain outstanding.

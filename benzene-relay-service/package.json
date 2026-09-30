@@ -10,6 +10,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node built/index.js",
+    "db:migrate:runtime": "node built/migrate.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

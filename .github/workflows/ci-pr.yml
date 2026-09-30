@@ -563,6 +563,14 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - name: Apply explicit runtime migration twice
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          npm run db:migrate:runtime
+          npm run db:migrate:runtime
+      - name: Build non-root runtime image
+        run: docker build --tag benzene-relay-service:ci .
       - name: Test with shared PostgreSQL state
         run: npm test
       - name: Relay scope vectors match the node agent
