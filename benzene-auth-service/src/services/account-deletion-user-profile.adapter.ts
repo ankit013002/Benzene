@@ -216,3 +216,34 @@ export function createDeviceDataDeletionHandler(
     }
   };
 }
+
+/** Deletes the relational Vault graph only after storage and device cleanup receipts. */
+export function createVaultMetadataDeletionHandler(
+  config: StoredObjectsDeletionConfig,
+  fetchImplementation: typeof fetch = fetch,
+): AccountDeletionPhaseHandler {
+  return async ({ credentialId }) => {
+    const endpoint = new URL(
+      `${encodeURIComponent(credentialId)}/vault-metadata`,
+      `${config.endpoint.href.replace(/\/$/, "")}/`,
+    );
+    const response = await fetchImplementation(endpoint, {
+      method: "POST",
+      headers: { "X-Benzene-Internal-Secret": config.secret },
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
+    if (!response.ok) {
+      throw new Error(`Vault-metadata deletion returned HTTP ${response.status}`);
+    }
+    const result: unknown = await response.json();
+    if (
+      typeof result !== "object" ||
+      result === null ||
+      !("complete" in result) ||
+      result.complete !== true
+    ) {
+      throw new Error("Vault-metadata cleanup remains incomplete");
+    }
+  };
+}

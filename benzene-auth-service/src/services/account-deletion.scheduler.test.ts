@@ -27,6 +27,7 @@ describe("account deletion scheduler", () => {
     expect(capturedHandlers?.user_profile).toBeTypeOf("function");
     expect(capturedHandlers?.stored_objects).toBeUndefined();
     expect(capturedHandlers?.device_data).toBeUndefined();
+    expect(capturedHandlers?.vault_metadata).toBeUndefined();
     stop();
   });
 
@@ -60,6 +61,7 @@ describe("account deletion scheduler", () => {
     expect(runBatch).toHaveBeenCalledOnce();
     expect(runBatch.mock.calls[0]?.[1]).toBe(10);
     expect(capturedHandlers?.device_data).toBeTypeOf("function");
+    expect(capturedHandlers?.vault_metadata).toBeTypeOf("function");
 
     await vi.advanceTimersByTimeAsync(15_000);
     expect(runBatch).toHaveBeenCalledOnce();

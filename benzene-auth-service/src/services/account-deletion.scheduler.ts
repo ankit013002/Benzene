@@ -2,6 +2,7 @@ import {
   createDeviceDataDeletionHandler,
   createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
+  createVaultMetadataDeletionHandler,
   readAccountDeletionWorkerConfig,
 } from "./account-deletion-user-profile.adapter";
 import {
@@ -21,6 +22,7 @@ export function startAccountDeletionWorkerScheduler(
   if (config.storedObjects) {
     handlers.stored_objects = createStoredObjectsDeletionHandler(config.storedObjects);
     handlers.device_data = createDeviceDataDeletionHandler(config.storedObjects);
+    handlers.vault_metadata = createVaultMetadataDeletionHandler(config.storedObjects);
   }
   let running = false;
   let stopped = false;

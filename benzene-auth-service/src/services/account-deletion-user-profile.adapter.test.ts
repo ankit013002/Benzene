@@ -4,6 +4,7 @@ import {
   createDeviceDataDeletionHandler,
   createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
+  createVaultMetadataDeletionHandler,
   readAccountDeletionWorkerConfig,
 } from "./account-deletion-user-profile.adapter";
 
@@ -269,6 +270,60 @@ describe("account deletion user-profile adapter", () => {
         credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
         requestedAt: new Date(),
         phase: "device_data",
+        attempt: 2,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("only advances Vault metadata cleanup after a complete control-plane receipt", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ complete: false, reason: "devices_not_removed" }), {
+        status: 200,
+      }),
+    );
+    const config = readAccountDeletionWorkerConfig(validEnvironment, "development");
+    if (!config?.storedObjects) throw new Error("Expected control-plane adapter config");
+    const handler = createVaultMetadataDeletionHandler(
+      config.storedObjects,
+      fetchImplementation,
+    );
+
+    await expect(
+      handler({
+        requestId: "request-1",
+        credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(),
+        phase: "vault_metadata",
+        attempt: 1,
+      }),
+    ).rejects.toThrow("remains incomplete");
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      new URL(
+        "http://control-plane:5000/internal/account-deletion/7e1c77ad-56a0-483f-8eba-52a4f50bf2a1/vault-metadata",
+      ),
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "X-Benzene-Internal-Secret": validEnvironment.ACCOUNT_DELETION_CONTROL_PLANE_SECRET,
+        },
+        redirect: "error",
+      }),
+    );
+
+    const completeHandler = createVaultMetadataDeletionHandler(
+      config.storedObjects,
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ complete: true, deletedVaults: 1 }), {
+          status: 200,
+        }),
+      ),
+    );
+    await expect(
+      completeHandler({
+        requestId: "request-1",
+        credentialId: "7e1c77ad-56a0-483f-8eba-52a4f50bf2a1",
+        requestedAt: new Date(),
+        phase: "vault_metadata",
         attempt: 2,
       }),
     ).resolves.toBeUndefined();
