@@ -74,15 +74,15 @@ function resolveCredentialPath(root, value, extension, label, errors) {
   }
 }
 
-function validateSubmit(eas, environment, root = appDirectory) {
+function validateSubmit(eas, environment, root = appDirectory, platforms = ['ios', 'android']) {
   const errors = [];
   const profile = eas.submit?.production;
   if (!profile || typeof profile !== 'object') return ['eas.json submit.production is required for non-interactive store submission.'];
 
   const ios = profile.ios;
-  if (!ios || typeof ios !== 'object') {
+  if (platforms.includes('ios') && (!ios || typeof ios !== 'object')) {
     errors.push('eas.json submit.production.ios must configure App Store Connect submission.');
-  } else {
+  } else if (platforms.includes('ios')) {
     if (!/^\d{8,}$/.test(String(ios.ascAppId ?? ''))) errors.push('submit.production.ios.ascAppId must be the numeric App Store Connect Apple ID.');
     if (!/^[A-Z0-9]{10}$/.test(String(ios.ascApiKeyId ?? ''))) errors.push('submit.production.ios.ascApiKeyId must be the 10-character App Store Connect API key ID.');
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(ios.ascApiKeyIssuerId ?? ''))) errors.push('submit.production.ios.ascApiKeyIssuerId must be the App Store Connect API issuer UUID.');
@@ -91,9 +91,9 @@ function validateSubmit(eas, environment, root = appDirectory) {
   }
 
   const android = profile.android;
-  if (!android || typeof android !== 'object') {
+  if (platforms.includes('android') && (!android || typeof android !== 'object')) {
     errors.push('eas.json submit.production.android must configure Google Play submission.');
-  } else {
+  } else if (platforms.includes('android')) {
     if (android.applicationId && android.applicationId !== environment.ANDROID_APPLICATION_ID) errors.push('submit.production.android.applicationId must match ANDROID_APPLICATION_ID.');
     if (!['internal', 'alpha', 'beta', 'production'].includes(android.track)) errors.push('submit.production.android.track must explicitly select an EAS-supported Play track.');
     resolveCredentialPath(root, android.serviceAccountKeyPath, '.json', 'submit.production.android.serviceAccountKeyPath', errors);
@@ -101,15 +101,20 @@ function validateSubmit(eas, environment, root = appDirectory) {
   return errors;
 }
 
-export function validateStorePreflight({ mode, environment = process.env, eas, root = appDirectory }) {
+export function validateStorePreflight({ mode, environment = process.env, eas, root = appDirectory, platforms = ['ios', 'android'] }) {
   if (mode !== 'build' && mode !== 'submit') return ['Usage: npm run check:store-build or npm run check:store-submit'];
+  if (platforms.length === 0 || platforms.some((platform) => !['ios', 'android'].includes(platform))) {
+    return ['Platform must be ios, android, or all.'];
+  }
   const errors = validateBuild(environment, eas);
-  if (mode === 'submit') errors.push(...validateSubmit(eas, environment, root));
+  if (mode === 'submit') errors.push(...validateSubmit(eas, environment, root, platforms));
   return errors;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const mode = process.argv[2];
+  const platform = process.argv[3] ?? 'all';
+  const platforms = platform === 'all' ? ['ios', 'android'] : [platform];
   let eas;
   try {
     eas = JSON.parse(readFileSync(path.join(appDirectory, 'eas.json'), 'utf8'));
@@ -118,7 +123,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exitCode = 1;
   }
   if (eas) {
-    const errors = validateStorePreflight({ mode, eas });
+    const errors = validateStorePreflight({ mode, eas, platforms });
     if (errors.length > 0) {
       console.error(`Store ${mode} preflight failed:\n${errors.map((error) => `- ${error}`).join('\n')}`);
       process.exitCode = 1;

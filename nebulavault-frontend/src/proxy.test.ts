@@ -9,6 +9,14 @@ test("account-deletion information page is public without a session", async () =
   assert.equal(response.headers.get("location"), null);
 });
 
+test("store-listing privacy, terms, and support pages are public without a session", async () => {
+  for (const path of ["/privacy", "/terms", "/support"]) {
+    const response = await proxy(new NextRequest(`https://benzene.example${path}`));
+    assert.equal(response.status, 200, `${path} should not require a session`);
+    assert.equal(response.headers.get("location"), null, `${path} should not redirect to login`);
+  }
+});
+
 test("account-deletion information page explains the real deletion limits", async () => {
   const { default: AccountDeletionPage } = await import("./app/account-deletion/page");
   const { renderToStaticMarkup } = await import("react-dom/server");

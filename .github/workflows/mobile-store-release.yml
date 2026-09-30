@@ -1,0 +1,105 @@
+name: Mobile store release (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to build and optionally submit
+        required: true
+        type: choice
+        options:
+          - all
+          - ios
+          - android
+      submit:
+        description: Upload the completed build to the selected store destinations
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-store-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Preflight, build${{ inputs.submit && ' and submit' || '' }} — ${{ inputs.platform }}
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment: mobile-production
+    defaults:
+      run:
+        shell: bash
+        working-directory: benzene-mobile
+    env:
+      IOS_BUNDLE_IDENTIFIER: ${{ vars.IOS_BUNDLE_IDENTIFIER }}
+      ANDROID_APPLICATION_ID: ${{ vars.ANDROID_APPLICATION_ID }}
+      EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+      EAS_OWNER: ${{ vars.EAS_OWNER }}
+      EXPO_PUBLIC_GATEWAY_ORIGIN: ${{ vars.EXPO_PUBLIC_GATEWAY_ORIGIN }}
+      EXPO_PUBLIC_PRIVACY_POLICY_URL: ${{ vars.EXPO_PUBLIC_PRIVACY_POLICY_URL }}
+      EXPO_PUBLIC_TERMS_OF_SERVICE_URL: ${{ vars.EXPO_PUBLIC_TERMS_OF_SERVICE_URL }}
+      EXPO_PUBLIC_SUPPORT_URL: ${{ vars.EXPO_PUBLIC_SUPPORT_URL }}
+      EXPO_PUBLIC_ACCOUNT_DELETION_URL: ${{ vars.EXPO_PUBLIC_ACCOUNT_DELETION_URL }}
+      PLATFORM: ${{ inputs.platform }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 22.13.1
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate native store configuration
+        run: npm run check:store-config
+
+      - name: Run build preflight
+        run: npm run check:store-build
+
+      - name: Prepare submit configuration and temporary credentials
+        if: inputs.submit
+        run: npm run prepare:store-release -- "$PLATFORM"
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+          ASC_API_KEY_ID: ${{ vars.ASC_API_KEY_ID }}
+          ASC_API_KEY_ISSUER_ID: ${{ vars.ASC_API_KEY_ISSUER_ID }}
+          ANDROID_PLAY_TRACK: ${{ vars.ANDROID_PLAY_TRACK }}
+          ASC_API_PRIVATE_KEY_P8: ${{ secrets.ASC_API_PRIVATE_KEY_P8 }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+
+      - name: Run submit preflight
+        if: inputs.submit
+        run: npm run check:store-submit -- "$PLATFORM"
+
+      - name: Build signed native app with EAS
+        run: npx --yes eas-cli@24.3.0 build --platform "$PLATFORM" --profile production --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Submit draft builds to selected stores
+        if: inputs.submit
+        run: npx --yes eas-cli@24.3.0 submit --platform "$PLATFORM" --profile production --latest --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Remove temporary store credentials
+        if: always()
+        run: |
+          node -e 'const fs = require("node:fs"); const path = require("node:path"); const dir = path.join(process.env.RUNNER_TEMP, `benzene-mobile-release-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`); fs.rmSync(dir, { recursive: true, force: true });'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}

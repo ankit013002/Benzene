@@ -108,3 +108,19 @@ test('store submission preflight fails clearly when publisher store records or c
   assert.equal(errors.some((error) => error.includes('ascAppId')), true);
   assert.equal(errors.some((error) => error.includes('serviceAccountKeyPath')), true);
 });
+
+test('store submission preflight requires credentials only for the selected platform', () => {
+  const eas = { ...buildConfig(), submit: { production: {
+    ios: {},
+    android: {},
+  } } };
+  const iosErrors = validateStorePreflight({ mode: 'submit', environment, eas, platforms: ['ios'] });
+  const androidErrors = validateStorePreflight({ mode: 'submit', environment, eas, platforms: ['android'] });
+  assert.equal(iosErrors.some((error) => error.includes('serviceAccountKeyPath')), false);
+  assert.equal(androidErrors.some((error) => error.includes('ascAppId')), false);
+});
+
+test('store preflight rejects unsupported or empty platform selections', () => {
+  assert.deepEqual(validateStorePreflight({ mode: 'build', environment, eas: buildConfig(), platforms: ['web'] }), ['Platform must be ios, android, or all.']);
+  assert.deepEqual(validateStorePreflight({ mode: 'submit', environment, eas: buildConfig(), platforms: [] }), ['Platform must be ios, android, or all.']);
+});

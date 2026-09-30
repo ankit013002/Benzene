@@ -193,14 +193,75 @@ tests cover request serialization, safe error mapping, ticket scope matching,
 bounded binary transport, timeout/close behavior and encrypted-object
 authentication before export. Relay is never selected as the default byte path.
 
+## Manual native store release
+
+`.github/workflows/mobile-store-release.yml` is a manual GitHub Actions
+workflow. It only runs when dispatched against `master`, builds `ios`,
+`android`, or `all` with the production EAS profile, and defaults to build only.
+The optional submit switch runs the selected store preflight before the build,
+then uploads the resulting build. Android is submitted with `releaseStatus:
+draft`; iOS uploads to App Store Connect and does not submit an App Store review.
+No push, tag, or scheduled event starts a mobile build or upload.
+
+Before using it, create the GitHub Actions environment named
+`mobile-production`. Add these as environment **variables** (not secrets):
+
+| Variable | Value |
+| --- | --- |
+| `IOS_BUNDLE_IDENTIFIER` | Publisher-owned iOS bundle identifier |
+| `ANDROID_APPLICATION_ID` | Publisher-owned lowercase Android application ID |
+| `EAS_PROJECT_ID` | UUID of the already-created and linked EAS project |
+| `EAS_OWNER` | Optional Expo account slug |
+| `EXPO_PUBLIC_GATEWAY_ORIGIN` | Public HTTPS gateway origin, with no path |
+| `EXPO_PUBLIC_PRIVACY_POLICY_URL` | Public HTTPS privacy policy URL |
+| `EXPO_PUBLIC_TERMS_OF_SERVICE_URL` | Public HTTPS terms URL |
+| `EXPO_PUBLIC_SUPPORT_URL` | Public HTTPS support URL |
+| `EXPO_PUBLIC_ACCOUNT_DELETION_URL` | Public HTTPS account deletion information URL |
+| `ASC_APP_ID` | Numeric App Store Connect Apple ID (submit iOS only) |
+| `ASC_API_KEY_ID` | 10-character App Store Connect API key ID (submit iOS only) |
+| `ASC_API_KEY_ISSUER_ID` | App Store Connect API issuer UUID (submit iOS only) |
+| `ANDROID_PLAY_TRACK` | EAS-supported Google Play track: `internal`, `alpha`, `beta`, or `production` (submit Android only); prefer `internal` initially |
+
+Add these as environment **secrets**. `EXPO_TOKEN` is needed for every build
+and should be a least-privilege Expo robot-user token for the linked project.
+For optional submission, add the platform credentials used by the selected
+platform:
+
+| Secret | Value |
+| --- | --- |
+| `ASC_API_PRIVATE_KEY_P8` | Full contents of the App Store Connect API `.p8` private key (iOS submit) |
+| `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Full contents of the Google Play service-account JSON key file (Android submit) |
+
+When submit is selected, the workflow writes these secret values with owner-only
+permissions beneath the GitHub runner temporary directory, generates the
+runtime-only `eas.json` submit entries, and deletes the temporary directory at
+job end. The submit preflight checks only the selected platform's metadata and
+temporary credential path. The build still requires valid EAS-managed signing
+credentials already configured for each selected platform; signing material is
+not checked into this repository or added as GitHub secrets by this workflow.
+If EAS does not have signing credentials, the non-interactive build fails
+closed. Store records, Apple/Google account access, Android API access, and
+App Store Connect / Play Console readiness are external setup steps. A
+successful EAS build or upload is not store approval or a validated native
+release.
+
+`eas.json` pins EAS CLI to `24.3.0`; the workflow installs that exact version
+and pins each GitHub Action by full commit SHA. Workflow-level static checks
+are included in `npm test`.
+
 ## Configuration ownership
 
 `EXPO_PUBLIC_GATEWAY_ORIGIN`, `EXPO_PUBLIC_PRIVACY_POLICY_URL`,
 `EXPO_PUBLIC_TERMS_OF_SERVICE_URL`, `EXPO_PUBLIC_SUPPORT_URL` and
 `EXPO_PUBLIC_ACCOUNT_DELETION_URL` are public runtime configuration, not
-secrets. Set the deletion URL to the published public HTTPS
-`/account-deletion` information page; production Expo config and store preflight
-reject missing, local, placeholder or non-HTTPS values. The app bundle
+secrets. After deploying the frontend on a public HTTPS origin, set the privacy,
+terms, and support URLs to that origin's `/privacy`, `/terms`, and `/support`
+routes. The pages are public; the support page does not invent an operator
+contact, so the publisher must also provide a real support contact in the app
+listing or deployment materials. Keep account deletion separate by setting its
+URL to the same origin's `/account-deletion` information page. Production Expo
+config and store preflight reject missing, local, placeholder or non-HTTPS URLs.
+The app bundle
 identifiers are placeholders until the publisher chooses identifiers. EAS
 project IDs, signing credentials, production URLs, legal/support URLs, App Store
 Connect IDs and Google Play credentials are deliberately unset. The live store

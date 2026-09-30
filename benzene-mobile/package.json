@@ -58,6 +58,7 @@
     "check:store-config": "node --test tests/storeConfig.test.mjs",
     "check:store-build": "node scripts/store-preflight.mjs build",
     "check:store-submit": "node scripts/store-preflight.mjs submit",
+    "prepare:store-release": "node scripts/prepare-store-release.mjs",
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
     "lint": "eslint app src tests --max-warnings 0",
