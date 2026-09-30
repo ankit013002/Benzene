@@ -13,7 +13,7 @@ function appIdentifier(environmentName: string): string {
   const validIdentifier = environmentName === 'ANDROID_APPLICATION_ID'
     ? /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(value ?? '')
     : /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(value ?? '');
-  const placeholder = (value ?? '').split('.').some((part) => ['example', 'placeholder', 'changeme', 'yourcompany'].includes(part.toLowerCase()));
+  const placeholder = (value ?? '').split('.').some((part: string) => ['example', 'placeholder', 'changeme', 'yourcompany'].includes(part.toLowerCase()));
   if (productionBuild && (!value || !validIdentifier || placeholder || value === exampleIdentifier || value.startsWith('com.example.'))) {
     throw new Error(`${environmentName} must be set to an identifier owned by the publisher for production builds.`);
   }
@@ -74,6 +74,22 @@ const config: ExpoConfig = {
     supportsTablet: true,
     bundleIdentifier: appIdentifier('IOS_BUNDLE_IDENTIFIER'),
     buildNumber: '1',
+    privacyManifests: {
+      NSPrivacyAccessedAPITypes: [
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+          NSPrivacyAccessedAPITypeReasons: ['C617.1', '3B52.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+          NSPrivacyAccessedAPITypeReasons: ['35F9.1'],
+        },
+        {
+          NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+          NSPrivacyAccessedAPITypeReasons: ['CA92.1'],
+        },
+      ],
+    },
     infoPlist: {
       NSAppTransportSecurity: productionBuild
         ? { NSAllowsArbitraryLoads: false, NSAllowsLocalNetworking: true }
