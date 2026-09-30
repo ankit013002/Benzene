@@ -577,21 +577,31 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-CI run `36708847466` is fully green at commit `bbbff0a`. It verifies
-**402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
-tests**, **15/15 relay-service tests**, and **62 mobile checks** (46 TypeScript
-transfer/crypto tests plus 16 JavaScript/configuration checks). It also verifies
-typechecks and production builds, relay contract vectors, all three mobile
-JavaScript exports, five metadata-backup safeguards, the **68-check** core
-smoke, the **50-check** Protected repair/rebalance smoke, the **64-assertion**
-authenticated LAN acceptance and the **17-assertion** user-profile/account-
-deletion acceptance, plus the **11-check** real-component local relay vertical
-acceptance. The relay assignment integration and durable device-data deletion
-tests run against real PostgreSQL in that gate. Metadata restore rehearsal run
-`36707335396` is separately green at commit `3c2132c`.
+CI run `36710537523` is green at commit
+`4c42d6b945c5a521232bbc1828268493a4d6cafa`. It verifies **402/402
+control-plane tests**, **156/156 node-agent tests**, **133/133 auth tests**,
+**15/15 relay-service tests**, **68 mobile checks** (46 TypeScript
+transfer/crypto tests plus 22 JavaScript/configuration checks), and **24
+frontend tests**. It also verifies typechecks and production builds, relay
+contract vectors, all three mobile JavaScript exports, five metadata-backup
+safeguards, the **68-check** core smoke, the **50-check** Protected
+repair/rebalance smoke, the **64-assertion** authenticated LAN acceptance, the
+**17-assertion** user-profile/account-deletion acceptance, and the **11-check**
+real-component local relay vertical acceptance. The relay assignment integration
+and durable device-data deletion tests run against real PostgreSQL in that gate.
+The latest source adds a manual GitHub Actions native store release workflow. It is
+restricted to `master`, uses the protected `mobile-production` environment,
+requires explicit platform selection, and optionally submits builds after
+configuration and submission preflights. Submission targets remain drafts and
+do not request store review. Public `/privacy`, `/terms`, and `/support` pages
+now provide store-facing information; operators must still configure genuine
+public HTTPS destinations and support contact details. These additions do not
+verify a signed native release, store acceptance, remote relay, or production
+readiness. Metadata restore rehearsal run `36707335396` is separately green at
+commit `3c2132c`.
 
 The frontend transfer-helper suite has **8 tests** and its full suite has
-**20**. No signed native build or live remote relay acceptance has been
+**24**. No signed native build or live remote relay acceptance has been
 verified. Default Turbopack and Webpack production builds passed in prior
 verification, and a live browser check verified that the landing page renders
 without an overlay and navigates to sign-in; that check also caught and fixed

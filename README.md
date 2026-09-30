@@ -523,20 +523,32 @@ Next anonymous redirect and gateway anonymous 401, then password-confirmed
 account deletion, real profile cleanup, recreation blocking and the storage
 cleanup grace period. It has exactly 17 `ok` assertions.
 
-CI run `36708847466` is fully green at commit `bbbff0a`. It verifies
+The latest verified CI run is [36710537523](https://github.com/ankit013002/Benzene/actions/runs/36710537523),
+at commit `4c42d6b945c5a521232bbc1828268493a4d6cafa`. It verifies
 **402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
-tests**, **15/15 relay-service tests**, and **62 mobile checks** (46 TypeScript
-transfer/crypto tests plus 16 JavaScript/configuration checks). It also verifies
-typechecks and production builds, relay contract vectors, all three mobile
-JavaScript exports, five metadata-backup safeguards, the **68-check** core
-smoke, the **50-check** protection/rebalance smoke, the **64-assertion**
-authenticated LAN acceptance, the **17-assertion** user-profile/account-
-deletion acceptance and the **11-check** real-component local relay vertical
-acceptance. The relay assignment integration and durable device-data deletion
-tests run against real PostgreSQL in that gate. Metadata restore rehearsal run
-`36707335396` is separately green.
+tests**, **15/15 relay-service tests**, **68 mobile checks** (46 TypeScript
+transfer/crypto tests plus 22 JavaScript/configuration checks), and **24
+frontend tests**. It also verifies typechecks and production builds, relay
+contract vectors, all three mobile JavaScript exports, five metadata-backup
+safeguards, the **68-check** core smoke, the **50-check** protection/rebalance
+smoke, the **64-assertion** authenticated LAN acceptance, the **17-assertion**
+user-profile/account-deletion acceptance, and the **11-check** real-component
+local relay vertical acceptance. The relay assignment integration and durable
+device-data deletion tests run against real PostgreSQL in that gate.
 
-The frontend transfer helpers have **8 tests** and its full suite has **20**.
+The repository now also includes a manual native store release
+workflow restricted to `master` and the protected `mobile-production`
+environment. It offers platform selection and optional, preflight-gated store
+uploads; Android uploads are drafts and iOS uploads do not submit for review.
+Public `/privacy`, `/terms`, and `/support` pages are available for store
+information, while real public HTTPS URLs and a publisher support contact still
+need deployment configuration. This workflow and these pages do not establish
+a signed/reviewed native release, store approval, remote relay acceptance, or
+production readiness.
+
+Metadata restore rehearsal run `36707335396` is separately green.
+
+The frontend transfer helpers have **8 tests** and its full suite has **24**.
 The mobile suite and JavaScript exports do not establish signed native builds
 or a live remote relay journey. Default Turbopack and Webpack production builds
 passed in prior verification.
