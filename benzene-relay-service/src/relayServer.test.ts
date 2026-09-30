@@ -106,7 +106,11 @@ interface RunningRelay {
 
 const running: RunningRelay[] = [];
 
-async function startRelay(options: { maxFrameBytes?: number; idleTimeoutMs?: number } = {}): Promise<RunningRelay> {
+async function startRelay(options: {
+  maxFrameBytes?: number;
+  idleTimeoutMs?: number;
+  readinessCheck?: () => Promise<void>;
+} = {}): Promise<RunningRelay> {
   const store = new MemorySessionStore();
   const relay = createRelayServer({
     host: "127.0.0.1",
@@ -117,6 +121,7 @@ async function startRelay(options: { maxFrameBytes?: number; idleTimeoutMs?: num
     maxFrameBytes: options.maxFrameBytes ?? 64 * 1024,
     idleTimeoutMs: options.idleTimeoutMs ?? 1000,
     authTimeoutMs: 1000,
+    readinessCheck: options.readinessCheck,
     store,
   });
   await relay.listen();
@@ -183,6 +188,33 @@ afterEach(async () => {
 });
 
 describe("relay WebSocket transport", () => {
+  it("keeps liveness available while readiness follows the database probe", async () => {
+    let databaseAvailable = true;
+    const relay = await startRelay({
+      readinessCheck: async () => {
+        if (!databaseAvailable) throw new Error("database unavailable");
+      },
+    });
+    const httpBase = relay.url.replace(/^ws:/, "http:");
+
+    const healthy = await fetch(`${httpBase}/health`);
+    expect(healthy.status).toBe(200);
+    expect(healthy.headers.get("cache-control")).toBe("no-store");
+
+    const ready = await fetch(`${httpBase}/ready`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ status: "ready", service: "benzene-relay" });
+
+    databaseAvailable = false;
+    const unavailable = await fetch(`${httpBase}/ready`);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers.get("cache-control")).toBe("no-store");
+    expect(await unavailable.json()).toEqual({ status: "not_ready" });
+
+    const stillLive = await fetch(`${httpBase}/health`);
+    expect(stillLive.status).toBe(200);
+  });
+
   it("pairs exact opposite roles and forwards opaque bytes only in the get direction", async () => {
     const relay = await startRelay();
     const nodeScope = makeScope({ role: "node" });

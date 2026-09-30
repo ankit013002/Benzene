@@ -37,6 +37,7 @@ const app = createRelayServer({
   idleTimeoutMs: positiveInteger("RELAY_IDLE_TIMEOUT_MS", 30_000, 5 * 60_000),
   authTimeoutMs: positiveInteger("RELAY_AUTH_TIMEOUT_MS", 5_000, 30_000),
   pool,
+  readinessCheck: async () => { await pool.query("SELECT 1"); },
 });
 
 await app.listen();

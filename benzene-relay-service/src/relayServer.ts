@@ -22,6 +22,8 @@ export interface RelayServerOptions {
   idleTimeoutMs: number;
   authTimeoutMs: number;
   pool?: Pool;
+  /** Production supplies a database probe; tests may inject a deterministic probe. */
+  readinessCheck?: () => Promise<void>;
   /** Injectable for deterministic transport tests; production must use PostgreSQL. */
   store?: RelaySessionStore;
 }
@@ -92,10 +94,35 @@ export function createRelayServer(options: RelayServerOptions): {
   const store: RelaySessionStore = options.store ?? (options.pool
     ? new PostgresRelaySessionStore(options.pool, options.instanceId, options.maxSessions)
     : (() => { throw new Error("a shared Postgres pool is required"); })());
+  const readinessCheck = options.readinessCheck ?? (options.pool
+    ? async () => { await options.pool?.query("SELECT 1"); }
+    : async () => undefined);
+  let draining = false;
   const httpServer = createServer((request, response) => {
     if (request.method === "GET" && request.url === "/health") {
       response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       response.end('{"status":"ok","service":"benzene-relay"}');
+      return;
+    }
+    if (request.method === "GET" && request.url === "/ready") {
+      if (draining) {
+        response.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end('{"status":"not_ready"}');
+        return;
+      }
+      void readinessCheck().then(() => {
+        if (draining) {
+          response.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+          response.end('{"status":"not_ready"}');
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end('{"status":"ready","service":"benzene-relay"}');
+      }).catch(() => {
+        if (response.headersSent || response.destroyed) return;
+        response.writeHead(503, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end('{"status":"not_ready"}');
+      });
       return;
     }
     response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
@@ -355,6 +382,11 @@ export function createRelayServer(options: RelayServerOptions): {
   };
 
   httpServer.on("upgrade", (request, socket, head) => {
+    if (draining) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     if (authenticatingSockets >= MAX_AUTHENTICATING_SOCKETS) {
       socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
       socket.destroy();
@@ -384,6 +416,7 @@ export function createRelayServer(options: RelayServerOptions): {
       });
     }),
     close: () => new Promise((resolve, reject) => {
+      draining = true;
       const activeSessionIds = new Set<string>();
       for (const state of sockets) {
         if (state.scope) activeSessionIds.add(state.scope.sessionId);
