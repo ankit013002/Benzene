@@ -263,8 +263,10 @@ bundles export successfully. Production/store preflight now fails closed on
 placeholder identifiers, private or missing service/legal/deletion URLs,
 missing EAS linkage and absent submission credentials. Required-reason privacy
 APIs and minimal Android permissions are pinned, and a public deletion-
-information page describes the implemented lifecycle. None of this validates a
-signed native build or the complete Vault journey.
+information page describes the implemented lifecycle. Password-reset app links
+now stay on a configured HTTPS origin, with fail-closed Apple and Android
+association endpoints and no bearer-token custom-scheme handoff. None of this
+validates a signed native build or the complete Vault journey.
 This branch is not yet that commercial MVP. A desktop client, signed and
 validated mobile releases, deployed and end-to-end verified remote relay
 access, complete key recovery/rotation and plaintext-object migration,
@@ -523,8 +525,8 @@ Next anonymous redirect and gateway anonymous 401, then password-confirmed
 account deletion, real profile cleanup, recreation blocking and the storage
 cleanup grace period. It has exactly 17 `ok` assertions.
 
-The latest verified CI run is [36710537523](https://github.com/ankit013002/Benzene/actions/runs/36710537523),
-at commit `4c42d6b945c5a521232bbc1828268493a4d6cafa`. It verifies
+The latest verified CI run is [36771021743](https://github.com/ankit013002/Benzene/actions/runs/36771021743),
+at commit `e1ec4c9da67045bc913f529b666db38d6ed5e432`. It verifies
 **402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
 tests**, **15/15 relay-service tests**, **68 mobile checks** (46 TypeScript
 transfer/crypto tests plus 22 JavaScript/configuration checks), and **24
@@ -541,17 +543,21 @@ workflow restricted to `master` and the protected `mobile-production`
 environment. It offers platform selection and optional, preflight-gated store
 uploads; Android uploads are drafts and iOS uploads do not submit for review.
 Public `/privacy`, `/terms`, and `/support` pages are available for store
-information, while real public HTTPS URLs and a publisher support contact still
-need deployment configuration. This workflow and these pages do not establish
+information, and password-reset app-link association endpoints remain disabled
+until publisher identifiers and signing fingerprints are configured. Real public
+HTTPS URLs and a publisher support contact still need deployment configuration.
+This workflow and these pages do not establish
 a signed/reviewed native release, store approval, remote relay acceptance, or
 production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
-The frontend transfer helpers have **8 tests** and its full suite has **24**.
-The mobile suite and JavaScript exports do not establish signed native builds
-or a live remote relay journey. Default Turbopack and Webpack production builds
-passed in prior verification.
+The frontend transfer helpers have **8 tests** and its full suite has **28**.
+The mobile suite has **47 TypeScript tests plus 24 JavaScript/configuration
+checks** locally; neither those checks nor JavaScript exports establish signed
+native builds or a live remote relay journey. Default Turbopack and Webpack
+production builds passed in CI; the local Webpack build also passed, while the
+local Turbopack worker was blocked by the sandbox's port policy.
 
 GitHub Actions runs changed-area checks for the frontend, mobile client, auth
 service, gateway, control plane, node agent, Terraform and the guide files. The
