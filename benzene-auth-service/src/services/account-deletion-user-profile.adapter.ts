@@ -11,9 +11,21 @@ export interface StoredObjectsDeletionConfig {
   secret: string;
 }
 
+/**
+ * These narrowly scoped values are operator attestations for the current
+ * deployment inventory, not general-purpose phase skip switches. Replace each
+ * with a real idempotent deletion adapter as soon as that data is managed.
+ */
+export const BILLING_RECORDS_ABSENCE_ATTESTATION =
+  "BENZENE_V1_NO_MANAGED_BILLING_RECORDS" as const;
+export const BACKUPS_AND_LOGS_ABSENCE_ATTESTATION =
+  "BENZENE_V1_NO_MANAGED_ACCOUNT_BACKUPS_OR_LOGS" as const;
+
 export interface AccountDeletionWorkerConfig {
   profile: UserProfileDeletionConfig;
   storedObjects?: StoredObjectsDeletionConfig;
+  billingRecordsAbsenceAttestation?: typeof BILLING_RECORDS_ABSENCE_ATTESTATION;
+  backupsAndLogsAbsenceAttestation?: typeof BACKUPS_AND_LOGS_ABSENCE_ATTESTATION;
   intervalSeconds: number;
 }
 
@@ -26,6 +38,18 @@ export function readAccountDeletionWorkerConfig(
   const storedObjectsEndpointValue = env.ACCOUNT_DELETION_CONTROL_PLANE_URL?.trim();
   const storedObjectsSecret = env.ACCOUNT_DELETION_CONTROL_PLANE_SECRET;
   const intervalValue = env.ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS?.trim();
+  const billingRecordsAttestation = readAbsenceAttestation(
+    env,
+    "ACCOUNT_DELETION_BILLING_RECORDS_ABSENCE_ATTESTATION",
+    BILLING_RECORDS_ABSENCE_ATTESTATION,
+    "billing_records",
+  );
+  const backupsAndLogsAttestation = readAbsenceAttestation(
+    env,
+    "ACCOUNT_DELETION_BACKUPS_AND_LOGS_ABSENCE_ATTESTATION",
+    BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+    "backups_and_logs",
+  );
   const profileValues = [profileEndpointValue, profileSecret?.trim(), intervalValue];
   const profileConfiguredCount = profileValues.filter(
     (value) => value !== undefined && value.length > 0,
@@ -86,8 +110,30 @@ export function readAccountDeletionWorkerConfig(
   return {
     profile: { endpoint: profileEndpoint, secret: profileSecret },
     ...(storedObjects ? { storedObjects } : {}),
+    ...(billingRecordsAttestation
+      ? { billingRecordsAbsenceAttestation: billingRecordsAttestation }
+      : {}),
+    ...(backupsAndLogsAttestation
+      ? { backupsAndLogsAbsenceAttestation: backupsAndLogsAttestation }
+      : {}),
     intervalSeconds,
   };
+}
+
+function readAbsenceAttestation<T extends string>(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  expected: T,
+  phase: string,
+): T | undefined {
+  const value = env[name];
+  if (value === undefined) return undefined;
+  if (value !== expected) {
+    throw new Error(
+      `${name} must exactly equal ${expected} to attest that no ${phase} data is managed`,
+    );
+  }
+  return expected;
 }
 
 function validateEndpoint(
@@ -120,6 +166,34 @@ function validateSecret(secret: string, service: string): void {
   if (Buffer.byteLength(secret, "utf8") < 32) {
     throw new Error(`Account deletion ${service} secret must contain at least 32 UTF-8 bytes`);
   }
+}
+
+/**
+ * A phase may be skipped only when the operator supplies the exact inventory
+ * attestation parsed by readAccountDeletionWorkerConfig. This must be replaced
+ * by a real deletion adapter if the service starts managing billing records.
+ */
+export function createBillingRecordsAbsenceAttestedHandler(
+  attestation: typeof BILLING_RECORDS_ABSENCE_ATTESTATION,
+): AccountDeletionPhaseHandler {
+  if (attestation !== BILLING_RECORDS_ABSENCE_ATTESTATION) {
+    throw new Error("Billing-record absence attestation is invalid");
+  }
+  return async () => {};
+}
+
+/**
+ * A phase may be skipped only when the operator supplies the exact inventory
+ * attestation parsed by readAccountDeletionWorkerConfig. This must be replaced
+ * by real backup/log deletion adapters if the service starts managing them.
+ */
+export function createBackupsAndLogsAbsenceAttestedHandler(
+  attestation: typeof BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+): AccountDeletionPhaseHandler {
+  if (attestation !== BACKUPS_AND_LOGS_ABSENCE_ATTESTATION) {
+    throw new Error("Backup-and-log absence attestation is invalid");
+  }
+  return async () => {};
 }
 
 export function createUserProfileDeletionHandler(

@@ -142,6 +142,17 @@ tombstone prevents those tokens from recreating the profile, but other services
 may still honor the JWT until expiry. This is still not completed Apple or
 Google account deletion.
 
+`billing_records` and `backups_and_logs` have no application-managed data
+repository or deletion adapter in this version. They remain blocked by default.
+An operator may enable each phase only after auditing the deployment and
+confirming that it has no managed data in that category, using the exact
+inventory-scoped values below. This records an explicit operator attestation;
+it is not a general phase-skip switch. If billing, application-managed backups,
+or account-linked application logs are introduced, remove the corresponding
+attestation and add a real, idempotent deletion adapter before deploying that
+system. Existing attestations must be revisited as part of each data-inventory
+change. Any partial or non-exact value fails service configuration validation.
+
 Set the profile URL, secret, and interval together to enable the profile phase;
 the interval is 5–3600 seconds. The control-plane URL and secret are an
 optional pair that enables the `stored_objects` phase. If omitted, the worker
@@ -157,7 +168,14 @@ ACCOUNT_DELETION_USER_SERVICE_SECRET=<shared 32-byte-or-longer secret>
 ACCOUNT_DELETION_CONTROL_PLANE_URL=http://localhost:5000/internal/account-deletion
 ACCOUNT_DELETION_CONTROL_PLANE_SECRET=<different shared 32-byte-or-longer secret>
 ACCOUNT_DELETION_WORKER_INTERVAL_SECONDS=30
+ACCOUNT_DELETION_BILLING_RECORDS_ABSENCE_ATTESTATION=BENZENE_V1_NO_MANAGED_BILLING_RECORDS
+ACCOUNT_DELETION_BACKUPS_AND_LOGS_ABSENCE_ATTESTATION=BENZENE_V1_NO_MANAGED_ACCOUNT_BACKUPS_OR_LOGS
 ```
+
+Only set the last two values when the deployment operator has verified the
+absence of those managed data stores. Unset values leave their phases blocked.
+The attestation values are scoped to the current Benzene inventory and must not
+be carried forward automatically when a corresponding subsystem is added.
 
 ---
 

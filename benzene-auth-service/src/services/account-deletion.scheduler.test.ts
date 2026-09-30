@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountDeletionPhaseHandlers } from "./account-deletion.worker";
 import type { AccountDeletionWorkerResult } from "./account-deletion.worker";
 import { startAccountDeletionWorkerScheduler } from "./account-deletion.scheduler";
+import {
+  BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+  BILLING_RECORDS_ABSENCE_ATTESTATION,
+} from "./account-deletion-user-profile.adapter";
 
 describe("account deletion scheduler", () => {
   afterEach(() => vi.useRealTimers());
@@ -28,6 +32,46 @@ describe("account deletion scheduler", () => {
     expect(capturedHandlers?.stored_objects).toBeUndefined();
     expect(capturedHandlers?.device_data).toBeUndefined();
     expect(capturedHandlers?.vault_metadata).toBeUndefined();
+    expect(capturedHandlers?.billing_records).toBeUndefined();
+    expect(capturedHandlers?.backups_and_logs).toBeUndefined();
+    stop();
+  });
+
+  it("registers billing and backup/log phase skips only for explicit inventory attestations", async () => {
+    const config = {
+      profile: {
+        endpoint: new URL("https://user-service.internal/internal/account-deletion"),
+        secret: "shared-test-secret-with-at-least-32-utf8-bytes",
+      },
+      billingRecordsAbsenceAttestation: BILLING_RECORDS_ABSENCE_ATTESTATION,
+      backupsAndLogsAbsenceAttestation: BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+      intervalSeconds: 30,
+    };
+    let capturedHandlers: AccountDeletionPhaseHandlers | undefined;
+    const runBatch = vi.fn(
+      async (handlers: AccountDeletionPhaseHandlers): Promise<AccountDeletionWorkerResult[]> => {
+        capturedHandlers = handlers;
+        return [{ outcome: "idle" }];
+      },
+    );
+
+    const stop = startAccountDeletionWorkerScheduler(config, runBatch);
+    expect(capturedHandlers?.billing_records).toBeTypeOf("function");
+    expect(capturedHandlers?.backups_and_logs).toBeTypeOf("function");
+    await capturedHandlers?.billing_records?.({
+      requestId: "request-1",
+      credentialId: "credential-1",
+      requestedAt: new Date(),
+      phase: "billing_records",
+      attempt: 1,
+    });
+    await capturedHandlers?.backups_and_logs?.({
+      requestId: "request-1",
+      credentialId: "credential-1",
+      requestedAt: new Date(),
+      phase: "backups_and_logs",
+      attempt: 1,
+    });
     stop();
   });
 

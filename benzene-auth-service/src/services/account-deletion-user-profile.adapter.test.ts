@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { STORED_OBJECTS_DELETION_GRACE_SECONDS } from "../lib/account-deletion-timing";
 import {
+  BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+  BILLING_RECORDS_ABSENCE_ATTESTATION,
   createDeviceDataDeletionHandler,
   createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
@@ -86,6 +88,57 @@ describe("account deletion user-profile adapter configuration", () => {
     expect(config?.intervalSeconds).toBe(30);
     expect(config?.profile.endpoint.pathname).toBe("/internal/account-deletion");
     expect(config?.storedObjects?.endpoint.pathname).toBe("/internal/account-deletion");
+  });
+
+  it("only accepts exact, phase-specific operator attestations for the current data inventory", () => {
+    const config = readAccountDeletionWorkerConfig(
+      {
+        ...profileOnlyEnvironment,
+        ACCOUNT_DELETION_USER_SERVICE_URL:
+          "https://user-service.internal/internal/account-deletion",
+        ACCOUNT_DELETION_BILLING_RECORDS_ABSENCE_ATTESTATION:
+          BILLING_RECORDS_ABSENCE_ATTESTATION,
+        ACCOUNT_DELETION_BACKUPS_AND_LOGS_ABSENCE_ATTESTATION:
+          BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+      },
+      "production",
+    );
+
+    expect(config?.billingRecordsAbsenceAttestation).toBe(
+      BILLING_RECORDS_ABSENCE_ATTESTATION,
+    );
+    expect(config?.backupsAndLogsAbsenceAttestation).toBe(
+      BACKUPS_AND_LOGS_ABSENCE_ATTESTATION,
+    );
+  });
+
+  it.each([
+    ["", "empty"],
+    ["benzene_v1_no_managed_billing_records", "case-changed"],
+    [` ${BILLING_RECORDS_ABSENCE_ATTESTATION}`, "leading whitespace"],
+    [`${BILLING_RECORDS_ABSENCE_ATTESTATION} `, "trailing whitespace"],
+    ["true", "generic boolean"],
+  ])("rejects %s billing-record attestations (%s)", (value) => {
+    expect(() =>
+      readAccountDeletionWorkerConfig(
+        {
+          ...profileOnlyEnvironment,
+          ACCOUNT_DELETION_BILLING_RECORDS_ABSENCE_ATTESTATION: value,
+        },
+        "production",
+      ),
+    ).toThrow("must exactly equal");
+  });
+
+  it("rejects invalid backup-and-log attestations even if other worker settings are absent", () => {
+    expect(() =>
+      readAccountDeletionWorkerConfig(
+        {
+          ACCOUNT_DELETION_BACKUPS_AND_LOGS_ABSENCE_ATTESTATION: "true",
+        } as NodeJS.ProcessEnv,
+        "production",
+      ),
+    ).toThrow("must exactly equal");
   });
 });
 

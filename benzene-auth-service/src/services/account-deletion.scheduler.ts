@@ -1,4 +1,6 @@
 import {
+  createBackupsAndLogsAbsenceAttestedHandler,
+  createBillingRecordsAbsenceAttestedHandler,
   createDeviceDataDeletionHandler,
   createStoredObjectsDeletionHandler,
   createUserProfileDeletionHandler,
@@ -23,6 +25,25 @@ export function startAccountDeletionWorkerScheduler(
     handlers.stored_objects = createStoredObjectsDeletionHandler(config.storedObjects);
     handlers.device_data = createDeviceDataDeletionHandler(config.storedObjects);
     handlers.vault_metadata = createVaultMetadataDeletionHandler(config.storedObjects);
+  }
+  if (config.billingRecordsAbsenceAttestation) {
+    handlers.billing_records = createBillingRecordsAbsenceAttestedHandler(
+      config.billingRecordsAbsenceAttestation,
+    );
+  }
+  if (config.backupsAndLogsAbsenceAttestation) {
+    handlers.backups_and_logs = createBackupsAndLogsAbsenceAttestedHandler(
+      config.backupsAndLogsAbsenceAttestation,
+    );
+  }
+  if (handlers.billing_records || handlers.backups_and_logs) {
+    console.warn(
+      "Account deletion is advancing explicitly attested no-managed-data phases; revisit these attestations whenever the deployment data inventory changes",
+      JSON.stringify({
+        billingRecords: Boolean(handlers.billing_records),
+        backupsAndLogs: Boolean(handlers.backups_and_logs),
+      }),
+    );
   }
   let running = false;
   let stopped = false;
