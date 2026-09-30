@@ -64,8 +64,9 @@ request guard now lives in `src/proxy.ts`.
 The frontend, auth service, gateway, control plane and user service have
 production Dockerfiles and are published by the release workflow. The node
 agent intentionally remains a host/LAN process; it is not containerized because
-it contributes storage from the user's own computer. The relay service also
-lacks a production image and deployment today.
+it contributes storage from the user's own computer. The relay service has a
+non-root runtime image, separate liveness and PostgreSQL-backed readiness, and
+upgrade draining, but still lacks a verified production deployment.
 
 The frontend Docker context excludes local `.env*` files while allowing the
 committed `.env.example`; its runtime stage contains only `public`, Next
@@ -96,8 +97,9 @@ repository-wide zero.
   The same acceptance covers reset requests, reset completion, one-shot token
   rejection, old-password rejection and new-password login.
 - Native mobile app: secure token storage and bearer sessions, signup/email
-  verification/password recovery, Vault/file/device screens, settings and an
-  account-deletion request screen. It encrypts whole files with a device-only
+  verification/password recovery, nested folder browsing and creation,
+  Vault/file/device screens, settings and an account-deletion request screen.
+  Encrypted uploads retain the current folder path. It encrypts whole files with a device-only
   Vault key, uploads ciphertext to granted devices, and downloads direct-first
   with a bounded encrypted WSS relay fallback. Upload requires a
   passphrase-encrypted recovery kit. A local real-component acceptance now
@@ -258,8 +260,9 @@ repository-wide zero.
 
 The architecture's earliest commercially testable MVP includes desktop, mobile
 and web clients, with optional cloud protection. The native mobile app now
-supports encrypted file transfers and its iOS, Android and web JavaScript
-bundles export successfully. Production/store preflight now fails closed on
+supports encrypted file transfers, nested folder browsing and folder creation;
+its iOS, Android and web JavaScript bundles export successfully.
+Production/store preflight now fails closed on
 placeholder identifiers, private or missing service/legal/deletion URLs,
 missing EAS linkage and absent submission credentials. Required-reason privacy
 APIs and minimal Android permissions are pinned, and a public deletion-
@@ -525,12 +528,12 @@ Next anonymous redirect and gateway anonymous 401, then password-confirmed
 account deletion, real profile cleanup, recreation blocking and the storage
 cleanup grace period. It has exactly 17 `ok` assertions.
 
-The latest verified CI run is [36771021743](https://github.com/ankit013002/Benzene/actions/runs/36771021743),
-at commit `e1ec4c9da67045bc913f529b666db38d6ed5e432`. It verifies
+The latest verified CI run is [36792947122](https://github.com/ankit013002/Benzene/actions/runs/36792947122),
+at commit `f927aada7d8ddc4cb04dfd69cd7cce78aba44341`. It verifies
 **402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
-tests**, **15/15 relay-service tests**, **68 mobile checks** (46 TypeScript
-transfer/crypto tests plus 22 JavaScript/configuration checks), and **24
-frontend tests**. It also verifies typechecks and production builds, relay
+tests**, **16/16 relay-service tests**, **75 mobile checks** (51 TypeScript
+transfer/crypto/folder tests plus 24 JavaScript/configuration checks), **28
+frontend tests**, and the **9-check** mobile store deployment probe. It also verifies typechecks and production builds, relay
 contract vectors, all three mobile JavaScript exports, five metadata-backup
 safeguards, the **68-check** core smoke, the **50-check** protection/rebalance
 smoke, the **64-assertion** authenticated LAN acceptance, the **17-assertion**
@@ -546,14 +549,16 @@ Public `/privacy`, `/terms`, and `/support` pages are available for store
 information, and password-reset app-link association endpoints remain disabled
 until publisher identifiers and signing fingerprints are configured. Real public
 HTTPS URLs and a publisher support contact still need deployment configuration.
-This workflow and these pages do not establish
+A read-only verifier now checks those public pages, exact association documents,
+publisher IDs and signing fingerprints, but has not been run against a real
+publisher deployment. This workflow and these pages do not establish
 a signed/reviewed native release, store approval, remote relay acceptance, or
 production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
 The frontend transfer helpers have **8 tests** and its full suite has **28**.
-The mobile suite has **47 TypeScript tests plus 24 JavaScript/configuration
+The mobile suite has **51 TypeScript tests plus 24 JavaScript/configuration
 checks** locally; neither those checks nor JavaScript exports establish signed
 native builds or a live remote relay journey. Default Turbopack and Webpack
 production builds passed in CI; the local Webpack build also passed, while the

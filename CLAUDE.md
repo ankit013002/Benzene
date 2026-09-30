@@ -261,7 +261,9 @@ fail fast without it — deliberately, since a weak shared key silently
 undermines every downstream identity claim.
 
 The relay service uses a separate PostgreSQL database and the public half of
-the control-plane transfer-signing key. It currently has no production image or
+the control-plane transfer-signing key. Its non-root runtime image exposes
+process liveness at `/health` and PostgreSQL-backed readiness at `/ready`; a
+draining instance rejects new upgrades. It still has no verified production
 deployment; see `benzene-relay-service/.env.example` and its README.
 
 ---
@@ -577,12 +579,12 @@ node scripts/smoke-auth-gateway.mjs
 node scripts/smoke-user-profile.mjs
 ```
 
-CI run `36771021743` is green at commit
-`e1ec4c9da67045bc913f529b666db38d6ed5e432`. It verifies **402/402
+CI run `36792947122` is green at commit
+`f927aada7d8ddc4cb04dfd69cd7cce78aba44341`. It verifies **402/402
 control-plane tests**, **156/156 node-agent tests**, **133/133 auth tests**,
-**15/15 relay-service tests**, **71 mobile checks** (47 TypeScript
-transfer/crypto tests plus 24 JavaScript/configuration checks), and **28
-frontend tests**. It also verifies typechecks and production builds, relay
+**16/16 relay-service tests**, **75 mobile checks** (51 TypeScript
+transfer/crypto/folder tests plus 24 JavaScript/configuration checks), **28
+frontend tests**, and the **9-check** mobile store deployment probe. It also verifies typechecks and production builds, relay
 contract vectors, all three mobile JavaScript exports, five metadata-backup
 safeguards, the **68-check** core smoke, the **50-check** Protected
 repair/rebalance smoke, the **64-assertion** authenticated LAN acceptance, the
@@ -597,7 +599,9 @@ do not request store review. Public `/privacy`, `/terms`, and `/support` pages
 now provide store-facing information. Password-reset app-link association
 endpoints fail closed until publisher identifiers and signing fingerprints are
 configured; operators must still configure genuine public HTTPS destinations and
-support contact details. These additions do not
+support contact details. A read-only deployment verifier now checks those public
+pages, exact association documents, publisher IDs and signing fingerprints,
+but has not been run against a real publisher deployment. These additions do not
 verify a signed native release, store acceptance, remote relay, or production
 readiness. Metadata restore rehearsal run `36707335396` is separately green at
 commit `3c2132c`.
@@ -761,8 +765,9 @@ the standard to match.
 - Node agent: identity, content-addressed store, allocation ceiling, integrity
   verification, LAN transfer server
 - Native mobile app: secure token storage and bearer sessions, signup/email
-  verification/password recovery, Vault/file/device screens, settings and an
-  account-deletion request screen. It can encrypt whole files with a device-only
+  verification/password recovery, nested Vault folder browsing and creation,
+  Vault/file/device screens, settings and an account-deletion request screen.
+  Encrypted uploads retain the current folder path. It can encrypt whole files with a device-only
   Vault key, upload ciphertext to granted devices, and download by direct
   holders with a bounded encrypted WSS relay fallback. It requires a
   passphrase-encrypted recovery kit before upload. This implementation has
