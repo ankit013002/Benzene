@@ -8,29 +8,35 @@ are byte-identical and CI enforces that — edit one, copy it to the other.
 ## Project status — read this first
 
 **Benzene is not fully complete, is not the architecture §105 commercial MVP,
-and is not production-ready for real user data.** The web client and native
-mobile app encrypt new device-backed uploads before storage and authenticate
-and decrypt downloads. Web transfers go directly to devices on the development
-LAN and have no relay fallback; mobile tries direct transfers first and can
-request an encrypted WSS relay fallback. The relay assignment and ticket path
-is wired across mobile, control plane and node agent. A local real-component
+and is not production-ready for real user data.** Web, desktop and mobile clients
+encrypt new device-backed uploads before storage and authenticate and decrypt
+downloads. Web and desktop try direct device transfers first, then can request
+the existing signed WSS relay fallback for opaque ciphertext; mobile has the
+same direct-first fallback. The control plane authorizes relay tickets and
+Next.js only proxies the ticket request, never file bytes. Clients validate
+ticket scope, expiry, ciphertext size and frames, hash and close state, then
+authenticate and decrypt locally before export. A local real-component
 acceptance proves assignment, complementary tickets, opaque ciphertext
 streaming, mobile authentication/decryption and signed completion, but the
 deployed relay and a live remote end-to-end journey have not been verified. An
 installable Electron desktop client opens the web app and runs the node agent
 as an independent process; its locally built macOS ARM64 installer is unsigned.
-The desktop app persists imported Vault keys through Electron `safeStorage`,
-scoped to the configured app origin and Vault. It does not persist keys on Linux
-when the selected backend is `basic_text`. Corrupt saved records are repaired
-only after a valid recovery-kit import, and a different valid key cannot
-replace an existing key. The browser client still keeps imported keys in tab
-memory only.
+Web and desktop can create and export mobile-compatible v1 recovery kits using
+secure randomness. A newly created key cannot upload until the user confirms
+that the kit was saved; importing a kit is itself recovery proof. Desktop
+persists newly created keys through Electron `safeStorage` only after that
+confirmation, scoped to the configured app origin and Vault. Restored keys are
+treated as acknowledged because only a confirmed export or valid import can
+reach secure storage. Linux persistence is disabled when
+the selected backend is `basic_text`. Corrupt saved records are repaired only
+after a valid recovery-kit import, and a different valid key cannot replace an
+existing key. Browser keys remain in tab memory only.
 
 The commercial MVP still requires production remote/HTTPS access and a tested
 NAT/firewall path, a complete key lifecycle and recovery design, signed and
 validated desktop and mobile releases, and the other blockers in §9. Web and
-mobile encrypted transfers are bounded to 25 MiB. Web recovery-kit import is
-held in tab memory and must be repeated after reload; web has no relay fallback.
+mobile encrypted transfers are bounded to 25 MiB. Browser keys and unconfirmed
+recovery kits stay in tab memory and must be reimported after reload.
 Plaintext-era objects remain read-only and have no migration path. A manual
 protected desktop signing/notarization workflow exists, but no real signed or
 notarized release has been verified. An unsigned JavaScript export is not a
@@ -625,11 +631,10 @@ verify a signed native release, store acceptance, remote relay, or production
 readiness. Metadata restore rehearsal run `36707335396` is separately green at
 commit `3c2132c`.
 
-The latest completed full CI baseline, run `36800692022`, is green. CI run
-`36851852613` for the current desktop key-persistence changes is still in
-progress and must not be treated as green yet. The current checkout has **81
+The latest full CI run `36853362943` for commit `cb3ba67` is green, including
+the current end-to-end encrypted client changes. The current checkout has **81
 mobile checks** (55 TypeScript tests plus 26 JavaScript/configuration checks),
-**35 frontend tests**, **25 desktop tests**,
+**48 frontend tests**, **25 desktop tests**,
 **5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
 checks**. No real signed or notarized desktop release, signed native mobile
 build, or live remote relay acceptance has been verified. Default Turbopack and Webpack production builds passed in CI; the
@@ -741,12 +746,14 @@ the standard to match.
   listing, protection/read planning and byte-identical reads from both agents
   are verified in CI. This is not browser-runtime coverage; frontend helper
   execution, CORS/mixed-content/browser enforcement, remote/TLS transfer and
-  garbage collection remain outside it. New web device-backed uploads encrypt
-  with `encrypted-object-v1` before storage, and downloads authenticate
-  ciphertext before decrypting. The flow is limited to 25 MiB, uses direct
-  development-LAN device transfers without relay fallback, imports recovery
-  kits into tab memory, and reads plaintext-era objects without migrating
-  them. The user service has a separate acceptance described above.
+  garbage collection remain outside it. New web and desktop device-backed
+  uploads encrypt with `encrypted-object-v1` before storage, and downloads
+  authenticate ciphertext before decrypting. Direct transfers are tried
+  first; clients may request a signed WSS relay ticket and receive opaque
+  ciphertext, which is validated and decrypted locally. Next.js proxies only
+  the ticket request. These browser flows are limited to 25 MiB. Plaintext-era
+  objects remain readable but have no migration flow. The user service has a
+  separate acceptance described above.
   Gateway identity-header stripping and anonymous rejection are also covered.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
@@ -819,22 +826,29 @@ the standard to match.
   unless exact current-inventory no-managed-data attestations are configured.
   The mobile client retains a device-only opaque receipt so it can verify final
   completion after credential erasure.
-- The web app encrypts new device-backed uploads and authenticates/decrypts
-  downloads using `encrypted-object-v1`. Web recovery-kit import stays in tab
-  memory, transfers are limited to 25 MiB, and the web client has no relay
-  fallback. Direct transfers remain limited to the development LAN; legacy
-  plaintext objects are read-only and have no migration flow.
+- Web and desktop encrypt new device-backed uploads and
+  authenticate/decrypt downloads using `encrypted-object-v1`. They try direct
+  transfers first, then may request the existing signed WSS relay ticket and
+  receive opaque ciphertext. Ticket scope, expiry, size, frame sequence, hash
+  and close state are checked; ciphertext is authenticated and decrypted
+  locally before export. Next.js proxies only the ticket request. Browser
+  recovery kits and keys stay in tab memory; desktop key persistence uses
+  `safeStorage` only after explicit save confirmation and user acknowledgement.
+  Transfers are limited to 25 MiB. Plaintext-era objects are read-only and
+  have no migration flow.
 - The Electron desktop client opens the configured web app and launches the
   node agent as an independent process, so storage participation survives
   closing the window. A local macOS ARM64 installer has been built, but it is
   unsigned. A manual protected release workflow checks signing and
   notarization inputs; no real signed/notarized release or clean-machine release
   acceptance has been verified. Windows and Linux installers are unverified.
-  Imported Vault keys persist through Electron `safeStorage`, scoped by app
-  origin and Vault. Persistence is disabled on Linux when only the
-  `basic_text` backend is available. Corrupt records are replaced only after a
-  valid recovery import; a different valid key is refused. Browser keys remain
-  in tab memory only.
+  Web and desktop can create/export mobile-compatible v1 recovery kits using
+  secure randomness. Newly created keys require explicit confirmation that the
+  kit was saved before upload; a valid import is treated as recovery proof.
+  Desktop uses Electron `safeStorage` only after confirmation or import, scoped by app origin and
+  Vault; Linux persistence is disabled when only the `basic_text` backend is
+  available. Corrupt records are replaced only after a valid recovery import;
+  a different valid key is refused. Browser keys remain in tab memory only.
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct
   immutable version numbers, and reverse-order completion leaves the highest
@@ -844,7 +858,7 @@ the standard to match.
   per-file N+1 work. Zero-replica hashes still receive summaries, while empty
   input returns without creating vault or policy state.
 - Frontend tests cover encrypted-object interoperability and browser upload and
-  download behavior; the current suite has 33 tests. Reduced protection
+  download behavior; the current suite has 48 tests. Reduced protection
   messaging is based on authoritative completion state rather than the
   reservation plan. A live browser check also verifies the landing page renders
   without an overlay and can navigate to sign-in.
@@ -878,13 +892,13 @@ the standard to match.
   verified. Existing plaintext-era objects need an explicit
   migration/reconciliation plan before broad rollout. **Do not entrust real
   user data yet.**
-- **Production remote access** — the control plane now creates bounded relay
-  assignments for encrypted reads, node agents produce over WSS, and mobile
-  consumes the opaque ciphertext fallback after direct reads fail. A local
-  vertical acceptance verifies the real control plane, relay, node producer and
-  mobile decryptor, but production relay deployment/configuration, TLS/DNS and
-  key operations, NAT behavior, and a live remote client-to-device acceptance
-  remain unverified.
+- **Production remote access** — the control plane creates bounded relay
+  assignments for encrypted reads, and node agents produce opaque ciphertext
+  over WSS. Web, desktop and mobile clients try direct transfers first and can
+  use the signed relay ticket fallback, validating and decrypting locally. A
+  local vertical acceptance verifies the mobile path, but production relay
+  deployment/configuration, TLS/DNS and key operations, NAT behavior, and a
+  live remote client-to-device acceptance remain unverified.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -922,9 +936,10 @@ remain open product questions; this status does not resolve them.
 
 - **Browser-to-device works over the HTTP LAN development path.** CORS is
   configured for it, but an HTTPS-hosted app cannot PUT to `http://192.168.x.x`
-  because of mixed content; web relay fallback and production remote/HTTPS
-  transfer support remain unfinished (§39). Web recovery-kit import is held in
-  tab memory and must be repeated after reload.
+  because of mixed content. The signed WSS relay fallback is implemented, but
+  its public deployment and remote acceptance remain unverified (§39). Browser
+  key state is tab-memory-only and must be unlocked again from the saved
+  recovery kit after reload.
 - **Browser transfers buffer whole files and are limited to 25 MiB.**
   `crypto.subtle` needs the full buffer; larger files need the streaming hash
   chunking would bring.

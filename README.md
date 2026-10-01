@@ -14,10 +14,11 @@ transfer, reference-safe garbage collection retires purged objects, and
 rate-limited rebalancing redistributes healthy copies after protection is
 satisfied. A background outage sweep persists device transitions, while
 returning presumed-lost agents reconcile a locally verified inventory.
-Web and mobile encrypt new device-backed files, and an Electron desktop client
-opens the web experience alongside an independent node agent. Key lifecycle,
-remote access, chunking and several client/release requirements remain
-unfinished.
+Web, desktop and mobile encrypt new device-backed files, and the Electron
+desktop client runs an independent node agent. Web and desktop now support
+mobile-compatible v1 recovery-kit creation and signed WSS relay fallback, but
+public relay deployment and the complete key lifecycle remain unverified.
+Chunking and several client/release requirements also remain unfinished.
 
 ## How it fits together
 
@@ -40,12 +41,15 @@ flowchart LR
 
 The control plane answers who, what and where. It stores Vault, Device,
 allocation, policy and replica metadata; it does not relay file bytes. Node
-agents own the bytes and expose short-lived, scoped transfer targets. Mobile
-encrypted downloads try direct targets first and can request a one-use,
-control-plane-authorized WSS relay fallback; the separately deployed relay
-handles opaque ciphertext. The gateway verifies user sessions and injects
-identity headers; the `/agent/**` path deliberately remains available to
-devices during enrollment and uses Ed25519 request signatures instead.
+agents own the bytes and expose short-lived, scoped transfer targets. Web,
+desktop and mobile encrypted downloads try direct targets first and can request
+a one-use, control-plane-authorized WSS relay fallback; the separately
+deployed relay handles opaque ciphertext. Clients validate ticket scope,
+expiry, size, frames, hash and close state, then authenticate and decrypt
+locally before export. Next.js proxies only the relay ticket request. The
+gateway verifies user sessions and injects identity headers; the `/agent/**`
+path deliberately remains available to devices during enrollment and uses
+Ed25519 request signatures instead.
 
 ## Services and ports
 
@@ -111,22 +115,33 @@ repository-wide zero.
   remote-network acceptance remain unverified. Transfers buffer whole files
   and are limited to 25 MiB. Key rotation, trusted-device recovery and signed
   store builds remain unfinished.
-- Web device-backed uploads encrypt new content using shared
+- Web and desktop device-backed uploads encrypt new content using shared
   `encrypted-object-v1`; downloads authenticate ciphertext before decrypting.
-  Recovery-kit import stays in tab memory, transfers are capped at 25 MiB, and
-  web has no relay fallback. Direct transfers currently target development-LAN
-  devices. Plaintext-era objects remain readable but are not migrated.
+  Both try direct transfers first, then can use the existing signed WSS relay
+  ticket to receive opaque ciphertext, which is scope/expiry/size/frame/hash/
+  close-validated before local decryption and export. Next.js proxies only the
+  ticket request. Browser transfers are capped at 25 MiB. Plaintext-era objects
+  remain readable but are not migrated.
+- Web and desktop can create and export mobile-compatible v1 recovery kits
+  using secure randomness. Newly created keys cannot upload until the user
+  confirms that the kit was saved; importing a kit is itself recovery proof.
+  Browser keys and pending recovery state stay in tab memory. Desktop persists
+  through Electron `safeStorage` only after confirmation or valid import,
+  scoped to app origin and Vault. Restored keys remain acknowledged because
+  only those two paths can reach secure storage. Linux
+  persistence is disabled when `basic_text` is the selected backend. Corrupt
+  records are repaired only after a valid import, and a different valid key
+  cannot replace the saved key.
 - The installable Electron desktop client opens the configured web app and
   runs the node agent as an independent process, which continues after the
   window closes. A local macOS ARM64 installer was built unsigned. A manual
   protected signing/notarization workflow exists, but no signed/notarized
   release has been verified; Windows and Linux packaging are unverified.
-  Imported Vault keys persist through Electron `safeStorage`, scoped to the
-  configured app origin and Vault. Linux persistence is disabled when the
-  selected backend is `basic_text`. Corrupt records are repaired only after a
-  valid recovery-kit import, and a different valid key cannot replace an
-  existing key. The browser client continues to keep imported keys in tab
-  memory only.
+  Imported Vault keys persist through Electron `safeStorage` after explicit
+  save confirmation, scoped to the configured app origin and Vault. Linux
+  persistence is disabled when the selected backend is `basic_text`. Corrupt
+  records are repaired only after a valid recovery-kit import, and a different
+  valid key cannot replace an existing key. Browser keys remain in tab memory.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. The optional
@@ -250,18 +265,23 @@ repository-wide zero.
   multi-object queue or chunk-level resumption yet.
 - Objects are whole files; chunking, manifests and streaming browser hashing are
   future work. The browser currently hashes a complete file in memory.
-- The mobile client now stores encrypted whole-file objects and offers a
-  passphrase-encrypted recovery kit. The web and legacy paths can still create
-  unencrypted objects, and key rotation, trusted-device recovery, and a
-  plaintext-object migration are not complete. Do not entrust real user data
+- Mobile stores encrypted whole-file objects and offers a passphrase-encrypted
+  recovery kit. Web and desktop can create and export mobile-compatible v1
+  recovery kits using secure randomness; newly created keys stay upload-disabled
+  until users confirm the kit was saved, while a valid import is accepted as
+  recovery proof. Desktop key persistence and restore use Electron
+  `safeStorage`, while browser keys
+  remain in tab memory. Key rotation, trusted-device recovery, and migration
+  of plaintext-era objects are not complete. Do not entrust real user data
   before those paths are resolved and verified.
-- The mobile encrypted-read relay fallback is wired across the control plane,
-  node agent and client, and the 11-check local vertical acceptance exercises
-  the real services and mobile decryption. It is not deployed or verified over
-  a live remote network; production WSS/TLS/DNS/key configuration and NAT
-  behavior remain unverified. Browser CORS works for the HTTP LAN development
-  path and the agent can terminate explicitly configured HTTPS, but that alone
-  is not an automatic remote-access solution.
+- Signed encrypted-read relay fallback is wired for mobile and web/desktop
+  across the control plane, node agent and client; clients stream opaque
+  ciphertext and decrypt locally. The local vertical acceptance covers the
+  mobile path, but the relay is not deployed or verified over a live remote
+  network. Production WSS/TLS/DNS/key configuration and NAT behavior remain
+  unverified. Browser CORS works for the HTTP LAN development path and the
+  agent can terminate explicitly configured HTTPS, but that alone is not an
+  automatic remote-access solution.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -580,11 +600,11 @@ production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
-The latest completed full CI baseline, run `36800692022`, is green. CI run
-`36851852613` for the current desktop key-persistence changes is still in
-progress and is not yet a green result. The current checkout has **81 mobile
-checks** (55 TypeScript tests plus 26 JavaScript/configuration checks), **35
-frontend tests**, **25 desktop tests**,
+The latest full CI run `36853362943` for commit `cb3ba67` is green, including
+the current end-to-end encrypted client changes. The current checkout has **81
+mobile checks** (55 TypeScript tests
+plus 26 JavaScript/configuration checks), **48 frontend tests**, **25 desktop
+tests**,
 **5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
 checks**. These package counts do not establish signed builds or production
 deployment. Neither JavaScript exports nor local tests establish a signed
