@@ -8,24 +8,29 @@ are byte-identical and CI enforces that — edit one, copy it to the other.
 ## Project status — read this first
 
 **Benzene is not fully complete, is not the architecture §105 commercial MVP,
-and is not production-ready for real user data.** The verified web/control-plane
-slice operates on a development LAN. The native mobile app now has encrypted
-file upload and download flows: it encrypts before device storage, tries direct
-device transfers first, and can request an encrypted WSS relay fallback. The
-relay assignment and ticket path is wired across mobile, control plane and node
-agent. A local real-component acceptance now proves assignment, complementary
-tickets, opaque ciphertext streaming, mobile authentication/decryption and
-signed completion, but the deployed relay and a live remote end-to-end journey
-have not been verified.
+and is not production-ready for real user data.** The web client and native
+mobile app encrypt new device-backed uploads before storage and authenticate
+and decrypt downloads. Web transfers go directly to devices on the development
+LAN and have no relay fallback; mobile tries direct transfers first and can
+request an encrypted WSS relay fallback. The relay assignment and ticket path
+is wired across mobile, control plane and node agent. A local real-component
+acceptance proves assignment, complementary tickets, opaque ciphertext
+streaming, mobile authentication/decryption and signed completion, but the
+deployed relay and a live remote end-to-end journey have not been verified. An
+installable Electron desktop client opens the web app and runs the node agent
+as an independent process; its locally built macOS ARM64 installer is unsigned.
 
 The commercial MVP still requires production remote/HTTPS access and a tested
-NAT/firewall path, a complete key lifecycle and recovery design, a desktop
-client, signed and validated mobile releases, and the other blockers in §9.
-Mobile encrypted transfers are bounded to 25 MiB and the web export does not
-provide those file flows. An unsigned JavaScript export is not a release-ready
-client. Do not describe the application as complete, MVP-complete or
-production-ready until the capabilities and open product decisions are
-resolved and verified.
+NAT/firewall path, a complete key lifecycle and recovery design, signed and
+validated desktop and mobile releases, and the other blockers in §9. Web and
+mobile encrypted transfers are bounded to 25 MiB. Web recovery-kit import is
+held in tab memory and must be repeated after reload; web has no relay fallback.
+Plaintext-era objects remain read-only and have no migration path. A manual
+protected desktop signing/notarization workflow exists, but no real signed or
+notarized release has been verified. An unsigned JavaScript export is not a
+release-ready client. Do not describe the application as complete,
+MVP-complete or production-ready until the capabilities and open product
+decisions are resolved and verified.
 
 ### Completion gate
 
@@ -97,6 +102,7 @@ storage-layer work.
 | `nebula-gateway/` | Edge: verifies JWTs, injects identity headers, routes | **Java 21**, Spring Cloud Gateway |
 | `nebulavault-frontend/` | Web app | Next.js 16.3.5, React/react-dom 19.3.0, TypeScript, Tailwind + DaisyUI; routing guard in `src/proxy.ts` |
 | `benzene-mobile/` | Native mobile app | Expo SDK 57, React Native, TypeScript; iOS, Android and web JS exports |
+| `benzene-desktop/` | Desktop client | Electron; opens the web app and runs the node agent as an independent process |
 | `nebulavault-user-service/` | User profiles, quota fields | Java 21, Spring Boot |
 | `infrastructure/terraform/` | S3 bucket + least-privilege IAM | Terraform |
 | `scripts/smoke-agent.mjs` | Cross-package end-to-end smoke test | Node |
@@ -153,6 +159,11 @@ cd benzene-mobile
 npm ci && npm run start
 npm run typecheck && npm run lint && npm test
 npm run export:ios && npm run export:android && npm run export:web
+
+# desktop client
+cd benzene-desktop
+npm ci && npm run typecheck && npm test && npm run build
+npm start
 
 # opaque relay
 cd benzene-relay-service
@@ -594,8 +605,10 @@ and durable device-data deletion tests run against real PostgreSQL in that gate.
 The latest source adds a manual GitHub Actions native store release workflow. It is
 restricted to `master`, uses the protected `mobile-production` environment,
 requires explicit platform selection, and optionally submits builds after
-configuration and submission preflights. Submission targets remain drafts and
-do not request store review. Public `/privacy`, `/terms`, and `/support` pages
+configuration and submission preflights. It records the exact completed EAS
+build IDs from that workflow run and submits those IDs instead of selecting a
+potentially unrelated latest build. Submission targets remain drafts and do not
+request store review. Public `/privacy`, `/terms`, and `/support` pages
 now provide store-facing information. Password-reset app-link association
 endpoints fail closed until publisher identifiers and signing fingerprints are
 configured; operators must still configure genuine public HTTPS destinations and
@@ -606,9 +619,14 @@ verify a signed native release, store acceptance, remote relay, or production
 readiness. Metadata restore rehearsal run `36707335396` is separately green at
 commit `3c2132c`.
 
-The frontend transfer-helper suite has **8 tests** and its full suite has
-**28**. No signed native build or live remote relay acceptance has been
-verified. Default Turbopack and Webpack production builds passed in CI; the
+The newer full CI run `36799954434` is also green. It includes the current
+frontend and desktop changes, the mobile exports, and the existing PostgreSQL,
+cross-service, local-storage and user-profile acceptance jobs. The current
+checkout has **81 mobile checks** (55 TypeScript tests plus 26
+JavaScript/configuration checks), **33 frontend tests**, **19 desktop tests**,
+**5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
+checks**. No real signed or notarized desktop release, signed native mobile
+build, or live remote relay acceptance has been verified. Default Turbopack and Webpack production builds passed in CI; the
 local Webpack build also passed, while the local Turbopack worker was blocked by
 the sandbox's port policy. A live browser check verified that the landing page renders
 without an overlay and navigates to sign-in; that check also caught and fixed
@@ -716,9 +734,13 @@ the standard to match.
   approval, heartbeats, a default Protected two-device upload, completion,
   listing, protection/read planning and byte-identical reads from both agents
   are verified in CI. This is not browser-runtime coverage; frontend helper
-  execution, CORS/mixed-content/browser enforcement, remote/TLS transfer,
-  encryption and garbage collection remain outside it. The user service has a
-  separate acceptance described above.
+  execution, CORS/mixed-content/browser enforcement, remote/TLS transfer and
+  garbage collection remain outside it. New web device-backed uploads encrypt
+  with `encrypted-object-v1` before storage, and downloads authenticate
+  ciphertext before decrypting. The flow is limited to 25 MiB, uses direct
+  development-LAN device transfers without relay fallback, imports recovery
+  kits into tab memory, and reads plaintext-era objects without migrating
+  them. The user service has a separate acceptance described above.
   Gateway identity-header stripping and anonymous rejection are also covered.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
@@ -773,7 +795,7 @@ the standard to match.
   passphrase-encrypted recovery kit before upload. This implementation has
   deterministic tests and an 11-check local real-component relay acceptance,
   not a live remote relay acceptance; files are limited to 25 MiB, transfers
-  buffer whole files, web file flows are disabled, and trusted-device recovery,
+  buffer whole files, and trusted-device recovery,
   key rotation and release-ready native builds remain open. Production/store
   preflight rejects placeholder identifiers, missing public legal/support/
   deletion URLs, absent EAS linkage and missing submission credentials. The
@@ -791,9 +813,17 @@ the standard to match.
   unless exact current-inventory no-managed-data attestations are configured.
   The mobile client retains a device-only opaque receipt so it can verify final
   completion after credential erasure.
-- The web app uploads and downloads directly on a development LAN. The separate
-  mobile path uploads encrypted objects and reads them directly first, with
-  control-plane-authorized relay fallback after direct reads fail.
+- The web app encrypts new device-backed uploads and authenticates/decrypts
+  downloads using `encrypted-object-v1`. Web recovery-kit import stays in tab
+  memory, transfers are limited to 25 MiB, and the web client has no relay
+  fallback. Direct transfers remain limited to the development LAN; legacy
+  plaintext objects are read-only and have no migration flow.
+- The Electron desktop client opens the configured web app and launches the
+  node agent as an independent process, so storage participation survives
+  closing the window. A local macOS ARM64 installer has been built, but it is
+  unsigned. A manual protected release workflow checks signing and
+  notarization inputs; no real signed/notarized release or clean-machine release
+  acceptance has been verified. Windows and Linux installers are unverified.
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct
   immutable version numbers, and reverse-order completion leaves the highest
@@ -802,13 +832,14 @@ the standard to match.
   one outage classification, policy load and replica/device query replaces
   per-file N+1 work. Zero-replica hashes still receive summaries, while empty
   input returns without creating vault or policy state.
-- Frontend transfer helpers have eight deterministic `node:test`/`tsx` tests
-  (five upload and three download) for hashing and reservation, direct
-  Protected uploads, completion gating, pending/shortfall errors, download
-  fallback, unresponsive-holder timeout/fallback and safe DOM cleanup. Reduced
-  protection messaging is based on authoritative completion state rather than
-  the reservation plan. A live browser check also verifies the landing page
-  renders without an overlay and can navigate to sign-in.
+- Frontend tests cover encrypted-object interoperability and browser upload and
+  download behavior; the current suite has 33 tests. Reduced protection
+  messaging is based on authoritative completion state rather than the
+  reservation plan. A live browser check also verifies the landing page renders
+  without an overlay and can navigate to sign-in.
+- The desktop package has 19 tests for configuration, agent bundling and
+  release preflight. Its manual protected installer workflow has not produced
+  a verified signed artifact.
 - The user-profile acceptance covers real signup/session, SMTP delivery,
   pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,
   persisted default profile/quota fields, Next anonymous redirect and gateway
@@ -828,11 +859,14 @@ the standard to match.
   budget, user schedule, multi-object work queue or chunk-level resumption yet.
 - **Chunking and manifests** — whole-file placement only
 - **Complete encryption/key lifecycle** — mobile writes AES-GCM encrypted
-  objects and can export/import a passphrase-encrypted recovery kit, but key
-  rotation, trusted-device recovery, all-client encryption, and recovery under
-  device loss have not been designed and verified. Existing `none` and
-  `unknown` objects need an explicit migration/reconciliation plan before broad
-  rollout. **Do not entrust real user data yet.**
+  objects and can export/import a passphrase-encrypted recovery kit. The web
+  client also encrypts new writes and authenticates/decrypts downloads using
+  the shared `encrypted-object-v1` format; its recovery-kit import remains only
+  in tab memory. Key rotation, trusted-device recovery, cross-client key
+  lifecycle, and recovery under device loss have not been designed and
+  verified. Existing plaintext-era objects need an explicit
+  migration/reconciliation plan before broad rollout. **Do not entrust real
+  user data yet.**
 - **Production remote access** — the control plane now creates bounded relay
   assignments for encrypted reads, node agents produce over WSS, and mobile
   consumes the opaque ciphertext fallback after direct reads fail. A local
@@ -844,21 +878,27 @@ the standard to match.
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
   manual migration before enrolling such a store
-- Desktop client, signed/reviewed mobile store builds, filesystem mount,
-  sharing, search and billing
+- Signed/notarized desktop releases, signed/reviewed mobile store builds,
+  filesystem mount, sharing, search and billing. An installable Electron client
+  exists, but only an unsigned local macOS ARM64 installer has been verified;
+  Windows/Linux packaging and signed release acceptance remain unverified.
 - File metadata still in MongoDB, not yet migrated to Postgres
 
 ### Device-first MVP and commercial blockers
 
 The architecture's earliest commercially testable MVP includes desktop, mobile
-and web clients, with optional cloud protection. The native mobile app now
-supports encrypted file transfers and its iOS, Android and web JavaScript
-bundles export successfully. Release preflight, privacy-manifest/permission
+and web clients, with optional cloud protection. The native mobile app supports
+encrypted file transfers and its iOS, Android and web JavaScript bundles export
+successfully. The web app encrypts new device-backed uploads and
+authenticates/decrypts downloads. The Electron desktop client opens that web
+experience and runs the node agent independently. An unsigned local macOS
+ARM64 installer was built; the manual protected signing/notarization workflow
+has not produced a verified release. Release preflight, privacy-manifest/permission
 guards, token-safe browser-to-app handoffs and a public account-deletion page
 are implemented; this does not validate a signed native build or the complete
 Vault journey.
-This branch is not yet that commercial MVP. A desktop client, signed and
-validated mobile builds, deployed and end-to-end verified remote relay access,
+This branch is not yet that commercial MVP. Signed and validated desktop and
+mobile builds, deployed and end-to-end verified remote relay access,
 complete key recovery/rotation and plaintext-object migration,
 filesystem mounts, cloud-protection policy and billing, chunking, sharing and
 search remain blockers. Store legal/deletion URLs, publisher/release
@@ -871,10 +911,12 @@ remain open product questions; this status does not resolve them.
 
 - **Browser-to-device works over the HTTP LAN development path.** CORS is
   configured for it, but an HTTPS-hosted app cannot PUT to `http://192.168.x.x`
-  because of mixed content; production remote/HTTPS transfer support remains
-  unfinished (§39).
-- **The browser hashes whole files in memory.** `crypto.subtle` needs the full
-  buffer; large files need the streaming hash chunking would bring.
+  because of mixed content; web relay fallback and production remote/HTTPS
+  transfer support remain unfinished (§39). Web recovery-kit import is held in
+  tab memory and must be repeated after reload.
+- **Browser transfers buffer whole files and are limited to 25 MiB.**
+  `crypto.subtle` needs the full buffer; larger files need the streaming hash
+  chunking would bring.
 - **The agent's private key is a `0600` file**, not Keychain/DPAPI/Keystore
   (§34).
 

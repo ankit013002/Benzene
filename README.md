@@ -14,7 +14,9 @@ transfer, reference-safe garbage collection retires purged objects, and
 rate-limited rebalancing redistributes healthy copies after protection is
 satisfied. A background outage sweep persists device transitions, while
 returning presumed-lost agents reconcile a locally verified inventory.
-Encryption, remote access, chunking and several client surfaces remain
+Web and mobile encrypt new device-backed files, and an Electron desktop client
+opens the web experience alongside an independent node agent. Key lifecycle,
+remote access, chunking and several client/release requirements remain
 unfinished.
 
 ## How it fits together
@@ -57,6 +59,7 @@ devices during enrollment and uses Ed25519 request signatures instead.
 | `benzene-relay-service` | Node 20, WebSocket, TypeScript, PostgreSQL | 8090 | Opaque encrypted-read fallback; not deployed |
 | `nebulavault-user-service` | Java 21, Spring Boot, PostgreSQL | 8082 | User profile bootstrap and quota fields |
 | `benzene-mobile` | Expo SDK 57, React Native, TypeScript | — | Native mobile app with encrypted file transfers; unsigned JS exports only |
+| `benzene-desktop` | Electron, TypeScript | — | Installable desktop wrapper for the web app and independent node agent; signed release unverified |
 
 The frontend requires Node **20.9 or newer**. The former Next.js middleware
 request guard now lives in `src/proxy.ts`.
@@ -106,8 +109,18 @@ repository-wide zero.
   proves relay assignment, ticket pairing, opaque ciphertext streaming, mobile
   authentication/decryption and signed completion; public WSS deployment and
   remote-network acceptance remain unverified. Transfers buffer whole files
-  and are limited to 25 MiB; web file flows are disabled. Key rotation,
-  trusted-device recovery and signed store builds remain unfinished.
+  and are limited to 25 MiB. Key rotation, trusted-device recovery and signed
+  store builds remain unfinished.
+- Web device-backed uploads encrypt new content using shared
+  `encrypted-object-v1`; downloads authenticate ciphertext before decrypting.
+  Recovery-kit import stays in tab memory, transfers are capped at 25 MiB, and
+  web has no relay fallback. Direct transfers currently target development-LAN
+  devices. Plaintext-era objects remain readable but are not migrated.
+- The installable Electron desktop client opens the configured web app and
+  runs the node agent as an independent process, which continues after the
+  window closes. A local macOS ARM64 installer was built unsigned. A manual
+  protected signing/notarization workflow exists, but no signed/notarized
+  release has been verified; Windows and Linux packaging are unverified.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. The optional
@@ -249,8 +262,9 @@ repository-wide zero.
   manual migration before enrolling such a store.
 - A replication policy of one copy is possible but can lose data when that
   device fails. Whether that choice should remain available is unresolved.
-- A desktop client, signed/reviewed native mobile releases, filesystem mounts,
-  sharing, search, billing and cloud-protection policy are not complete.
+- Signed/notarized desktop releases, signed/reviewed native mobile releases,
+  filesystem mounts, sharing, search, billing and cloud-protection policy are
+  not complete.
 - The control plane still keeps legacy file metadata in MongoDB while its Vault,
   Device and placement graph is in PostgreSQL.
 - Node-agent private keys are protected as `0600` files rather than native
@@ -270,9 +284,9 @@ information page describes the implemented lifecycle. Password-reset app links
 now stay on a configured HTTPS origin, with fail-closed Apple and Android
 association endpoints and no bearer-token custom-scheme handoff. None of this
 validates a signed native build or the complete Vault journey.
-This branch is not yet that commercial MVP. A desktop client, signed and
-validated mobile releases, deployed and end-to-end verified remote relay
-access, complete key recovery/rotation and plaintext-object migration,
+This branch is not yet that commercial MVP. Signed and validated desktop and
+mobile releases, deployed and end-to-end verified remote relay access, complete
+key recovery/rotation and plaintext-object migration,
 filesystem mounts, cloud-protection policy and billing, chunking, sharing and
 search remain blockers. Store legal URLs and publisher/release configuration
 also need to be supplied. Availability, single-copy policy and key recovery
@@ -431,6 +445,7 @@ cd nebula-gateway && AUTH_SECRET=<same generated AUTH_SECRET> ./mvnw spring-boot
 cd nebulavault-user-service && DB_URL="jdbc:postgresql://localhost:5432/benzene?user=$USER" ./mvnw spring-boot:run
 cd benzene-node-agent && npm ci && npm run dev
 cd nebulavault-frontend && npm ci && npm run dev
+cd benzene-desktop && npm ci && npm start
 ```
 
 The production control-plane image includes the committed Drizzle SQL and a
@@ -528,7 +543,7 @@ Next anonymous redirect and gateway anonymous 401, then password-confirmed
 account deletion, real profile cleanup, recreation blocking and the storage
 cleanup grace period. It has exactly 17 `ok` assertions.
 
-The latest verified CI run is [36792947122](https://github.com/ankit013002/Benzene/actions/runs/36792947122),
+The latest previously verified CI baseline is [36792947122](https://github.com/ankit013002/Benzene/actions/runs/36792947122),
 at commit `f927aada7d8ddc4cb04dfd69cd7cce78aba44341`. It verifies
 **402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
 tests**, **16/16 relay-service tests**, **75 mobile checks** (51 TypeScript
@@ -544,7 +559,9 @@ device-data deletion tests run against real PostgreSQL in that gate.
 The repository now also includes a manual native store release
 workflow restricted to `master` and the protected `mobile-production`
 environment. It offers platform selection and optional, preflight-gated store
-uploads; Android uploads are drafts and iOS uploads do not submit for review.
+uploads. The workflow submits the exact completed EAS build IDs created in its
+run rather than selecting a potentially unrelated latest build; Android uploads
+are drafts and iOS uploads do not submit for review.
 Public `/privacy`, `/terms`, and `/support` pages are available for store
 information, and password-reset app-link association endpoints remain disabled
 until publisher identifiers and signing fingerprints are configured. Real public
@@ -557,10 +574,13 @@ production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
-The frontend transfer helpers have **8 tests** and its full suite has **28**.
-The mobile suite has **51 TypeScript tests plus 24 JavaScript/configuration
-checks** locally; neither those checks nor JavaScript exports establish signed
-native builds or a live remote relay journey. Default Turbopack and Webpack
+The current checkout has **81 mobile checks** (55 TypeScript tests plus 26
+JavaScript/configuration checks), **33 frontend tests**, **19 desktop tests**,
+**5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
+checks**. CI run [36799954434](https://github.com/ankit013002/Benzene/actions/runs/36799954434)
+is green, including mobile exports. These package counts do not establish signed
+builds or production deployment. Neither JavaScript exports nor local tests
+establish a signed native release or live remote relay journey. Default Turbopack and Webpack
 production builds passed in CI; the local Webpack build also passed, while the
 local Turbopack worker was blocked by the sandbox's port policy.
 
@@ -585,6 +605,7 @@ is intentionally excluded because it runs on the user's host and LAN.
 ```text
 benzene-control-plane/       Vault, device, placement and file metadata APIs
 benzene-node-agent/          Device identity, object store and LAN transfer
+benzene-desktop/             Electron desktop client and independent node agent
 benzene-auth-service/        Email/password authentication
 nebula-gateway/              Session verification and edge routing
 nebulavault-frontend/        Next.js web application
