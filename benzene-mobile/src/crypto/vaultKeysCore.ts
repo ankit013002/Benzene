@@ -32,6 +32,8 @@ function validateVmk(vmk: Uint8Array): void {
   if (!(vmk instanceof Uint8Array) || vmk.byteLength !== VMK_BYTES) throw new TypeError('Vault Master Key must be exactly 32 bytes');
 }
 
+class DamagedVaultKeyError extends Error {}
+
 /** Creates the Vault key lifecycle around an OS-backed secure key-value store. */
 export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (length: number) => Promise<Uint8Array>): VaultKeyStore {
   const locks = new Map<string, Promise<void>>();
@@ -62,7 +64,7 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
       // A damaged key cannot justify a prior recovery confirmation. Preserve it
       // until the user explicitly imports a valid recovery kit.
       await storage.deleteItem(`${RECOVERY_ACK_PREFIX}${vaultId}`);
-      throw new Error('The saved Vault key is damaged. Restore it from your recovery kit before continuing.');
+      throw new DamagedVaultKeyError('The saved Vault key is damaged. Restore it from your recovery kit before continuing.');
     }
   }
 
@@ -72,9 +74,11 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
   }
 
   async function storeNewVmk(vaultId: string, vmk: Uint8Array): Promise<void> {
-    await writeVmk(vaultId, vmk);
     // A prior confirmation may belong to a key that was removed or replaced.
+    // Clear it first: SecureStore has no transaction, and a failed key write
+    // must never leave the new (or damaged) key marked as recoverable.
     await storage.deleteItem(`${RECOVERY_ACK_PREFIX}${vaultId}`);
+    await writeVmk(vaultId, vmk);
   }
 
   return {
@@ -93,7 +97,24 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
     },
     importVaultMasterKey(vaultId, vmk) {
       validateVmk(vmk);
-      return withVaultLock(vaultId, () => storeNewVmk(vaultId, vmk));
+      return withVaultLock(vaultId, async () => {
+        try {
+          const existing = await readVmk(vaultId);
+          if (existing) {
+            const matches = existing.every((byte, index) => byte === vmk[index]);
+            existing.fill(0);
+            if (!matches) {
+              throw new Error('This Vault already has a different key on this device. It was not replaced.');
+            }
+            return;
+          }
+        } catch (cause) {
+          if (!(cause instanceof DamagedVaultKeyError)) throw cause;
+          // An explicitly imported recovery kit can repair a malformed local
+          // encoding. Other storage failures must not authorize replacement.
+        }
+        await storeNewVmk(vaultId, vmk);
+      });
     },
     deleteVaultMasterKey(vaultId) {
       return withVaultLock(vaultId, async () => {
