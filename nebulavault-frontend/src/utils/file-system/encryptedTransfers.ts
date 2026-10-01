@@ -6,6 +6,7 @@ import {
 } from "./encryptedObject";
 import { loadUnlockedVaultKey } from "./vaultKey";
 import { downloadFromDevices } from "./deviceUpload";
+import { receiveRelayCiphertext, requestRelayReadFallback } from "./relayCiphertext";
 
 interface TransferTarget {
   deviceId: string;
@@ -264,5 +265,33 @@ export async function downloadCurrentFile(
       window.clearTimeout(timeoutId);
     }
   }
-  throw new Error("No storage device could provide an authenticated copy of this file.");
+
+  const ciphertextBytes = metadata.plaintextSize + 16;
+  const fallback = await requestRelayReadFallback({ nodeId, storageHash: metadata.storageHash, ciphertextBytes });
+  const ciphertext = await receiveRelayCiphertext({
+    fallback,
+    expectedStorageHash: metadata.storageHash,
+    expectedCiphertextBytes: ciphertextBytes,
+  });
+  let plaintext: Uint8Array;
+  try {
+    plaintext = await decryptObject(metadata, ciphertext, vmk);
+  } catch {
+    ciphertext.fill(0);
+    throw new Error("The relayed copy failed encrypted-object authentication. The file was not exported.");
+  }
+  try {
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(plaintext).buffer], { type: "application/octet-stream" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } finally {
+    plaintext.fill(0);
+    ciphertext.fill(0);
+  }
+  return false;
 }

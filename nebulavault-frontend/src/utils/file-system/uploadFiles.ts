@@ -1,6 +1,6 @@
 import { FlatFile } from "@/types/FileFolderBuffer";
 import { downloadCurrentFile, uploadEncryptedFile } from "./encryptedTransfers";
-import { loadUnlockedVaultKey } from "./vaultKey";
+import { isVaultRecoveryAcknowledged, loadUnlockedVaultKey } from "./vaultKey";
 
 /**
  * Keeps browser drop paths rooted at the directory the user is viewing.
@@ -69,8 +69,8 @@ export async function uploadFiles(
   folderPaths: string[],
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<UploadResult> {
-  if (files.length > 0 && !await loadUnlockedVaultKey(vaultId)) {
-    throw new Error("Import this Vault’s recovery kit before uploading encrypted files.");
+  if (files.length > 0 && (!await loadUnlockedVaultKey(vaultId) || !isVaultRecoveryAcknowledged(vaultId))) {
+    throw new Error("Import this Vault’s recovery kit or save and confirm it before uploading encrypted files.");
   }
   if (files.length === 0 && folderPaths.length === 0) {
     return { uploaded: 0, bytes: 0, issues: [] };

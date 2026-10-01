@@ -220,22 +220,79 @@ export async function decryptObject(
 }
 
 async function recoveryKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
-  const material = await crypto.subtle.importKey("raw", toArrayBuffer(encoder.encode(passphrase)), "PBKDF2", false, ["deriveKey"]);
+  const passphraseBytes = encoder.encode(passphrase);
+  const material = await crypto.subtle.importKey("raw", toArrayBuffer(passphraseBytes), "PBKDF2", false, ["deriveKey"]);
+  passphraseBytes.fill(0);
   return crypto.subtle.deriveKey(
     { name: "PBKDF2", hash: "SHA-256", salt: toArrayBuffer(salt), iterations: 600_000 },
     material,
     { name: "AES-GCM", length: 256 },
     false,
-    ["decrypt"],
+    ["encrypt", "decrypt"],
   );
+}
+
+const RECOVERY_KIT_FORMAT = "benzene-vmk-recovery";
+const RECOVERY_KIT_VERSION = 1;
+const RECOVERY_KIT_KDF = "PBKDF2-HMAC-SHA-256";
+const RECOVERY_KIT_CIPHER = "AES-256-GCM";
+const RECOVERY_KIT_ITERATIONS = 600_000;
+
+function assertRecoveryPassphrase(passphrase: string): void {
+  if (typeof passphrase !== "string" || [...passphrase].length < 16 || passphrase.trim().length === 0) {
+    throw new TypeError("Use a recovery passphrase with at least 16 characters; a unique six-word phrase is recommended.");
+  }
+}
+
+/** Creates the mobile v1 passphrase-encrypted JSON recovery kit. */
+export async function exportRecoveryKitWithRandomValues(
+  vaultId: string,
+  vmk: Uint8Array,
+  passphrase: string,
+  randomBytes: RandomBytes,
+): Promise<string> {
+  assertVaultId(vaultId);
+  assertVmk(vmk);
+  assertRecoveryPassphrase(passphrase);
+  const salt = randomBytes(16);
+  const nonce = randomBytes(12);
+  if (salt.byteLength !== 16 || nonce.byteLength !== 12) throw new Error("Secure random source returned an invalid value");
+  const saltEncoded = encodeBase64Url(salt);
+  const kit = {
+    format: RECOVERY_KIT_FORMAT,
+    version: RECOVERY_KIT_VERSION,
+    vaultId,
+    kdf: RECOVERY_KIT_KDF,
+    iterations: RECOVERY_KIT_ITERATIONS,
+    cipher: RECOVERY_KIT_CIPHER,
+    salt: saltEncoded,
+    nonce: encodeBase64Url(nonce),
+    ciphertext: "",
+  };
+  const aad = encoder.encode(`${kit.format}\n${kit.version}\n${kit.vaultId}\n${kit.kdf}\n${kit.iterations}\n${kit.salt}\n${kit.cipher}`);
+  const key = await recoveryKey(passphrase, salt);
+  try {
+    kit.ciphertext = encodeBase64Url(new Uint8Array(await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: toArrayBuffer(nonce), additionalData: toArrayBuffer(aad), tagLength: 128 },
+      key,
+      toArrayBuffer(vmk),
+    )));
+    return JSON.stringify(kit);
+  } finally {
+    salt.fill(0);
+    nonce.fill(0);
+    aad.fill(0);
+  }
+}
+
+export function exportRecoveryKit(vaultId: string, vmk: Uint8Array, passphrase: string): Promise<string> {
+  return exportRecoveryKitWithRandomValues(vaultId, vmk, passphrase, secureRandomBytes);
 }
 
 /** Imports the mobile v1 passphrase-encrypted recovery kit; does not store the key. */
 export async function importRecoveryKit(serialized: string, expectedVaultId: string, passphrase: string): Promise<Uint8Array> {
   assertVaultId(expectedVaultId);
-  if ([...passphrase].length < 16 || passphrase.trim().length === 0) {
-    throw new TypeError("Use the recovery passphrase with at least 16 characters.");
-  }
+  assertRecoveryPassphrase(passphrase);
   if (serialized.length > 4096) throw new TypeError("Recovery kit is malformed or too large");
   let value: unknown;
   try { value = JSON.parse(serialized); } catch { throw new TypeError("Recovery kit is not valid JSON"); }

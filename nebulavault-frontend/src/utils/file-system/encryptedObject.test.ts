@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { decryptObject, encryptObjectWithRandomValues, type RandomBytes } from "./encryptedObject";
+import {
+  decryptObject,
+  exportRecoveryKitWithRandomValues,
+  encryptObjectWithRandomValues,
+  importRecoveryKit,
+  type RandomBytes,
+} from "./encryptedObject";
 
 interface Vector {
   vaultMasterKeyHex: string;
@@ -53,4 +59,28 @@ test("browser decryption rejects changed ciphertext and a wrong Vault key", asyn
   changed[0] = (changed[0] ?? 0) ^ 1;
   await assert.rejects(decryptObject(encrypted.metadata, changed, fromHex(vector.vaultMasterKeyHex)), /storageHash/);
   await assert.rejects(decryptObject(encrypted.metadata, encrypted.ciphertext, new Uint8Array(32).fill(9)));
+});
+
+test("browser recovery-kit export matches the mobile v1 format and imports the exact key", async () => {
+  const vmk = fromHex(vector.vaultMasterKeyHex);
+  const randomValues = [Uint8Array.from({ length: 16 }, (_, index) => index), Uint8Array.from({ length: 12 }, (_, index) => index + 16)];
+  const kit = await exportRecoveryKitWithRandomValues(vector.vaultId, vmk, "correct horse battery staple", (length) => {
+    const next = randomValues.shift();
+    assert.ok(next);
+    assert.equal(next.byteLength, length);
+    return next;
+  });
+  const record = JSON.parse(kit) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(record).sort(), ["format", "version", "vaultId", "kdf", "iterations", "cipher", "salt", "nonce", "ciphertext"].sort());
+  assert.equal(record.format, "benzene-vmk-recovery");
+  assert.equal(record.kdf, "PBKDF2-HMAC-SHA-256");
+  assert.equal(record.iterations, 600_000);
+  assert.equal(record.cipher, "AES-256-GCM");
+  assert.deepEqual(await importRecoveryKit(kit, vector.vaultId, "correct horse battery staple"), vmk);
+  await assert.rejects(importRecoveryKit(kit, vector.vaultId, "wrong passphrase but long enough"));
+});
+
+test("browser recovery-kit export rejects weak passphrases and invalid randomness", async () => {
+  await assert.rejects(exportRecoveryKitWithRandomValues(vector.vaultId, new Uint8Array(32), "too short", () => new Uint8Array(16)), /at least 16 characters/);
+  await assert.rejects(exportRecoveryKitWithRandomValues(vector.vaultId, new Uint8Array(32), "correct horse battery staple", () => new Uint8Array(1)), /invalid value/);
 });

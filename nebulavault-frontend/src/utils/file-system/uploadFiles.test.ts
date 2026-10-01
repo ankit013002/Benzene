@@ -16,6 +16,7 @@ const originalFetch = globalThis.fetch;
 const originalDocument = globalThis.document;
 const originalURL = globalThis.URL;
 const originalWindow = globalThis.window;
+const originalWebSocket = globalThis.WebSocket;
 const VAULT_ID = "test-vault";
 const VECTOR_VAULT_ID = "vector-vault";
 const PASSPHRASE = "correct horse battery staple phrase";
@@ -71,6 +72,7 @@ afterEach(() => {
   setGlobal("document", originalDocument);
   setGlobal("URL", originalURL);
   setGlobal("window", originalWindow);
+  setGlobal("WebSocket", originalWebSocket);
   lockVault(VAULT_ID);
   lockVault(VECTOR_VAULT_ID);
 });
@@ -228,7 +230,7 @@ describe("encrypted web upload orchestration", () => {
     const calls: FetchCall[] = [];
     const fetchMock: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push([input, init]);
-      if (input === "/api/files/node-1/encrypted-object") return Response.json({ data: { encryptedObject: vector.metadata } });
+      if (input === "/api/files/abcdef0123456789abcdef01/encrypted-object") return Response.json({ data: { encryptedObject: vector.metadata } });
       if (input === `/api/placement/download-targets/${vector.storageHash}`) {
         return Response.json({ data: { targets: [{ deviceId: "device-a", deviceName: "Desk", url: `http://192.168.1.10/objects/${vector.storageHash}`, grant: "read-grant", expiresAt: "2099-01-01T00:00:00.000Z" }] } });
       }
@@ -250,13 +252,89 @@ describe("encrypted web upload orchestration", () => {
     setGlobal("URL", DownloadURL);
     setGlobal("window", { setTimeout: () => 1, clearTimeout: () => undefined });
 
-    const legacy = await downloadCurrentFile("node-1", vector.storageHash, "notes.txt", VECTOR_VAULT_ID);
+    const legacy = await downloadCurrentFile("abcdef0123456789abcdef01", vector.storageHash, "notes.txt", VECTOR_VAULT_ID);
 
     assert.equal(legacy, false);
     assert.equal(calls.length, 4);
     assert.equal(calls[2]?.[1]?.method, "HEAD");
     assert.equal(new Headers(calls[2]?.[1]?.headers).get("X-Transfer-Grant"), "read-grant");
     assert.equal(new Headers(calls[3]?.[1]?.headers).get("X-Transfer-Grant"), "read-grant");
+    assert.equal(anchor.download, "notes.txt");
+    assert.equal(exportState.clicks, 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(exportState.text, Buffer.from(vector.plaintextBase64Url, "base64url").toString());
+  });
+
+  test("requests relay only after direct reads fail and exports authenticated relay plaintext", async () => {
+    const vector = encryptedVector();
+    await unlockVaultWithRecoveryKit(VECTOR_VAULT_ID, recoveryKit(vector.vaultMasterKeyHex, VECTOR_VAULT_ID), PASSPHRASE);
+    const ciphertext = Buffer.from(vector.ciphertextBase64Url, "base64url");
+    const expiry = Math.floor(Date.now() / 1000) + 120;
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000";
+    const scope = {
+      v: 1, sessionId, storageHash: vector.storageHash,
+      deviceId: "123e4567-e89b-42d3-a456-426614174001", op: "get", exp: expiry,
+      maxBytes: ciphertext.byteLength, role: "client", ticketId: "123e4567-e89b-42d3-a456-426614174002",
+    };
+    const base64Url = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64url");
+    const fallback = {
+      kind: "relay_fallback", relayUrl: "wss://relay.example.test", sessionId,
+      ticket: `${base64Url(new TextEncoder().encode(JSON.stringify(scope)))}.${base64Url(new Uint8Array(64).fill(1))}`,
+      storageHash: vector.storageHash, ciphertextBytes: ciphertext.byteLength,
+      expiresAt: new Date(expiry * 1000).toISOString(),
+    };
+    const calls: FetchCall[] = [];
+    const fetchMock: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push([input, init]);
+      if (input === "/api/files/abcdef0123456789abcdef01/encrypted-object") return Response.json({ data: { encryptedObject: vector.metadata } });
+      if (input === `/api/placement/download-targets/${vector.storageHash}`) {
+        return Response.json({ data: { targets: [{ deviceId: "device-a", deviceName: "Desk", url: `http://192.168.1.10/objects/${vector.storageHash}`, grant: "read-grant", expiresAt: "2099-01-01T00:00:00.000Z" }] } });
+      }
+      if (input === `http://192.168.1.10/objects/${vector.storageHash}` && init?.method === "HEAD") return new Response(null, { status: 503 });
+      if (input === "/api/placement/relay-read") return Response.json({ data: fallback }, { status: 201 });
+      throw new Error(`Unexpected request: ${String(input)}`);
+    };
+    setGlobal("fetch", fetchMock);
+
+    class RelaySocket {
+      readyState = 1;
+      binaryType = "";
+      onopen: ((event: unknown) => void) | null = null;
+      onmessage: ((event: { data: unknown }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      onclose: ((event: { code: number; reason: string }) => void) | null = null;
+      constructor(url: string) {
+        assert.equal(url, `wss://relay.example.test/relay/${sessionId}`);
+        queueMicrotask(() => this.onopen?.({}));
+      }
+      send(message: string) {
+        assert.deepEqual(JSON.parse(message), { type: "authenticate", ticket: fallback.ticket });
+        queueMicrotask(() => {
+          this.onmessage?.({ data: JSON.stringify({ type: "paired" }) });
+          this.onmessage?.({ data: Uint8Array.from(ciphertext).buffer });
+          this.readyState = 3;
+          this.onclose?.({ code: 1000, reason: "transfer_complete" });
+        });
+      }
+      close() { this.readyState = 3; }
+    }
+    setGlobal("WebSocket", RelaySocket);
+    const exportState: { text?: string; clicks: number } = { clicks: 0 };
+    const anchor = { href: "", download: "", click: () => { exportState.clicks += 1; }, remove: () => undefined };
+    setGlobal("document", { createElement: () => anchor, body: { appendChild: () => undefined } });
+    class DownloadURL extends (originalURL as typeof URL) {
+      static createObjectURL(blob: Blob): string {
+        void blob.text().then((text) => { exportState.text = text; });
+        return "blob:decrypted";
+      }
+      static revokeObjectURL(): void {}
+    }
+    setGlobal("URL", DownloadURL);
+
+    const legacy = await downloadCurrentFile("abcdef0123456789abcdef01", vector.storageHash, "notes.txt", VECTOR_VAULT_ID);
+
+    assert.equal(legacy, false);
+    assert.equal(calls.findIndex(([url]) => url === "/api/placement/relay-read") > calls.findIndex(([url]) => String(url).startsWith("http://192.168.1.10/")), true);
     assert.equal(anchor.download, "notes.txt");
     assert.equal(exportState.clicks, 1);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -273,7 +351,7 @@ describe("encrypted web upload orchestration", () => {
       setGlobal("URL", originalURL);
       setGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
         calls.push([input, init]);
-        if (input === "/api/files/node-1/encrypted-object") return Response.json({ data: { encryptedObject: vector.metadata } });
+        if (input === "/api/files/abcdef0123456789abcdef01/encrypted-object") return Response.json({ data: { encryptedObject: vector.metadata } });
         if (input === `/api/placement/download-targets/${vector.storageHash}`) {
           return Response.json({ data: { targets: [{ deviceId: "device-a", deviceName: "Desk", url: `http://192.168.1.2/objects/${vector.storageHash}`, grant: "read-grant", expiresAt: "2099-01-01T00:00:00.000Z" }] } });
         }
@@ -286,13 +364,14 @@ describe("encrypted web upload orchestration", () => {
           const bodyLength = scenario === "oversized-body" ? expectedLength + 1 : scenario === "mismatched-body" ? expectedLength - 1 : expectedLength;
           return new Response(new Uint8Array(bodyLength).buffer, { status: 200, headers: { "content-length": String(length) } });
         }
+        if (input === "/api/placement/relay-read") return new Response(null, { status: 409 });
         throw new Error(`Unexpected request: ${String(input)}`);
       });
       setGlobal("document", { createElement: () => ({ click: () => { exports += 1; }, remove: () => undefined }), body: { appendChild: () => undefined } });
 
-      await assert.rejects(downloadCurrentFile("node-1", vector.storageHash, "notes.txt", VECTOR_VAULT_ID), /authenticated copy/);
+      await assert.rejects(downloadCurrentFile("abcdef0123456789abcdef01", vector.storageHash, "notes.txt", VECTOR_VAULT_ID), /No online encrypted copy/);
       assert.equal(exports, 0, `${scenario} must not export plaintext`);
-      assert.equal(calls.length, scenario === "head-mismatch" ? 3 : 4);
+      assert.equal(calls.length, scenario === "head-mismatch" ? 4 : 5);
     }
   });
 });
