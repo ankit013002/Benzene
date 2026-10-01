@@ -31,7 +31,9 @@ describe("account deletion receipt", () => {
     expect(stored).toHaveLength(32);
     expect(stored.toString("base64url")).not.toBe(receipt);
     expect(accountDeletionReceiptMatches(receipt, stored)).toBe(true);
-    expect(accountDeletionReceiptMatches(`${receipt.slice(0, -1)}A`, stored)).toBe(false);
+    const tamperedFirstCharacter = receipt[0] === "A" ? "B" : "A";
+    const tamperedReceipt = tamperedFirstCharacter + receipt.slice(1);
+    expect(accountDeletionReceiptMatches(tamperedReceipt, stored)).toBe(false);
     expect(accountDeletionReceiptMatches("bad", stored)).toBe(false);
   });
 });

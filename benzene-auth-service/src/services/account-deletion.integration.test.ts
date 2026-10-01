@@ -417,9 +417,11 @@ describe.skipIf(!databaseUrl)("account deletion request foundation", () => {
     });
     expect(receiptStatus.status).toBe("completed");
     expect(receiptStatus.completed_at).toBeInstanceOf(Date);
+    const tamperedFirstCharacter = result.receipt[0] === "A" ? "B" : "A";
+    const tamperedReceipt = tamperedFirstCharacter + result.receipt.slice(1);
     await expect(getAccountDeletionStatusByReceipt({
       requestId: result.request.id,
-      receipt: `${result.receipt.slice(0, -1)}A`,
+      receipt: tamperedReceipt,
     })).rejects.toMatchObject({ name: "InvalidDeletionRequestError" });
 
     const persisted = await pool.query(
