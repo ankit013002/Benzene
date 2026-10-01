@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { eq } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
@@ -21,7 +21,7 @@ let vaultId: string;
 let deviceId: string;
 
 function hash(fill: string): string {
-  return fill.repeat(64).slice(0, 64);
+  return createHash("sha256").update(fill).digest("hex");
 }
 
 async function unknownReplica(objectHash: string, sizeBytes: number): Promise<string> {
