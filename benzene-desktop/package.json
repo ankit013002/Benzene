@@ -1,0 +1,53 @@
+{
+  "name": "benzene-desktop",
+  "version": "0.1.0",
+  "description": "Benzene desktop client and independent local node agent",
+  "author": "Benzene",
+  "private": true,
+  "main": "built/main.js",
+  "scripts": {
+    "build:agent": "esbuild ../benzene-node-agent/src/index.ts --bundle --platform=node --format=cjs --target=node20 --outfile=built/node-agent.cjs",
+    "build:renderer": "esbuild src/setup.ts --bundle --platform=browser --format=iife --outfile=built/setup.js",
+    "build": "npm run build:agent && tsc -p tsconfig.json && npm run build:renderer",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test src/*.test.ts",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
+    "esbuild": "^0.27.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.benzene.desktop",
+    "productName": "Benzene",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "built/**/*",
+      "src/setup.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "built/node-agent.cjs",
+        "to": "node-agent.cjs"
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"]
+    }
+  }
+}

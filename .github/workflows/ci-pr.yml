@@ -33,6 +33,7 @@ jobs:
       smoke: ${{ steps.filter.outputs.smoke }}
       acceptance: ${{ steps.filter.outputs.acceptance }}
       user_profile_acceptance: ${{ steps.filter.outputs.user_profile_acceptance }}
+      desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -107,6 +108,9 @@ jobs:
               - 'nebulavault-user-service/**'
               - 'scripts/smoke-user-profile.mjs'
               - '.github/workflows/**'
+            desktop:
+              - 'benzene-desktop/**'
+              - '.github/workflows/ci-pr.yml'
 
   store-deployment-probe:
     name: Mobile store deployment probe — tests
@@ -210,6 +214,30 @@ jobs:
         run: npm run export:android
       - name: Export web bundle
         run: npm run export:web
+
+  desktop:
+    name: Desktop (Electron) — typecheck, tests & build
+    needs: detect-changes
+    if: needs.detect-changes.outputs.desktop == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: benzene-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: benzene-desktop/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build desktop app and bundled node agent
+        run: npm run build
 
   encrypted-object-contract:
     name: Encrypted object v1 — conformance vectors

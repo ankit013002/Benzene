@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" />
+    <title>Set up Benzene</title>
+    <style>
+      :root { color-scheme: light dark; font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { margin: 0; padding: 30px; background: Canvas; color: CanvasText; }
+      main { max-width: 460px; margin: 0 auto; }
+      h1 { font-size: 27px; letter-spacing: -0.04em; margin: 0 0 4px; }
+      .muted { color: color-mix(in srgb, CanvasText 62%, transparent); }
+      form { display: grid; gap: 14px; margin-top: 22px; }
+      label { display: grid; gap: 5px; font-weight: 600; }
+      input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid color-mix(in srgb, CanvasText 22%, transparent); border-radius: 8px; background: Canvas; color: CanvasText; font: inherit; }
+      button { border: 0; border-radius: 8px; padding: 12px; color: Canvas; background: CanvasText; font: inherit; font-weight: 650; cursor: pointer; }
+      button:disabled { opacity: .55; cursor: wait; }
+      #status { min-height: 38px; }
+      #status[data-error="true"] { color: #a33b36; }
+      .notice { margin-top: 20px; padding: 12px; border: 1px solid color-mix(in srgb, CanvasText 18%, transparent); border-radius: 8px; }
+      .notice strong { display: block; margin-bottom: 2px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Benzene</h1>
+      <div class="muted">Connect this computer and choose how much storage it contributes.</div>
+      <form id="setup-form">
+        <label>Vault app address
+          <input id="app-url" type="url" value="http://localhost:3000" required autocomplete="url" />
+        </label>
+        <label>Gateway address
+          <input id="gateway-url" type="url" value="http://localhost:8080" required autocomplete="url" />
+        </label>
+        <label>Storage to contribute (GB)
+          <input id="allocation-gb" type="number" value="100" min="1" step="1" required />
+        </label>
+        <label>Computer name
+          <input id="device-name" type="text" maxlength="100" required />
+        </label>
+        <div id="status" class="muted" role="status" aria-live="polite"></div>
+        <button id="submit" type="submit">Connect this computer</button>
+      </form>
+      <div class="notice"><strong>Storage stays on this computer</strong><span class="muted">The local agent runs independently of this window. Closing Benzene does not stop storage participation.</span></div>
+      <div class="notice"><strong>Files are in the Vault app</strong><span class="muted">This desktop client opens your configured Benzene web app. A Finder or Windows filesystem location is not included in this release.</span></div>
+    </main>
+    <script src="../built/setup.js"></script>
+  </body>
+</html>
