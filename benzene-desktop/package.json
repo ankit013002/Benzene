@@ -11,7 +11,7 @@
     "build": "npm run build:agent && tsc -p tsconfig.json && npm run build:renderer && npm run build:release-config",
     "build:release-config": "node scripts/write-release-config.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/*.test.ts scripts/*.test.mjs",
+    "test": "node scripts/run-tests.mjs",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
     "smoke:dist:win": "npm run build && electron-builder --win nsis --publish never",
