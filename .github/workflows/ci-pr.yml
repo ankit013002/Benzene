@@ -20,6 +20,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       mobile: ${{ steps.filter.outputs.mobile }}
       store_deployment_probe: ${{ steps.filter.outputs.store_deployment_probe }}
+      relay_deployment_probe: ${{ steps.filter.outputs.relay_deployment_probe }}
       encrypted_contract: ${{ steps.filter.outputs.encrypted_contract }}
       auth: ${{ steps.filter.outputs.auth }}
       gateway: ${{ steps.filter.outputs.gateway }}
@@ -48,6 +49,10 @@ jobs:
               - 'scripts/verify-mobile-store-deployment.test.mjs'
               - 'nebulavault-frontend/src/app/.well-known/**'
               - 'benzene-mobile/app.config.ts'
+              - '.github/workflows/**'
+            relay_deployment_probe:
+              - 'scripts/verify-relay-deployment.mjs'
+              - 'scripts/verify-relay-deployment.test.mjs'
               - '.github/workflows/**'
             encrypted_contract:
               - 'contracts/encrypted-object-v1/**'
@@ -115,6 +120,19 @@ jobs:
           node-version: 22.13
       - name: Test fail-closed public deployment verification
         run: node --test scripts/verify-mobile-store-deployment.test.mjs
+
+  relay-deployment-probe:
+    name: Relay public deployment probe — tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relay_deployment_probe == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+      - name: Test public relay deployment verification
+        run: node --test scripts/verify-relay-deployment.test.mjs
 
   web:
     name: Frontend (Next.js) — build
