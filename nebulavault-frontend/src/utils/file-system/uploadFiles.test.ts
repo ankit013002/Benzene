@@ -383,4 +383,7 @@ test("recovery kit entry uses an accessible password field without a browser pro
   assert.match(markup, /type="file"/);
   const componentSource = readFileSync(new URL("../../app/(protected)/_components/RecoveryKitUnlockForm.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(componentSource, /window\.prompt/);
+  assert.match(componentSource, /Verify saved recovery kit/);
+  assert.match(componentSource, /unlockVaultWithRecoveryKit\(vaultId, await submittedFile\.text\(\), submittedPassphrase\)/);
+  assert.doesNotMatch(componentSource, /acknowledgeRecoveryKitSaved/);
 });

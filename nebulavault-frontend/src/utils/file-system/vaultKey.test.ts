@@ -52,6 +52,63 @@ test("browser creation keeps the key in memory until the user acknowledges the d
   }
 });
 
+test("verifying the exact recovery kit consumes its pending proof", async () => {
+  try {
+    Reflect.deleteProperty(globalThis, "window");
+    const kit = await createVaultRecoveryKit(vaultId, passphrase);
+
+    assert.equal(await unlockVaultWithRecoveryKit(vaultId, kit, passphrase), false);
+    assert.equal(isVaultRecoveryAcknowledged(vaultId), true);
+    await assert.rejects(acknowledgeRecoveryKitSaved(vaultId), /recovery kit no longer matches/);
+  } finally {
+    clearVaultState();
+  }
+});
+
+test("mismatched recovery verification leaves the pending proof available", async () => {
+  try {
+    Reflect.deleteProperty(globalThis, "window");
+    const pendingKit = await createVaultRecoveryKit(vaultId, passphrase);
+    const differentKit = await exportRecoveryKitWithRandomValues(
+      vaultId,
+      new Uint8Array(32).fill(9),
+      otherPassphrase,
+      (length) => new Uint8Array(length).fill(4),
+    );
+
+    await assert.rejects(unlockVaultWithRecoveryKit(vaultId, differentKit, otherPassphrase), /different key is already unlocked/);
+    assert.equal(isVaultRecoveryAcknowledged(vaultId), false);
+    assert.equal(await acknowledgeRecoveryKitSaved(vaultId), false);
+    assert.equal(isVaultRecoveryAcknowledged(vaultId), true);
+    assert.equal(await unlockVaultWithRecoveryKit(vaultId, pendingKit, passphrase), false);
+  } finally {
+    clearVaultState();
+  }
+});
+
+test("failed desktop persistence keeps the pending recovery proof for retry", async () => {
+  const retryVaultId = "desktop-recovery-retry-vault";
+  try {
+    let stored: string | null = null;
+    let canSave = false;
+    setDesktopBridge(async () => stored, async (keyHex) => {
+      if (!canSave) return false;
+      stored = keyHex;
+      return true;
+    });
+    const kit = await createVaultRecoveryKit(retryVaultId, passphrase);
+
+    await assert.rejects(unlockVaultWithRecoveryKit(retryVaultId, kit, passphrase), /could not save/);
+    assert.equal(isVaultRecoveryAcknowledged(retryVaultId), false);
+    canSave = true;
+    assert.equal(await acknowledgeRecoveryKitSaved(retryVaultId), true);
+    assert.equal(isVaultRecoveryAcknowledged(retryVaultId), true);
+  } finally {
+    lockVault(retryVaultId);
+    clearVaultState();
+  }
+});
+
 test("desktop creation persists only after confirmation and restored keys remain acknowledged after reload", async () => {
   try {
     let stored: string | null = null;

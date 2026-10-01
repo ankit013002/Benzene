@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  acknowledgeRecoveryKitSaved,
   createVaultRecoveryKit,
   hasDesktopKeyBridge,
   isVaultKeyPersisted,
@@ -22,12 +21,15 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
   const [passphrase, setPassphrase] = useState("");
   const [createPassphrase, setCreatePassphrase] = useState("");
   const [confirmPassphrase, setConfirmPassphrase] = useState("");
+  const [savedKitFile, setSavedKitFile] = useState<File | null>(null);
+  const [savedKitPassphrase, setSavedKitPassphrase] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [desktopBridgeAvailable, setDesktopBridgeAvailable] = useState(false);
   const [recoveryKitReady, setRecoveryKitReady] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const savedKitInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => setDesktopBridgeAvailable(hasDesktopKeyBridge()), []);
   useEffect(() => {
@@ -49,6 +51,12 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
     setPassphrase("");
     setError(null);
     if (fileInput.current) fileInput.current.value = "";
+  };
+
+  const clearSavedKitForm = (): void => {
+    setSavedKitFile(null);
+    setSavedKitPassphrase("");
+    if (savedKitInput.current) savedKitInput.current.value = "";
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -110,18 +118,26 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
     }
   };
 
-  const confirmSavedKit = async (): Promise<void> => {
-    if (!vaultId || busy || !recoveryKitReady) return;
+  const verifySavedKit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    if (!vaultId || busy || !recoveryKitReady || !savedKitFile || !savedKitPassphrase) return;
+    const submittedFile = savedKitFile;
+    const submittedPassphrase = savedKitPassphrase;
+    clearSavedKitForm();
     setBusy(true);
     setError(null);
     try {
-      const persisted = await acknowledgeRecoveryKitSaved(vaultId);
+      // Re-importing the saved file proves that the downloaded recovery copy
+      // and the passphrase can recover the exact key that encrypted this Vault.
+      const persisted = await unlockVaultWithRecoveryKit(vaultId, await submittedFile.text(), submittedPassphrase);
       setAcknowledged(true);
       setRecoveryKitReady(false);
       onUnlocked(persisted);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not confirm the recovery kit.");
+      setError(cause instanceof Error ? cause.message : "Could not verify the saved recovery kit.");
     } finally {
+      setSavedKitPassphrase("");
+      setSavedKitFile(null);
       setBusy(false);
     }
   };
@@ -150,10 +166,20 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
             {busy ? "Preparing recovery kit…" : "Download encrypted recovery kit"}
           </button>
         </div>
-        {recoveryKitReady && !acknowledged && <div className="mt-3 flex flex-wrap items-center gap-3">
-          <p className="text-sm text-muted-foreground">The recovery file was downloaded. Uploads remain disabled until you confirm you saved it safely.</p>
-          <button type="button" className="btn btn-sm btn-outline" disabled={busy} onClick={() => void confirmSavedKit()}>I saved the recovery kit safely</button>
-        </div>}
+        {recoveryKitReady && !acknowledged && <form className="mt-3 rounded-md border border-border p-3" onSubmit={(event) => void verifySavedKit(event)}>
+          <p className="mb-3 text-sm text-muted-foreground">Uploads stay disabled until you verify that the saved recovery file and passphrase can unlock this Vault.</p>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="min-w-56 flex-1">
+              <label htmlFor="saved-vault-recovery-kit" className="mb-1 block text-sm">Saved recovery kit</label>
+              <input ref={savedKitInput} id="saved-vault-recovery-kit" type="file" accept="application/json,.json" className="file-input file-input-bordered file-input-sm w-full" disabled={busy} onChange={(event) => setSavedKitFile(event.currentTarget.files?.[0] ?? null)} />
+            </div>
+            <div className="min-w-56 flex-1">
+              <label htmlFor="saved-vault-recovery-passphrase" className="mb-1 block text-sm">Recovery passphrase</label>
+              <input id="saved-vault-recovery-passphrase" type="password" autoComplete="off" className="input input-bordered input-sm w-full" value={savedKitPassphrase} minLength={16} required disabled={busy} onChange={(event) => setSavedKitPassphrase(event.currentTarget.value)} />
+            </div>
+            <button type="submit" className="btn btn-sm btn-outline" disabled={!savedKitFile || savedKitPassphrase.length < 16 || busy}>{busy ? "Verifying recovery kit…" : "Verify saved recovery kit"}</button>
+          </div>
+        </form>}
         {acknowledged && <p role="status" className="mt-2 text-sm text-muted-foreground">Recovery kit confirmed for this session. Encrypted uploads are enabled.</p>}
       </div>
       <form onSubmit={(event) => void submit(event)}>

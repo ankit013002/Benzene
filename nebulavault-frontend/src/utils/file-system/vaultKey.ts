@@ -65,6 +65,7 @@ export async function unlockVaultWithRecoveryKit(
       if (persisted) persistedVaultKeys.add(vaultId);
       else persistedVaultKeys.delete(vaultId);
       acknowledgedVaultKeys.add(vaultId);
+      consumeMatchingPendingRecoveryKey(vaultId, current);
       return persisted;
     }
     try {
@@ -76,6 +77,7 @@ export async function unlockVaultWithRecoveryKit(
       if (persisted) persistedVaultKeys.add(vaultId);
       else persistedVaultKeys.delete(vaultId);
       acknowledgedVaultKeys.add(vaultId);
+      consumeMatchingPendingRecoveryKey(vaultId, imported);
       return persisted;
     } catch (cause) {
       imported.fill(0);
@@ -131,6 +133,13 @@ export async function acknowledgeRecoveryKitSaved(vaultId: string): Promise<bool
 
 export function isVaultRecoveryAcknowledged(vaultId: string): boolean {
   return acknowledgedVaultKeys.has(vaultId);
+}
+
+function consumeMatchingPendingRecoveryKey(vaultId: string, verifiedKey: Uint8Array): void {
+  const pending = pendingRecoveryKeys.get(vaultId);
+  if (!pending || !pending.every((byte, index) => byte === verifiedKey[index])) return;
+  pendingRecoveryKeys.delete(vaultId);
+  pending.fill(0);
 }
 
 async function withVaultOperation<T>(vaultId: string, action: () => Promise<T>): Promise<T> {
