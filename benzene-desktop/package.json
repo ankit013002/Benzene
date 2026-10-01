@@ -14,6 +14,7 @@
     "test": "node --import tsx --test src/*.test.ts scripts/*.test.mjs",
     "start": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
+    "smoke:dist:win": "npm run build && electron-builder --win nsis --publish never",
     "release:preflight": "node scripts/release-preflight.mjs",
     "release:prepare-macos-signing": "node scripts/prepare-macos-signing.mjs",
     "release:dist:mac": "npm run build && electron-builder --mac dmg --publish never",

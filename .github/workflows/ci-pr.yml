@@ -239,6 +239,62 @@ jobs:
       - name: Build desktop app and bundled node agent
         run: npm run build
 
+  desktop-windows-packaging-smoke:
+    name: Desktop (Windows) — unsigned NSIS packaging smoke
+    needs: detect-changes
+    if: needs.detect-changes.outputs.desktop == 'true'
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: benzene-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: benzene-desktop/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Test
+        run: npm test
+      - name: Build unsigned Windows NSIS installer
+        run: npm run smoke:dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Install into isolated temporary directory and inspect package
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "benzene-unsigned-install"
+          $installDir = [System.IO.Path]::GetFullPath($installDir)
+          if (Test-Path -LiteralPath $installDir) {
+            throw "The isolated install path already exists: $installDir"
+          }
+
+          $installers = @(Get-ChildItem -Path "release" -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer; found $($installers.Count)."
+          }
+
+          $installer = $installers[0]
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList @("/S", "/D=$installDir") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Silent NSIS install failed with exit code $($process.ExitCode)."
+          }
+
+          $app = Join-Path $installDir "Benzene.exe"
+          $agent = Join-Path $installDir "resources/node-agent.cjs"
+          if (-not (Test-Path -LiteralPath $app -PathType Leaf)) {
+            throw "Installed package is missing Benzene.exe at $app."
+          }
+          if (-not (Test-Path -LiteralPath $agent -PathType Leaf)) {
+            throw "Installed package is missing resources/node-agent.cjs at $agent."
+          }
+
+          Write-Output "Unsigned packaging smoke passed: Benzene.exe and resources/node-agent.cjs are installed under $installDir. This is not release-ready evidence."
+
   encrypted-object-contract:
     name: Encrypted object v1 — conformance vectors
     needs: detect-changes

@@ -21,6 +21,15 @@ The app starts the independent agent, then opens the Devices page. The short-liv
 
 Build an unsigned local installer on its target platform with `npm run dist`. It is for development only.
 
+Ordinary CI also runs an unsigned Windows NSIS packaging smoke when desktop
+files or the CI workflow change. It installs locked dependencies, typechecks,
+runs the desktop tests, builds the installer with signing discovery disabled,
+silently installs it under the runner's temporary directory, and checks for
+`Benzene.exe` and `resources/node-agent.cjs`. The installer is neither uploaded
+nor published, and the job has no production environment or signing secrets.
+This catches packaging and install-layout regressions only; it does not verify
+Authenticode, clean-machine behavior, the Vault journey, or release readiness.
+
 ## Manual installer candidate workflow
 
 `.github/workflows/desktop-release.yml` packages a macOS DMG or Windows NSIS candidate when manually dispatched from `master`. It uses the protected GitHub environment `desktop-production` and uploads a short-lived Actions artifact; it does not create a GitHub release or publish an installer. The validated `DESKTOP_APP_URL` and `DESKTOP_GATEWAY_URL` are embedded as first-launch defaults. Normal pull request CI never receives signing credentials.
@@ -39,6 +48,9 @@ Configure these environment secrets:
 The release preflight rejects missing signing inputs and obvious local or placeholder service origins before packaging. It checks the package identity and installer targets too. After packaging, the workflow requires macOS code-signature verification, a Gatekeeper assessment, and a stapled notarization ticket, or a valid Windows Authenticode signature, before it uploads an artifact. A passing workflow is evidence that those runner checks succeeded for that artifact; certificate ownership, clean-machine installation, update behavior, and production approval still need separate review. Installer candidates are not published releases.
 
 ### Windows clean-machine acceptance
+
+The acceptance script and its safeguard tests are implemented, but the script
+has not yet been run with a signed candidate on a clean Windows account.
 
 The Windows acceptance script checks a downloaded installer against a SHA-256
 value and signer thumbprint copied from the trusted Actions run, requires a
