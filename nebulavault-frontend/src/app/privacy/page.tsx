@@ -31,14 +31,15 @@ export default function PrivacyPage() {
           is optional and may be used as a secondary protection tier when configured.
         </p>
         <p className="mt-2">
-          The native iOS and Android app encrypts file contents on the device before sending them for
-          storage. That encrypted mobile transfer is currently limited to 25 MiB per file. The web app
-          does not provide the same encrypted file transfer flow. Do not assume that all clients encrypt
-          content or that a complete key recovery lifecycle is available.
+          The native iOS and Android app encrypts file contents, and the web app now encrypts file contents
+          before sending them for storage. Both current flows are limited to 25 MiB per file. The current web
+          recovery flow imports a Vault recovery kit created through the mobile app; the unlocked key is held in tab memory and must be imported again after a
+          reload. Earlier files remain in their original plaintext-era format and are not migrated
+          automatically. A complete key recovery lifecycle is not available.
         </p>
         <p className="mt-2">
-          A separately operated relay is designed to carry opaque ciphertext only for an explicit mobile
-          transfer fallback. Its public deployment and remote end-to-end operation have not been verified.
+          The separately operated relay is available only to the mobile transfer flow and is designed to
+          carry opaque ciphertext. Its public deployment and remote end-to-end operation have not been verified.
         </p>
       </section>
       <section>

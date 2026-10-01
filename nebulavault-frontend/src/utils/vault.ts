@@ -1,4 +1,5 @@
 export interface VaultSummary {
+  id: string;
   name: string;
   rawCapacityBytes: number;
   onlineCapacityBytes: number;

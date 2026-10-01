@@ -22,11 +22,12 @@ test("public legal and support pages state current behavior and deployment limit
   }
 });
 
-test("privacy page distinguishes encrypted mobile transfers from web transfers", () => {
+test("privacy page describes encrypted mobile and web transfers and plaintext-era compatibility", () => {
   const markup = renderToStaticMarkup(PrivacyPage());
   assert.ok(markup.includes("native iOS and Android app encrypts file contents"));
+  assert.ok(markup.includes("the web app now encrypts file contents"));
   assert.ok(markup.includes("limited to 25 MiB per file"));
-  assert.ok(markup.includes("web app does not provide the same encrypted file transfer flow"));
+  assert.ok(markup.includes("Earlier files remain in their original plaintext-era format"));
   assert.ok(markup.includes("There is no single retention schedule"));
   assert.ok(markup.includes("does not publish an email address or mailing address"));
 });

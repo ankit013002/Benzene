@@ -24,10 +24,10 @@ export default function SupportPage() {
       <section>
         <h2 className="text-xl font-semibold text-bz-text">Devices and files</h2>
         <p className="mt-2">
-          A device must be approved and online to take part in current Vault operations. Mobile encrypted
-          file transfers support files up to 25 MiB. Remote access, public relay operation, and production
-          recovery paths have not been verified; if a device is unavailable, files may show as waiting
-          or unavailable.
+          A device must be approved and online to take part in current Vault operations. Web and mobile
+          encrypted file transfers support files up to 25 MiB. The current web recovery flow imports a
+          Vault recovery kit created through the mobile app. Remote access, public relay operation, and production recovery paths
+          have not been verified; if a device is unavailable, files may show as waiting or unavailable.
         </p>
       </section>
       <section>

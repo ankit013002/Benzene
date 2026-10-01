@@ -31,9 +31,11 @@ export default function TermsPage() {
           commitment is stated here.
         </p>
         <p className="mt-2">
-          Native iOS and Android file transfers encrypt before storage and currently support files up to
-          25 MiB. The web app does not provide that encrypted transfer flow. The encrypted relay path is
-          not verified in a public deployment. Features and limits may change as Benzene is developed.
+          Native and web file transfers encrypt before storage and currently support files up to 25 MiB.
+          The current web recovery flow imports a Vault recovery kit created through the mobile app; the unlocked key is
+          held in tab memory and must be imported again after reload. Files stored before encrypted transfers remain in
+          their original format and are not migrated automatically. The encrypted relay path is not
+          verified in a public deployment. Features and limits may change as Benzene is developed.
         </p>
       </section>
       <section>

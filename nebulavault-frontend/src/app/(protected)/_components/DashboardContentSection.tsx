@@ -10,6 +10,8 @@ import { splitBuffers } from "@/utils/file-system/FileSystemUtils";
 import { ExistingDirectoryType } from "@/types/ExistingDirectory";
 import { useRouter, useParams } from "next/navigation";
 import { FolderType } from "@/types/Folder";
+import { getVaultSummary } from "@/utils/vault";
+import RecoveryKitUnlockForm from "./RecoveryKitUnlockForm";
 import {
   UploadProgress,
   deleteNode,
@@ -50,11 +52,24 @@ export default function DashboardContentSection() {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [vaultId, setVaultId] = useState<string | null>(null);
 
   const router = useRouter();
   const params = useParams() as { path?: string[] };
   const pathSegments = normalizeDashboardSegments(params?.path ?? []);
   const currPath = pathSegments.join("/");
+
+  useEffect(() => {
+    let cancelled = false;
+    void getVaultSummary().then((vault) => {
+      if (!cancelled) {
+        setVaultId(vault.id);
+      }
+    }).catch(() => {
+      if (!cancelled) setError("Could not load your Vault details.");
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const fetchDir = useCallback(async () => {
     try {
@@ -131,7 +146,8 @@ export default function DashboardContentSection() {
     try {
       // The reservation owns both metadata and placement. It is completed
       // only after the device has accepted and signed possession of the bytes.
-      const result = await uploadFiles(currPath, files, folderPaths, setUploadProgress);
+      if (!vaultId) throw new Error("Could not load your Vault before upload.");
+      const result = await uploadFiles(currPath, vaultId, files, folderPaths, setUploadProgress);
       if (result.issues.length > 0) {
         setNotice(
           `${result.uploaded} of ${files.length} file(s) stored. ${result.issues.join(". ")}.`
@@ -150,7 +166,9 @@ export default function DashboardContentSection() {
     setError(null);
     try {
       if (file.objectHash) {
-        await downloadFile(file.objectHash, file.name);
+        if (!vaultId) throw new Error("Could not load your Vault before download.");
+        const legacy = await downloadFile(file.id, file.objectHash, file.name, vaultId);
+        if (legacy) setNotice("This older file was stored before encrypted uploads. The existing plaintext copy was downloaded.");
       } else {
         // Older metadata may not have an object hash yet. Keep this explicit
         // fallback narrow so new device-backed files never use the old path.
@@ -180,6 +198,11 @@ export default function DashboardContentSection() {
       <div>
         <StorageUsage />
       </div>
+
+      <RecoveryKitUnlockForm
+        vaultId={vaultId}
+        onUnlocked={() => setNotice("Vault key unlocked in this tab’s memory. Import the recovery kit again after a reload.")}
+      />
 
       {uploadProgress && (
         <div className="px-4 py-2">
