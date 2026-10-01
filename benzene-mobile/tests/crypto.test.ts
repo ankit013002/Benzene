@@ -92,12 +92,12 @@ test('Vault Master Keys are generated once and persist only as an opaque SecureS
   assert.equal(generations, 1);
   assert.equal(entries.get('benzene.vmk.v1.vault-1'), encodeBase64Url(first));
   assert.deepEqual(await keyStore.loadVaultMasterKey('vault-1'), first);
-  await keyStore.markRecoveryAcknowledged('vault-1');
+  await keyStore.markRecoveryAcknowledged('vault-1', first);
   assert.equal(await keyStore.recoveryAcknowledged('vault-1'), true);
   await keyStore.deleteVaultMasterKey('vault-1');
   assert.equal(await keyStore.loadVaultMasterKey('vault-1'), null);
   assert.equal(await keyStore.recoveryAcknowledged('vault-1'), false);
-  await keyStore.markRecoveryAcknowledged('vault-1');
+  await assert.rejects(keyStore.markRecoveryAcknowledged('vault-1', first), /must be stored/);
   const regenerated = await keyStore.getOrCreateVaultMasterKey('vault-1');
   assert.equal(regenerated.byteLength, 32);
   assert.equal(generations, 2);
@@ -115,7 +115,7 @@ test('recovery import cannot replace an existing different Vault key', async () 
   const current = vmk.slice();
   const other = new Uint8Array(32).fill(9);
   await keyStore.importVaultMasterKey('vault-3', current);
-  await keyStore.markRecoveryAcknowledged('vault-3');
+  await keyStore.markRecoveryAcknowledged('vault-3', current);
 
   await assert.rejects(keyStore.importVaultMasterKey('vault-3', other), /different key.*not replaced/);
   assert.deepEqual(await keyStore.loadVaultMasterKey('vault-3'), current);
@@ -142,6 +142,25 @@ test('concurrent recovery imports serialize and preserve the first valid Vault k
   assert.equal(results[1]?.status, 'rejected');
   if (results[1]?.status === 'rejected') assert.match(String(results[1].reason), /different key.*not replaced/);
   assert.deepEqual(await keyStore.loadVaultMasterKey('vault-5'), first);
+});
+
+test('recovery confirmation is bound to the exact persisted Vault key', async () => {
+  const entries = new Map<string, string>();
+  const storage = {
+    async getItem(key: string) { return entries.get(key) ?? null; },
+    async setItem(key: string, value: string) { entries.set(key, value); },
+    async deleteItem(key: string) { entries.delete(key); },
+  };
+  const keyStore = createVaultKeyStore(storage, async (length) => new Uint8Array(length));
+  const current = vmk.slice();
+  const stale = new Uint8Array(32).fill(9);
+  await keyStore.importVaultMasterKey('vault-confirmation', current);
+
+  await assert.rejects(keyStore.markRecoveryAcknowledged('vault-confirmation', stale), /does not match/);
+  assert.equal(await keyStore.recoveryAcknowledged('vault-confirmation'), false);
+
+  await keyStore.markRecoveryAcknowledged('vault-confirmation', current);
+  assert.equal(await keyStore.recoveryAcknowledged('vault-confirmation'), true);
 });
 
 test('failed Vault key writes clear prior recovery confirmation first', async () => {

@@ -16,7 +16,7 @@ export type VaultKeyStore = {
   importVaultMasterKey(vaultId: string, vmk: Uint8Array): Promise<void>;
   deleteVaultMasterKey(vaultId: string): Promise<void>;
   recoveryAcknowledged(vaultId: string): Promise<boolean>;
-  markRecoveryAcknowledged(vaultId: string): Promise<void>;
+  markRecoveryAcknowledged(vaultId: string, expectedVmk: Uint8Array): Promise<void>;
 };
 
 function validateVaultId(vaultId: string): void {
@@ -126,9 +126,16 @@ export function createVaultKeyStore(storage: SecureKeyValueStore, randomBytes: (
       validateVaultId(vaultId);
       return (await storage.getItem(`${RECOVERY_ACK_PREFIX}${vaultId}`)) === 'confirmed';
     },
-    async markRecoveryAcknowledged(vaultId) {
-      validateVaultId(vaultId);
-      await storage.setItem(`${RECOVERY_ACK_PREFIX}${vaultId}`, 'confirmed');
+    markRecoveryAcknowledged(vaultId, expectedVmk) {
+      validateVmk(expectedVmk);
+      return withVaultLock(vaultId, async () => {
+        const current = await readVmk(vaultId);
+        if (!current) throw new Error('A Vault key must be stored before recovery can be confirmed.');
+        const matches = current.every((byte, index) => byte === expectedVmk[index]);
+        current.fill(0);
+        if (!matches) throw new Error('The saved recovery kit does not match the current Vault key.');
+        await storage.setItem(`${RECOVERY_ACK_PREFIX}${vaultId}`, 'confirmed');
+      });
     },
   };
 }

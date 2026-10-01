@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { Alert, Pressable, StyleSheet, Text, TextInput } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
@@ -23,6 +23,7 @@ export default function RecoveryScreen() {
   const [sharedKitReady, setSharedKitReady] = useState(false);
   const [passphrase, setPassphrase] = useState('');
   const [confirmation, setConfirmation] = useState('');
+  const pendingKitKey = useRef<Uint8Array | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,6 +71,11 @@ export default function RecoveryScreen() {
     return () => { active = false; };
   }, [request]);
 
+  useEffect(() => () => {
+    pendingKitKey.current?.fill(0);
+    pendingKitKey.current = null;
+  }, []);
+
   async function createAndShareKit(): Promise<void> {
     if (!vaultId || busy) return;
     if (keyDamaged) {
@@ -102,6 +108,8 @@ export default function RecoveryScreen() {
             // The OS can remove a temporary cache file while the share sheet is open.
           }
         }
+        pendingKitKey.current?.fill(0);
+        pendingKitKey.current = vmk.slice();
         setSharedKitReady(true);
         setHasKey(true);
         setError('The share sheet closed. Confirm below only after you saved the recovery file somewhere safe.');
@@ -116,11 +124,13 @@ export default function RecoveryScreen() {
   }
 
   async function confirmSavedKit(): Promise<void> {
-    if (!vaultId || !sharedKitReady) return;
+    if (!vaultId || !sharedKitReady || !pendingKitKey.current) return;
     setBusy(true);
     try {
-      await acknowledgeRecoveryKit(vaultId);
+      await acknowledgeRecoveryKit(vaultId, pendingKitKey.current);
       await refreshState();
+      pendingKitKey.current.fill(0);
+      pendingKitKey.current = null;
       setSharedKitReady(false);
       setError(null);
       setPassphrase('');
@@ -150,11 +160,13 @@ export default function RecoveryScreen() {
         throw new Error('This kit contains a different Vault key than the one already on this device. It was not imported to avoid replacing an active key.');
       }
       await importVaultMasterKey(vaultId, restoredKey);
-      await acknowledgeRecoveryKit(vaultId);
+      await acknowledgeRecoveryKit(vaultId, restoredKey);
       setHasKey(true);
       setAcknowledged(true);
       setKeyDamaged(false);
       setSharedKitReady(false);
+      pendingKitKey.current?.fill(0);
+      pendingKitKey.current = null;
       setPassphrase('');
       setConfirmation('');
       Alert.alert('Recovery kit imported', 'This device can now decrypt files for this Vault.');
