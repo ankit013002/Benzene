@@ -862,8 +862,9 @@ the standard to match.
   messaging is based on authoritative completion state rather than the
   reservation plan. A live browser check also verifies the landing page renders
   without an overlay and can navigate to sign-in.
-- The desktop package has 19 tests for configuration, agent bundling and
-  release preflight. Its manual protected installer workflow has not produced
+- The desktop package has 27 tests for configuration, agent bundling, release
+  preflight and Windows clean-machine acceptance. Its manual protected
+  installer workflow has not produced
   a verified signed artifact.
 - The user-profile acceptance covers real signup/session, SMTP delivery,
   pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,

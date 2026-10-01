@@ -38,6 +38,56 @@ Configure these environment secrets:
 
 The release preflight rejects missing signing inputs and obvious local or placeholder service origins before packaging. It checks the package identity and installer targets too. After packaging, the workflow requires macOS code-signature verification, a Gatekeeper assessment, and a stapled notarization ticket, or a valid Windows Authenticode signature, before it uploads an artifact. A passing workflow is evidence that those runner checks succeeded for that artifact; certificate ownership, clean-machine installation, update behavior, and production approval still need separate review. Installer candidates are not published releases.
 
+### Windows clean-machine acceptance
+
+The Windows acceptance script checks a downloaded installer against a SHA-256
+value and signer thumbprint copied from the trusted Actions run, requires a
+valid Authenticode signature, installs into a unique isolated directory, and
+checks that `resources/node-agent.cjs` is present. It then guides a tester
+through first-run setup and device approval, verifies the agent is a separate
+Windows process, checks it remains alive after Benzene is quit, and confirms a
+reopen reuses that process. It writes a small JSON evidence report and retains
+all files for inspection; it does not uninstall or delete user data.
+
+Run this only under a newly created, standard Windows user account with a
+dedicated test Vault. The node agent deliberately stores its data under that
+account's `~/.benzene`, outside the isolated installer directory. Do not use an
+account that already runs a Benzene agent or a Vault containing important
+data. The acceptance uses a signed installer candidate; this script does not
+claim that an unsigned local build is release-ready.
+
+From the Windows account, download the Windows artifact from the intended
+manual `desktop-release.yml` Actions run. In the run log, copy the installer
+SHA256 and signer thumbprint printed by **Verify Windows Authenticode
+signature**. The thumbprint must match the certificate approved for the
+`desktop-production` environment. Then, in PowerShell, from the repository
+root, run:
+
+```powershell
+$installer = (Get-ChildItem .\benzene-desktop\release\*.exe | Select-Object -First 1).FullName
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\benzene-desktop\scripts\windows-clean-machine-acceptance.ps1 `
+  -InstallerPath $installer `
+  -ExpectedSha256 '<64 hex characters from the Actions run>' `
+  -ExpectedSignerThumbprint '<certificate thumbprint from the Actions run>' `
+  -ExpectedAppOrigin 'https://<configured Vault app host>' `
+  -ExpectedGatewayOrigin 'https://<configured gateway host>'
+```
+
+Use the actual installer filename from the artifact if it differs. During the
+guided run, check that first-run setup shows the two expected HTTPS origins,
+connect only to the dedicated test Vault, approve the displayed enrollment
+code, and verify the device becomes online. Quit with **Benzene > Quit** when
+prompted, then confirm the device remains online after reopening the app. The
+script writes `acceptance-report.json` beneath `%LOCALAPPDATA%\BenzeneAcceptance`
+and leaves the installed app and test agent data in place for review. Record
+any separate Vault file upload/download exercise alongside that report; this
+script does not claim to automate or verify file transfer, remote NAT traversal,
+update behavior, or a production release.
+
+If no valid signed Windows candidate and trusted run values are available, stop
+at the existing local packaging checks. Do not bypass the signature or hash
+requirements by substituting values computed from an untrusted download.
+
 ## Scope and limits
 
 - The desktop UI reuses the configured web experience; it does not yet provide native file browsing or a mounted Finder/Explorer location.
