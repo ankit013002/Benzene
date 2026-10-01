@@ -199,7 +199,9 @@ authentication before export. Relay is never selected as the default byte path.
 workflow. It only runs when dispatched against `master`, builds `ios`,
 `android`, or `all` with the production EAS profile, and defaults to build only.
 The optional submit switch runs the selected store preflight before the build,
-then uploads the resulting build. Android is submitted with `releaseStatus:
+verifies the public legal pages and exact password-reset app-link association
+files, then uploads the resulting build. Build-only runs do not require the
+live deployment check. Android is submitted with `releaseStatus:
 draft`; iOS uploads to App Store Connect and does not submit an App Store review.
 No push, tag, or scheduled event starts a mobile build or upload.
 
@@ -217,6 +219,8 @@ Before using it, create the GitHub Actions environment named
 | `EXPO_PUBLIC_TERMS_OF_SERVICE_URL` | Public HTTPS terms URL |
 | `EXPO_PUBLIC_SUPPORT_URL` | Public HTTPS support URL |
 | `EXPO_PUBLIC_ACCOUNT_DELETION_URL` | Public HTTPS account deletion information URL |
+| `APPLE_APP_LINK_TEAM_ID` | 10-character Apple Developer Team ID for the iOS app association |
+| `ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS` | Comma-separated SHA-256 fingerprints for the Play signing certificate(s) in `assetlinks.json` |
 | `ASC_APP_ID` | Numeric App Store Connect Apple ID (submit iOS only) |
 | `ASC_API_KEY_ID` | 10-character App Store Connect API key ID (submit iOS only) |
 | `ASC_API_KEY_ISSUER_ID` | App Store Connect API issuer UUID (submit iOS only) |
@@ -248,6 +252,16 @@ release.
 `eas.json` pins EAS CLI to `24.3.0`; the workflow installs that exact version
 and pins each GitHub Action by full commit SHA. Workflow-level static checks
 are included in `npm test`.
+
+Before any store submission, the workflow also runs
+`npm run verify:store-deployment`. It checks that the configured public origin
+serves the privacy, terms, support and account-deletion pages, and that the
+Apple and Android association files exactly match the selected app identifiers
+and publisher signing fingerprints. Configure the Apple Team ID and Android
+Play app-signing fingerprint above from the publisher accounts; the Android
+fingerprint must be the Play App Signing certificate fingerprint when Play App
+Signing is enabled. This check does not confirm store review acceptance or
+exercise the reset flow in an installed signed app.
 
 ## Configuration ownership
 

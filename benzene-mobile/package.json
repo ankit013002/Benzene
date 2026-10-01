@@ -58,6 +58,7 @@
     "check:store-config": "node --test tests/storeConfig.test.mjs",
     "check:store-build": "node scripts/store-preflight.mjs build",
     "check:store-submit": "node scripts/store-preflight.mjs submit",
+    "verify:store-deployment": "node ../scripts/verify-mobile-store-deployment.mjs",
     "prepare:store-release": "node scripts/prepare-store-release.mjs",
     "record:store-builds": "node scripts/record-store-builds.mjs",
     "postinstall": "patch-package",

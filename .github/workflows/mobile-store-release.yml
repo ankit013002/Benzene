@@ -45,6 +45,8 @@ jobs:
       EXPO_PUBLIC_TERMS_OF_SERVICE_URL: ${{ vars.EXPO_PUBLIC_TERMS_OF_SERVICE_URL }}
       EXPO_PUBLIC_SUPPORT_URL: ${{ vars.EXPO_PUBLIC_SUPPORT_URL }}
       EXPO_PUBLIC_ACCOUNT_DELETION_URL: ${{ vars.EXPO_PUBLIC_ACCOUNT_DELETION_URL }}
+      APPLE_APP_LINK_TEAM_ID: ${{ vars.APPLE_APP_LINK_TEAM_ID }}
+      ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS: ${{ vars.ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS }}
       PLATFORM: ${{ inputs.platform }}
     steps:
       - name: Check out source
@@ -84,6 +86,17 @@ jobs:
       - name: Run submit preflight
         if: inputs.submit
         run: npm run check:store-submit -- "$PLATFORM"
+
+      - name: Verify public store deployment and app links
+        if: inputs.submit
+        run: npm run verify:store-deployment
+        env:
+          BENZENE_STORE_ORIGIN: ${{ vars.EXPO_PUBLIC_APP_LINK_ORIGIN }}
+          BENZENE_PASSWORD_RESET_URL: ${{ vars.EXPO_PUBLIC_APP_LINK_ORIGIN }}/reset-password
+          APPLE_APP_LINK_TEAM_ID: ${{ vars.APPLE_APP_LINK_TEAM_ID }}
+          APPLE_APP_LINK_BUNDLE_ID: ${{ vars.IOS_BUNDLE_IDENTIFIER }}
+          ANDROID_APP_LINK_APPLICATION_ID: ${{ vars.ANDROID_APPLICATION_ID }}
+          ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS: ${{ vars.ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS }}
 
       - name: Build signed native app with EAS
         id: build

@@ -17,11 +17,16 @@ test('native release preflights precede any EAS build or submit', () => {
   const config = workflow.indexOf('npm run check:store-config');
   const buildPreflight = workflow.indexOf('npm run check:store-build');
   const submitPreflight = workflow.indexOf('npm run check:store-submit');
+  const deploymentPreflight = workflow.indexOf('npm run verify:store-deployment');
   const build = workflow.indexOf('eas-cli@');
   const submit = workflow.indexOf('eas-cli@', build + 1);
   assert.ok(config >= 0 && config < buildPreflight);
   assert.ok(buildPreflight < build);
   assert.ok(submitPreflight > buildPreflight && submitPreflight < build);
+  assert.ok(deploymentPreflight > submitPreflight && deploymentPreflight < build);
+  assert.match(workflow, /Verify public store deployment and app links\n\s+if: inputs\.submit/);
+  assert.match(workflow, /APPLE_APP_LINK_TEAM_ID: \$\{\{ vars\.APPLE_APP_LINK_TEAM_ID \}\}/);
+  assert.match(workflow, /ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS: \$\{\{ vars\.ANDROID_APP_LINK_SHA256_CERT_FINGERPRINTS \}\}/);
   assert.ok(submit > build);
   assert.match(workflow, /record:store-builds/);
   assert.match(workflow, /--wait --json --non-interactive/);
