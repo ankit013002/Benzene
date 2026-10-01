@@ -1,0 +1,27 @@
+name: Verify public relay ingress
+
+on:
+  workflow_dispatch:
+    inputs:
+      relay_url:
+        description: Public relay origin, for example wss://relay.example.net
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify public HTTPS and WSS ingress
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+      - name: Probe from the public internet
+        env:
+          BENZENE_RELAY_PUBLIC_URL: ${{ inputs.relay_url }}
+        run: node scripts/verify-relay-deployment.mjs

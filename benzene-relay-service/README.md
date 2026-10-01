@@ -86,6 +86,23 @@ policies that allow only the service and operators to reach the database. The
 health endpoint is process liveness only; it does not validate database
 readiness.
 
+After publishing and deploying the image, run the repository's **Verify public
+relay ingress** GitHub Actions workflow and provide the public origin as
+`wss://relay.example.net`. It runs on a GitHub-hosted runner, outside the
+operator's LAN, and checks that public DNS resolves only to public addresses,
+HTTPS `/ready` reports the database-backed relay as ready, TLS validates, and
+WSS reaches `/relay/{sessionId}` and rejects a deliberately invalid ticket.
+The probe sends no file bytes and does not need a production ticket. It is
+read-only and safe to rerun after DNS, certificate, proxy, affinity, or service
+changes.
+
+This is an ingress check, not a remote client-to-device acceptance: it does not
+prove that two real peers can exchange ciphertext through the deployment, that
+home NAT/firewall conditions trigger the fallback, or that a specific proxy
+configuration preserves session affinity under scale or restart. Keep the
+existing local real-component relay acceptance and complete a live remote
+journey before treating remote access as verified.
+
 The multi-stage `Dockerfile` builds the TypeScript service and runs only its
 production dependencies as the non-root `benzene` user. The image binds to
 `0.0.0.0:8090` inside its container; keep that port private behind the TLS
