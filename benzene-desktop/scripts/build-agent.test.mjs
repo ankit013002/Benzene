@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const desktopRoot = path.resolve(new URL("..", import.meta.url).pathname);
+const desktopRoot = fileURLToPath(new URL("..", import.meta.url));
 const desktopModules = path.join(desktopRoot, "node_modules");
 const desktopRequire = createRequire(new URL("../package.json", import.meta.url));
 
@@ -22,9 +23,9 @@ test("pins every node-agent runtime dependency in the desktop development toolch
   for (const [name, version] of Object.entries(expected)) {
     assert.equal(manifest.devDependencies[name], version);
     assert.equal(lock.packages[""].devDependencies[name], version);
-    const resolvedFromDesktop = path.relative(desktopModules, desktopRequire.resolve(name));
+    const resolvedFromDesktop = path.relative(desktopModules, desktopRequire.resolve(name)).replaceAll("\\", "/");
     assert.notEqual(resolvedFromDesktop, "..");
-    assert.ok(!resolvedFromDesktop.startsWith(`..${path.sep}`), `${name} resolves from the desktop install`);
+    assert.ok(!resolvedFromDesktop.startsWith("../"), `${name} resolves from the desktop install`);
     assert.ok(!path.isAbsolute(resolvedFromDesktop), `${name} resolves under the desktop install`);
   }
 });
