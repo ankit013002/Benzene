@@ -20,6 +20,7 @@ import {
 import {
   pairingCodeFromLog,
   navigationAction,
+  resolveServiceOrigins,
   validateSettings,
   type DesktopSettings,
 } from "./config.js";
@@ -138,9 +139,16 @@ async function ensureAgentStarted(): Promise<void> {
 
 async function initialSettings(): Promise<DesktopSettings | null> {
   if (settings) return settings;
+  let releaseDefaults: unknown;
+  if (app.isPackaged) {
+    try {
+      releaseDefaults = JSON.parse(await readFile(path.join(app.getAppPath(), "built", "release-config.json"), "utf8")) as unknown;
+    } catch (cause) {
+      if (!(cause instanceof Error) || !("code" in cause) || cause.code !== "ENOENT") throw cause;
+    }
+  }
   return {
-    appUrl: "http://localhost:3000",
-    gatewayUrl: "http://localhost:8080",
+    ...resolveServiceOrigins(releaseDefaults, app.isPackaged),
     allocationGb: 100,
     deviceName: hostname() || "Benzene computer",
   };

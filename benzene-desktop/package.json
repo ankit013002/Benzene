@@ -8,11 +8,16 @@
   "scripts": {
     "build:agent": "esbuild ../benzene-node-agent/src/index.ts --bundle --platform=node --format=cjs --target=node20 --outfile=built/node-agent.cjs",
     "build:renderer": "esbuild src/setup.ts --bundle --platform=browser --format=iife --outfile=built/setup.js",
-    "build": "npm run build:agent && tsc -p tsconfig.json && npm run build:renderer",
+    "build": "npm run build:agent && tsc -p tsconfig.json && npm run build:renderer && npm run build:release-config",
+    "build:release-config": "node scripts/write-release-config.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/*.test.ts",
+    "test": "node --import tsx --test src/*.test.ts scripts/*.test.mjs",
     "start": "npm run build && electron .",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "release:preflight": "node scripts/release-preflight.mjs",
+    "release:prepare-macos-signing": "node scripts/prepare-macos-signing.mjs",
+    "release:dist:mac": "npm run build && electron-builder --mac dmg --publish never",
+    "release:dist:win": "npm run build && electron-builder --win nsis --publish never"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",

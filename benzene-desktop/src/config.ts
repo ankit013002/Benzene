@@ -7,6 +7,33 @@ export interface DesktopSettings {
 
 export type NavigationAction = "internal" | "external" | "deny";
 
+export interface ServiceOrigins {
+  appUrl: string;
+  gatewayUrl: string;
+}
+
+export function resolveServiceOrigins(releaseDefaults?: unknown, packaged = false): ServiceOrigins {
+  if (releaseDefaults === undefined) {
+    if (packaged) return { appUrl: "", gatewayUrl: "" };
+    return { appUrl: "http://localhost:3000", gatewayUrl: "http://localhost:8080" };
+  }
+  if (!releaseDefaults || typeof releaseDefaults !== "object") {
+    throw new Error("Packaged service defaults are invalid.");
+  }
+  const candidate = releaseDefaults as Record<string, unknown>;
+  if (typeof candidate.appUrl !== "string" || typeof candidate.gatewayUrl !== "string") {
+    throw new Error("Packaged service defaults are invalid.");
+  }
+  try {
+    return {
+      appUrl: validateOrigin(candidate.appUrl, "Vault app address"),
+      gatewayUrl: validateOrigin(candidate.gatewayUrl, "Gateway address"),
+    };
+  } catch {
+    throw new Error("Packaged service defaults are invalid.");
+  }
+}
+
 export function navigationAction(target: string, trustedOrigin: string): NavigationAction {
   let url: URL;
   let trusted: URL;

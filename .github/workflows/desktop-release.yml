@@ -1,0 +1,125 @@
+name: Desktop installer candidate (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Installer platform to package
+        required: true
+        type: choice
+        options:
+          - macos
+          - windows
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Preflight and package — ${{ inputs.platform }}
+    if: github.ref == 'refs/heads/master'
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-14' || 'windows-2022' }}
+    environment: desktop-production
+    defaults:
+      run:
+        shell: bash
+        working-directory: benzene-desktop
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        with:
+          node-version: 22.13.1
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run release preflight
+        run: npm run release:preflight
+        env:
+          RELEASE_PLATFORM: ${{ inputs.platform }}
+          DESKTOP_APP_URL: ${{ vars.DESKTOP_APP_URL }}
+          DESKTOP_GATEWAY_URL: ${{ vars.DESKTOP_GATEWAY_URL }}
+          CSC_LINK: ${{ inputs.platform == 'macos' && secrets.MACOS_CSC_LINK || secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ inputs.platform == 'macos' && secrets.MACOS_CSC_KEY_PASSWORD || secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+
+      - name: Typecheck and run deterministic tests
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Prepare temporary macOS notarization key
+        if: inputs.platform == 'macos'
+        run: npm run release:prepare-macos-signing
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+
+      - name: Build macOS DMG
+        if: inputs.platform == 'macos'
+        run: npm run release:dist:mac
+        env:
+          RELEASE_PLATFORM: macos
+          DESKTOP_APP_URL: ${{ vars.DESKTOP_APP_URL }}
+          DESKTOP_GATEWAY_URL: ${{ vars.DESKTOP_GATEWAY_URL }}
+          CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ runner.temp }}/benzene-desktop-release-${{ github.run_id }}-${{ github.run_attempt }}/apple-api-key.p8
+          APPLE_API_KEY_ID: ${{ vars.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ vars.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+
+      - name: Build Windows NSIS installer
+        if: inputs.platform == 'windows'
+        run: npm run release:dist:win
+        env:
+          RELEASE_PLATFORM: windows
+          DESKTOP_APP_URL: ${{ vars.DESKTOP_APP_URL }}
+          DESKTOP_GATEWAY_URL: ${{ vars.DESKTOP_GATEWAY_URL }}
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+
+      - name: Verify macOS code signature, Gatekeeper assessment, and notarization ticket
+        if: inputs.platform == 'macos'
+        run: |
+          app="$(find release -maxdepth 3 -type d -name 'Benzene.app' -print -quit)"
+          test -n "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
+
+      - name: Verify Windows Authenticode signature
+        if: inputs.platform == 'windows'
+        run: |
+          pwsh -NoProfile -Command '$installers = Get-ChildItem -Path "release" -Filter "*.exe" -File; if (-not $installers) { throw "No NSIS installer was produced." }; foreach ($installer in $installers) { $signature = Get-AuthenticodeSignature -FilePath $installer.FullName; if ($signature.Status -ne "Valid") { throw "Installer Authenticode status is $($signature.Status)." }; Write-Output "$($installer.Name): Authenticode signature valid" }'
+
+      - name: Upload installer candidate
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v4.4.3
+        with:
+          name: benzene-desktop-${{ inputs.platform }}-candidate-${{ github.run_number }}
+          path: benzene-desktop/release/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary notarization key
+        if: always() && inputs.platform == 'macos'
+        run: |
+          node -e 'const fs = require("node:fs"); const path = require("node:path"); const dir = path.join(process.env.RUNNER_TEMP, `benzene-desktop-release-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`); fs.rmSync(dir, { recursive: true, force: true });'
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}

@@ -2,7 +2,27 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { navigationAction, pairingCodeFromLog, validateOrigin, validateSettings } from "./config.js";
+import { navigationAction, pairingCodeFromLog, resolveServiceOrigins, validateOrigin, validateSettings } from "./config.js";
+
+test("uses local service defaults for development and validated release origins when packaged", () => {
+  assert.deepEqual(resolveServiceOrigins(), {
+    appUrl: "http://localhost:3000",
+    gatewayUrl: "http://localhost:8080",
+  });
+  assert.deepEqual(resolveServiceOrigins({
+    appUrl: "https://vault.benzene.example.org/",
+    gatewayUrl: "https://gateway.benzene.example.org/",
+  }), {
+    appUrl: "https://vault.benzene.example.org",
+    gatewayUrl: "https://gateway.benzene.example.org",
+  });
+  assert.deepEqual(resolveServiceOrigins(undefined, true), { appUrl: "", gatewayUrl: "" });
+});
+
+test("rejects malformed packaged service defaults instead of falling back silently", () => {
+  assert.throws(() => resolveServiceOrigins({ appUrl: "http://example.org", gatewayUrl: "https://gateway.example.org" }), /Packaged service defaults are invalid/);
+  assert.throws(() => resolveServiceOrigins({ appUrl: "https://vault.example.org" }), /Packaged service defaults are invalid/);
+});
 
 test("normalizes desktop service origins and storage settings", () => {
   assert.deepEqual(validateSettings({
@@ -41,6 +61,7 @@ test("setup page CSP permits its packaged local bundle and blocks network access
   assert.match(html, /script-src 'self'/);
   assert.match(html, /connect-src 'none'/);
   assert.match(html, /<script src="\.\.\/built\/setup\.js"><\/script>/);
+  assert.doesNotMatch(html, /id="(?:app|gateway)-url"[^>]*value="http:\/\/localhost/);
 });
 
 test("requires a positive whole gigabyte allocation and a computer name", () => {
