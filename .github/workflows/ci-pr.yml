@@ -702,6 +702,12 @@ jobs:
       - name: Install mobile dependencies
         working-directory: benzene-mobile
         run: npm ci --include=dev
+      - name: Typecheck remote relay acceptance
+        working-directory: benzene-control-plane
+        run: npx tsc --ignoreConfig --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict --types node --allowImportingTsExtensions scripts/accept-remote-relay.mts scripts/accept-remote-relay.test.mts
+      - name: Test remote relay acceptance input and ciphertext checks
+        working-directory: benzene-control-plane
+        run: node --import tsx --test scripts/accept-remote-relay.test.mts
       - name: Build control plane
         working-directory: benzene-control-plane
         run: npm run build

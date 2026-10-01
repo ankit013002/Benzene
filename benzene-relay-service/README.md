@@ -103,6 +103,93 @@ configuration preserves session affinity under scale or restart. Keep the
 existing local real-component relay acceptance and complete a live remote
 journey before treating remote access as verified.
 
+### Live remote client-to-device acceptance
+
+`benzene-control-plane/scripts/accept-remote-relay.mts` exercises the real
+public WSS relay with an actual short-lived `client/get` ticket. It first runs
+the public ingress check, verifies the control-plane signature and every scope
+binding against the ticket, then uses the mobile receiver implementation to
+receive the exact ciphertext and checks SHA-256 and byte count before saving
+those ciphertext bytes. It accepts only encrypted-object transfers up to the
+current 25 MiB client limit. It never asks for a Vault key or device signing
+key, and it never sends file bytes to the control plane.
+
+For a bounded operator rehearsal:
+
+1. Put an enrolled source node on its normal independent connection and make
+   sure its agent is running and online. Use a disposable encrypted-v1 file no
+   larger than 25 MiB, stored on that node and referenced by a committed file
+   version.
+2. On a second computer outside the source node's LAN (for example, a
+   Windows laptop on a phone hotspot), sign in to the normal Benzene web app.
+   In that browser's developer console, issue one fresh acceptance assignment
+   for the existing file's `nodeId` (not its storage hash):
+
+   ```js
+   const response = await fetch('/api/placement/relay-read', {
+     method: 'POST',
+     headers: { 'content-type': 'application/json' },
+     body: JSON.stringify({ nodeId: 'YOUR_FILE_NODE_ID', requestId: crypto.randomUUID() }),
+   });
+   if (!response.ok) throw new Error(`Relay assignment failed: ${response.status}`);
+   await navigator.clipboard.writeText(JSON.stringify(await response.json()));
+   ```
+
+   The signed-in browser supplies its existing session; do not copy or expose
+   its session cookie. Paste the clipboard response into a temporary JSON file
+   on that computer and restrict it to the current user (`chmod 600 <file>` on
+   macOS/Linux). On Windows, save it under the current user's profile with
+   its inherited private ACL; do not use a shared folder. The ticket is a
+   one-use bearer credential: do not paste it into a command, issue tracker,
+   chat, or CI log, and clear the clipboard and delete the file when the run
+   finishes or it expires. This explicit route
+   creates the pending assignment; the enrolled source agent claims its
+   complementary node ticket through its ordinary signed queue.
+3. On that second computer, install Node.js 22.13 or newer, then install the
+   control-plane and mobile dependencies (`npm ci --include=dev` in each
+   package directory). From the control-plane package directory, run:
+
+   ```sh
+   cd benzene-control-plane
+   BENZENE_RELAY_FALLBACK_FILE=/secure/path/fallback.json \
+   BENZENE_RELAY_CIPHERTEXT_OUT=/secure/path/received-ciphertext.bin \
+   BENZENE_TRANSFER_PUBLIC_KEY='<control-plane Ed25519 public key, base64 SPKI>' \
+   node --import tsx scripts/accept-remote-relay.mts
+   ```
+
+   Choose an output path that does not already exist. The script creates it
+   exclusively with mode 0600 on POSIX systems. On Windows, input and output
+   ACLs are inherited from their containing directories and are not
+   programmatically verified; use a directory private to the current user.
+   Its output reports only the endpoint checks and byte count; it does not
+   print ticket contents.
+
+   In PowerShell, use the same private user-profile paths and set the
+   environment for this process before running it:
+
+   ```powershell
+   Set-Location benzene-control-plane
+   $env:BENZENE_RELAY_FALLBACK_FILE = "$env:LOCALAPPDATA\BenzeneRelay\fallback.json"
+   $env:BENZENE_RELAY_CIPHERTEXT_OUT = "$env:LOCALAPPDATA\BenzeneRelay\received-ciphertext.bin"
+   $env:BENZENE_TRANSFER_PUBLIC_KEY = '<control-plane Ed25519 public key, base64 SPKI>'
+   node --import tsx scripts/accept-remote-relay.mts
+   ```
+
+   Create the `BenzeneRelay` directory under `LOCALAPPDATA` first and confirm
+   its ACL is private to the current user; the script does not inspect Windows
+   ACLs. The output file must not already exist.
+4. Confirm the enrolled node completed the corresponding relay assignment.
+   The receiving helper verifies the transfer signature and exact encrypted
+   ciphertext hash/length; it does not perform Vault-key recovery or establish
+   release readiness.
+
+The two computers are important: running this from the same LAN as the source
+does not exercise the intended remote/NAT failure condition. The script cannot
+create a production assignment or extract a ticket from a client session; the
+normal authenticated client journey must request it. It cannot substitute for
+testing the full mobile/desktop UX, failover behavior during network changes,
+load-balancer affinity under multiple instances, or restart/retry behavior.
+
 The multi-stage `Dockerfile` builds the TypeScript service and runs only its
 production dependencies as the non-root `benzene` user. The image binds to
 `0.0.0.0:8090` inside its container; keep that port private behind the TLS
