@@ -93,7 +93,7 @@ export async function uploadEncryptedFile(
   path: string,
   vaultId: string,
 ): Promise<EncryptedUploadResult> {
-  const vmk = loadUnlockedVaultKey(vaultId);
+  const vmk = await loadUnlockedVaultKey(vaultId);
   if (!vmk) throw new Error("Import this Vault’s recovery kit before uploading encrypted files.");
   const encrypted = await encryptObject(new Uint8Array(await file.arrayBuffer()), vmk, vaultId);
   const reservationResponse = await fetch("/api/files/uploads/device/v1/encrypted", {
@@ -185,7 +185,7 @@ export async function downloadCurrentFile(
   filename: string,
   vaultId: string,
 ): Promise<boolean> {
-  const vmk = loadUnlockedVaultKey(vaultId);
+  const vmk = await loadUnlockedVaultKey(vaultId);
   const metadataResponse = await fetch(`/api/files/${encodeURIComponent(nodeId)}/encrypted-object`, { cache: "no-store" });
   const metadataPayload = await readJson(metadataResponse);
   if (!metadataResponse.ok) {

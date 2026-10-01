@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { FlatFile } from "@/types/FileFolderBuffer";
 import type { EncryptedObjectMetadata } from "./encryptedObject";
 import { downloadCurrentFile } from "./encryptedTransfers";
-import { unlockVaultWithRecoveryKit, lockVault } from "./vaultKey";
+import { unlockVaultWithRecoveryKit, isVaultKeyPersisted, loadUnlockedVaultKey, lockVault } from "./vaultKey";
 import { uploadFiles } from "./uploadFiles";
 import RecoveryKitUnlockForm from "../../app/(protected)/_components/RecoveryKitUnlockForm";
 
@@ -76,6 +76,38 @@ afterEach(() => {
 });
 
 beforeEach(installWindowTimers);
+
+describe("desktop and browser Vault key storage", () => {
+  test("restores a desktop key from its Vault-scoped OS bridge after the page cache is cleared", async () => {
+    const persisted = new Map<string, string>();
+    setGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+      benzeneDesktop: {
+        async saveVaultKey(vaultId: string, keyHex: string) {
+          const previous = persisted.get(vaultId);
+          if (previous && previous !== keyHex) throw new Error("replacement denied");
+          persisted.set(vaultId, keyHex);
+          return true;
+        },
+        async loadVaultKey(vaultId: string) { return persisted.get(vaultId) ?? null; },
+      },
+    });
+
+    assert.equal(await unlockVaultWithRecoveryKit(VAULT_ID, recoveryKit(), PASSPHRASE), true);
+    assert.equal(isVaultKeyPersisted(VAULT_ID), true);
+    assert.equal(persisted.size, 1);
+    assert.equal(persisted.get(VAULT_ID), "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    lockVault(VAULT_ID);
+    assert.deepEqual(await loadUnlockedVaultKey(VAULT_ID), Uint8Array.from({ length: 32 }, (_, index) => index));
+  });
+
+  test("keeps browser unlocks in memory and does not add persistent browser storage", async () => {
+    assert.equal(await unlockVaultWithRecoveryKit(VAULT_ID, recoveryKit(), PASSPHRASE), false);
+    assert.equal(isVaultKeyPersisted(VAULT_ID), false);
+    assert.ok(await loadUnlockedVaultKey(VAULT_ID));
+  });
+});
 
 describe("encrypted web upload orchestration", () => {
   test("reserves v1 metadata and PUTs only ciphertext with the scoped grant", async () => {

@@ -53,6 +53,11 @@ export default function DashboardContentSection() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [vaultId, setVaultId] = useState<string | null>(null);
+  const handleVaultKeyUnlocked = useCallback((persisted: boolean) => {
+    setNotice(persisted
+      ? "Vault key unlocked and saved through this computer’s operating system secure storage."
+      : "Vault key unlocked in this tab’s memory. Import the recovery kit again after a reload.");
+  }, []);
 
   const router = useRouter();
   const params = useParams() as { path?: string[] };
@@ -201,7 +206,7 @@ export default function DashboardContentSection() {
 
       <RecoveryKitUnlockForm
         vaultId={vaultId}
-        onUnlocked={() => setNotice("Vault key unlocked in this tab’s memory. Import the recovery kit again after a reload.")}
+        onUnlocked={handleVaultKeyUnlocked}
       />
 
       {uploadProgress && (

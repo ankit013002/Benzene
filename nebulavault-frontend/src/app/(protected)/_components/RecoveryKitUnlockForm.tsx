@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
-import { unlockVaultWithRecoveryKit } from "@/utils/file-system/vaultKey";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { hasDesktopKeyBridge, isVaultKeyPersisted, loadUnlockedVaultKey, unlockVaultWithRecoveryKit } from "@/utils/file-system/vaultKey";
 
 interface RecoveryKitUnlockFormProps {
   vaultId: string | null;
-  onUnlocked: () => void;
+  onUnlocked: (persisted: boolean) => void;
 }
 
 /** The selected recovery kit and passphrase exist only for the import attempt. */
@@ -13,7 +13,21 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
   const [kitFile, setKitFile] = useState<File | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [desktopBridgeAvailable, setDesktopBridgeAvailable] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    setDesktopBridgeAvailable(hasDesktopKeyBridge());
+  }, []);
+  useEffect(() => {
+    if (!vaultId) return;
+    let active = true;
+    void loadUnlockedVaultKey(vaultId).then((key) => {
+      if (active && key) onUnlocked(isVaultKeyPersisted(vaultId));
+    }).catch((cause: unknown) => {
+      if (active) setError(cause instanceof Error ? cause.message : "Could not restore the saved Vault key.");
+    });
+    return () => { active = false; };
+  }, [vaultId, onUnlocked]);
 
   const clearForm = (): void => {
     setKitFile(null);
@@ -32,8 +46,8 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
     setError(null);
     if (fileInput.current) fileInput.current.value = "";
     try {
-      await unlockVaultWithRecoveryKit(vaultId, await submittedFile.text(), submittedPassphrase);
-      onUnlocked();
+      const persisted = await unlockVaultWithRecoveryKit(vaultId, await submittedFile.text(), submittedPassphrase);
+      onUnlocked(persisted);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not import this recovery kit.");
     } finally {
@@ -45,7 +59,10 @@ export default function RecoveryKitUnlockForm({ vaultId, onUnlocked }: RecoveryK
   return (
     <form onSubmit={(event) => void submit(event)} className="mx-4 my-2 rounded-lg border border-border bg-card px-4 py-3">
       <p className="mb-3 text-sm text-muted-foreground">
-        Import the current Vault recovery kit to upload and download encrypted files. The key stays in this tab’s memory.
+        Import the current Vault recovery kit to unlock encrypted files.
+        {desktopBridgeAvailable
+          ? " This desktop app saves the key through the operating system’s secure storage when available."
+          : " The key stays in this browser tab’s memory and must be imported again after a reload."}
       </p>
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-56 flex-1">

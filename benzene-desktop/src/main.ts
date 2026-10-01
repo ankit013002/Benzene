@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { closeSync, openSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,6 +14,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  safeStorage,
   shell,
   session,
 } from "electron";
@@ -24,6 +26,18 @@ import {
   validateSettings,
   type DesktopSettings,
 } from "./config.js";
+import {
+  canUseSafeStorage,
+  CorruptStoredVaultKeyError,
+  decryptVaultKeyRecord,
+  encryptVaultKeyRecord,
+  encryptedKeyFilename,
+  isTrustedVaultRequest,
+  saveVaultKeySafely,
+  VaultKeyScopeMismatchError,
+  validateVaultId,
+  validateVaultKeyHex,
+} from "./vaultKeyStore.js";
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -31,6 +45,7 @@ if (!gotLock) app.quit();
 const settingsFile = (): string => path.join(app.getPath("userData"), "desktop-settings.json");
 const pidFile = (): string => path.join(app.getPath("userData"), "agent.pid");
 const logFile = (): string => path.join(app.getPath("userData"), "agent.log");
+const vaultKeyDirectory = (): string => path.join(app.getPath("userData"), "vault-keys");
 const agentScript = (): string => app.isPackaged
   ? path.join(process.resourcesPath, "node-agent.cjs")
   : path.join(__dirname, "node-agent.cjs");
@@ -39,6 +54,7 @@ let settings: DesktopSettings | undefined;
 let mainWindow: BrowserWindow | undefined;
 let setupWindow: BrowserWindow | undefined;
 let agentPid: number | undefined;
+const vaultKeyWrites = new Map<string, Promise<void>>();
 
 async function loadSettings(): Promise<DesktopSettings | undefined> {
   try {
@@ -167,6 +183,105 @@ function appRoute(route: string): string {
   return new URL(route, `${settings.appUrl}/`).toString();
 }
 
+function safeStorageAvailable(): boolean {
+  return canUseSafeStorage({
+    available: safeStorage.isEncryptionAvailable(),
+    backend: process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : undefined,
+  }, process.platform);
+}
+
+function vaultKeyPath(appOrigin: string, vaultId: string): string {
+  return path.join(vaultKeyDirectory(), encryptedKeyFilename(appOrigin, vaultId));
+}
+
+async function loadStoredVaultKey(appOrigin: string, vaultIdInput: unknown): Promise<string | null> {
+  const vaultId = validateVaultId(vaultIdInput);
+  if (!safeStorageAvailable()) return null;
+  let encrypted: string;
+  try {
+    encrypted = (await readFile(vaultKeyPath(appOrigin, vaultId), "utf8")).trim();
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") return null;
+    throw cause;
+  }
+  try {
+    return decryptVaultKeyRecord(encrypted, appOrigin, vaultId, (ciphertext) => safeStorage.decryptString(ciphertext));
+  } catch (cause) {
+    if (cause instanceof VaultKeyScopeMismatchError) throw cause;
+    throw new CorruptStoredVaultKeyError();
+  }
+}
+
+async function withVaultKeyWriteLock<T>(target: string, operation: () => Promise<T>): Promise<T> {
+  const previous = vaultKeyWrites.get(target) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const queued = previous.catch(() => undefined).then(() => gate);
+  vaultKeyWrites.set(target, queued);
+  await previous.catch(() => undefined);
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (vaultKeyWrites.get(target) === queued) vaultKeyWrites.delete(target);
+  }
+}
+
+async function replaceEncryptedVaultKey(target: string, encrypted: string): Promise<void> {
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${encrypted}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await rename(temporary, target);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function saveStoredVaultKey(appOrigin: string, vaultIdInput: unknown, keyInput: unknown): Promise<boolean> {
+  const vaultId = validateVaultId(vaultIdInput);
+  const keyHex = validateVaultKeyHex(keyInput);
+  if (!safeStorageAvailable()) return false;
+  const target = vaultKeyPath(appOrigin, vaultId);
+  await mkdir(vaultKeyDirectory(), { recursive: true, mode: 0o700 });
+  return withVaultKeyWriteLock(target, async () => {
+    const encrypted = encryptVaultKeyRecord(appOrigin, vaultId, keyHex, (plaintext) => safeStorage.encryptString(plaintext));
+    await saveVaultKeySafely(keyHex, {
+      load: () => loadStoredVaultKey(appOrigin, vaultId),
+      replaceCorrupt: () => replaceEncryptedVaultKey(target, encrypted),
+      writeNew: async () => {
+        try {
+          await writeFile(target, `${encrypted}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        } catch (cause) {
+          if (!(cause instanceof Error) || !("code" in cause) || cause.code !== "EEXIST") throw cause;
+          const existing = await loadStoredVaultKey(appOrigin, vaultId);
+          if (existing !== keyHex) throw new Error("A different key is already saved for this Vault. Key replacement is disabled.");
+        }
+      },
+    });
+    return true;
+  });
+}
+
+function assertSetupSender(event: Electron.IpcMainInvokeEvent): void {
+  const expectedDocument = pathToFileURL(path.resolve(app.getAppPath(), "src", "setup.html")).toString();
+  if (event.sender.id !== setupWindow?.webContents.id || event.senderFrame?.parent !== null
+    || event.senderFrame.url !== expectedDocument) {
+    throw new Error("Setup request came from an untrusted window.");
+  }
+}
+
+function assertVaultSender(event: Electron.IpcMainInvokeEvent): void {
+  if (!isTrustedVaultRequest(
+    event.sender.id,
+    mainWindow?.webContents.id,
+    event.senderFrame?.url,
+    event.senderFrame?.parent === null,
+    settings?.appUrl,
+  )) {
+    throw new Error("Vault key request came from an untrusted page.");
+  }
+}
+
 function createMainWindow(route = "/devices"): void {
   if (!settings) return;
   mainWindow = new BrowserWindow({
@@ -176,6 +291,7 @@ function createMainWindow(route = "/devices"): void {
     minHeight: 620,
     title: "Benzene",
     webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -247,7 +363,7 @@ function openSetupWindow(): void {
     resizable: false,
     title: "Set up Benzene",
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "setupPreload.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -288,19 +404,37 @@ function installMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-ipcMain.handle("desktop:get-settings", initialSettings);
-ipcMain.handle("desktop:save-settings", async (_event, input: DesktopSettings) => {
+ipcMain.handle("desktop:get-settings", (event) => {
+  assertSetupSender(event);
+  return initialSettings();
+});
+ipcMain.handle("desktop:save-settings", async (event, input: DesktopSettings) => {
+  assertSetupSender(event);
   await saveSettings(input);
   await ensureAgentStarted();
   return { pairingCode: await readPairingCode() };
 });
-ipcMain.handle("desktop:open-vault", () => {
+ipcMain.handle("desktop:open-vault", (event) => {
+  assertSetupSender(event);
   if (!settings) throw new Error("Save your connection settings first.");
   setupWindow?.close();
   if (!mainWindow) createMainWindow();
   else void mainWindow.loadURL(appRoute("/devices"));
 });
-ipcMain.handle("desktop:show-code", showPairingCode);
+ipcMain.handle("desktop:show-code", (event) => {
+  assertSetupSender(event);
+  showPairingCode();
+});
+ipcMain.handle("desktop:load-vault-key", async (event, vaultId: unknown) => {
+  assertVaultSender(event);
+  if (!settings) throw new Error("Vault connection is not configured.");
+  return loadStoredVaultKey(settings.appUrl, vaultId);
+});
+ipcMain.handle("desktop:save-vault-key", async (event, vaultId: unknown, keyHex: unknown) => {
+  assertVaultSender(event);
+  if (!settings) throw new Error("Vault connection is not configured.");
+  return saveStoredVaultKey(settings.appUrl, vaultId, keyHex);
+});
 
 app.whenReady().then(async () => {
   if (!gotLock) return;

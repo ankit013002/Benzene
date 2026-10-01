@@ -69,7 +69,7 @@ export async function uploadFiles(
   folderPaths: string[],
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<UploadResult> {
-  if (files.length > 0 && !loadUnlockedVaultKey(vaultId)) {
+  if (files.length > 0 && !await loadUnlockedVaultKey(vaultId)) {
     throw new Error("Import this Vault’s recovery kit before uploading encrypted files.");
   }
   if (files.length === 0 && folderPaths.length === 0) {
