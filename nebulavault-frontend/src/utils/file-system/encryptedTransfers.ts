@@ -4,7 +4,7 @@ import {
   encryptObject,
   type EncryptedObjectMetadata,
 } from "./encryptedObject";
-import { loadUnlockedVaultKey } from "./vaultKey";
+import { isVaultRecoveryAcknowledged, loadUnlockedVaultKey } from "./vaultKey";
 import { downloadFromDevices } from "./deviceUpload";
 import { receiveRelayCiphertext, requestRelayReadFallback } from "./relayCiphertext";
 
@@ -17,6 +17,35 @@ interface TransferTarget {
 }
 
 const DEVICE_FETCH_HEADER_TIMEOUT_MS = 10_000;
+const LEGACY_COPY_TIMEOUT_MS = 120_000;
+
+async function readBoundedBody(response: Response, maxBytes: number): Promise<Uint8Array> {
+  if (!response.body) throw new Error("The source device returned no file body.");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("The older file exceeds the encrypted transfer size limit.");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return result;
+}
 
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
@@ -93,6 +122,7 @@ export async function uploadEncryptedFile(
   file: File,
   path: string,
   vaultId: string,
+  migrationSource?: { versionId: string; objectHash: string },
 ): Promise<EncryptedUploadResult> {
   const vmk = await loadUnlockedVaultKey(vaultId);
   if (!vmk) throw new Error("Import this Vault’s recovery kit before uploading encrypted files.");
@@ -105,6 +135,7 @@ export async function uploadEncryptedFile(
       path,
       contentType: file.type || "application/octet-stream",
       encryptedObject: encrypted.metadata,
+      ...(migrationSource ? { migrationSource } : {}),
     }),
   });
   const reservationPayload = await readJson(reservationResponse);
@@ -294,4 +325,86 @@ export async function downloadCurrentFile(
     ciphertext.fill(0);
   }
   return false;
+}
+
+/**
+ * Copies a supported legacy device object into a new encrypted immutable
+ * version. The source object is never modified or deleted.
+ */
+export async function migrateLegacyDeviceFileToEncrypted(
+  objectHash: string,
+  sourceVersionId: string,
+  filename: string,
+  path: string,
+  contentType: string | undefined,
+  vaultId: string,
+): Promise<EncryptedUploadResult> {
+  if (!/^[a-f0-9]{64}$/.test(objectHash)) throw new Error("This older file has an invalid content address.");
+  if (!await loadUnlockedVaultKey(vaultId) || !isVaultRecoveryAcknowledged(vaultId)) {
+    throw new Error("Import this Vault’s recovery kit or save and confirm it before migrating files.");
+  }
+
+  const planResponse = await fetch(`/api/placement/download-targets/${encodeURIComponent(objectHash)}`);
+  const planPayload = await readJson(planResponse);
+  if (!planResponse.ok) throw new Error(errorMessage(planPayload, "Could not locate the older file on your devices"));
+  const plan = responseData(planPayload, "legacy file read plan");
+  if (!Array.isArray(plan.targets) || plan.targets.length === 0) {
+    throw new Error("None of the devices holding this older file are reachable right now.");
+  }
+
+  let sourceBytes: Uint8Array | null = null;
+  for (const item of plan.targets) {
+    let target: TransferTarget;
+    try {
+      target = parseTarget(item, objectHash);
+    } catch {
+      continue;
+    }
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), LEGACY_COPY_TIMEOUT_MS);
+    try {
+      const response = await fetch(target.url, {
+        headers: { "X-Transfer-Grant": target.grant },
+        signal: controller.signal,
+      });
+      if (!response.ok) continue;
+      const length = response.headers.get("content-length");
+      if (length === null || !/^\d+$/.test(length) || Number(length) > ENCRYPTED_OBJECT_MAX_BYTES) continue;
+      const bytes = await readBoundedBody(response, ENCRYPTED_OBJECT_MAX_BYTES);
+      if (bytes.byteLength !== Number(length) || bytes.byteLength > ENCRYPTED_OBJECT_MAX_BYTES) {
+        bytes.fill(0);
+        continue;
+      }
+      const digestInput = new Uint8Array(bytes.byteLength);
+      digestInput.set(bytes);
+      let digestBuffer: ArrayBuffer;
+      try {
+        digestBuffer = await crypto.subtle.digest("SHA-256", digestInput.buffer);
+      } finally {
+        digestInput.fill(0);
+      }
+      const digest = new Uint8Array(digestBuffer);
+      const actualHash = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      if (actualHash !== objectHash) {
+        bytes.fill(0);
+        continue;
+      }
+      sourceBytes = bytes;
+      break;
+    } catch {
+      // A source can go offline between planning and transfer; try another holder.
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+  if (!sourceBytes) throw new Error("No reachable device returned a complete, hash-verified copy of this older file.");
+
+  try {
+    const file = new File([sourceBytes.slice().buffer], filename, {
+      type: contentType || "application/octet-stream",
+    });
+    return await uploadEncryptedFile(file, path, vaultId, { versionId: sourceVersionId, objectHash });
+  } finally {
+    sourceBytes.fill(0);
+  }
 }

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { createCipheriv, pbkdf2Sync } from "node:crypto";
+import { createCipheriv, createHash, pbkdf2Sync } from "node:crypto";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { FlatFile } from "@/types/FileFolderBuffer";
 import type { EncryptedObjectMetadata } from "./encryptedObject";
-import { downloadCurrentFile } from "./encryptedTransfers";
+import { downloadCurrentFile, migrateLegacyDeviceFileToEncrypted } from "./encryptedTransfers";
 import { unlockVaultWithRecoveryKit, isVaultKeyPersisted, loadUnlockedVaultKey, lockVault } from "./vaultKey";
 import { uploadFiles } from "./uploadFiles";
 import RecoveryKitUnlockForm from "../../app/(protected)/_components/RecoveryKitUnlockForm";
@@ -221,6 +221,79 @@ describe("encrypted web upload orchestration", () => {
     assert.equal(result.uploaded, 0);
     assert.ok(result.issues.some((issue) => issue.includes("not confirmed on any device")));
     assert.equal(calls.some(([url]) => String(url).includes("/complete")), false);
+  });
+
+  test("copies a hash-verified legacy device object into a new encrypted version", async () => {
+    await unlockVaultWithRecoveryKit(VECTOR_VAULT_ID, recoveryKit(encryptedVector().vaultMasterKeyHex, VECTOR_VAULT_ID), PASSPHRASE);
+    const sourceBytes = Buffer.from("old readable file");
+    const sourceHash = createHash("sha256").update(sourceBytes).digest("hex");
+    const calls: FetchCall[] = [];
+    const fetchMock: typeof fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push([input, init]);
+      if (input === `/api/placement/download-targets/${sourceHash}`) {
+        return Response.json({ data: { targets: [{ deviceId: "old-device", deviceName: "Old Mac", url: `http://192.168.1.10/objects/${sourceHash}`, grant: "legacy-read-grant", expiresAt: "2099-01-01T00:00:00.000Z" }] } });
+      }
+      if (input === `http://192.168.1.10/objects/${sourceHash}`) {
+        return new Response(sourceBytes, { status: 200, headers: { "content-length": String(sourceBytes.byteLength) } });
+      }
+      if (input === "/api/files/uploads/device/v1/encrypted") {
+        const request = JSON.parse(String(init?.body)) as { encryptedObject: { storageHash: string }; migrationSource: { versionId: string; objectHash: string } };
+        assert.deepEqual(request.migrationSource, { versionId: "legacy-version-id", objectHash: sourceHash });
+        return Response.json({ data: {
+          versionId: "new-version-id",
+          storageHash: request.encryptedObject.storageHash,
+          placement: {
+            storageHash: request.encryptedObject.storageHash,
+            shortfall: false,
+            desiredReplicas: 1,
+            alreadyHeldBy: [],
+            targets: [{ deviceId: "new-device", deviceName: "New Mac", url: `http://192.168.1.11/objects/${request.encryptedObject.storageHash}`, grant: "encrypted-write-grant", expiresAt: "2099-01-01T00:00:00.000Z" }],
+          },
+        } });
+      }
+      if (String(input).startsWith("http://192.168.1.11/objects/")) {
+        assert.equal(init?.method, "PUT");
+        const stored = new Uint8Array(await new Response(init?.body).arrayBuffer());
+        assert.equal(stored.byteLength, sourceBytes.byteLength + 16);
+        assert.notDeepEqual(stored, sourceBytes);
+        return new Response(null, { status: 201 });
+      }
+      if (input === "/api/files/uploads/device/v1/encrypted/complete") {
+        return Response.json({ data: { completed: [{ nodeId: "node-id", shortfall: false, protection: { desiredReplicas: 1, healthyReplicas: 1 } }] } });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    };
+    setGlobal("fetch", fetchMock);
+
+    const result = await migrateLegacyDeviceFileToEncrypted(
+      sourceHash, "legacy-version-id", "old.txt", "docs/", "text/plain", VECTOR_VAULT_ID,
+    );
+
+    assert.deepEqual(result, { bytes: sourceBytes.byteLength, issues: [] });
+    assert.equal(calls[0]?.[0], `/api/placement/download-targets/${sourceHash}`);
+    assert.equal(new Headers(calls[1]?.[1]?.headers).get("X-Transfer-Grant"), "legacy-read-grant");
+  });
+
+  test("does not encrypt a legacy object whose downloaded bytes fail the source hash", async () => {
+    await unlockVaultWithRecoveryKit(VECTOR_VAULT_ID, recoveryKit(encryptedVector().vaultMasterKeyHex, VECTOR_VAULT_ID), PASSPHRASE);
+    const sourceHash = createHash("sha256").update("expected source").digest("hex");
+    const calls: FetchCall[] = [];
+    setGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push([input, init]);
+      if (input === `/api/placement/download-targets/${sourceHash}`) {
+        return Response.json({ data: { targets: [{ deviceId: "old-device", deviceName: "Old Mac", url: `http://192.168.1.10/objects/${sourceHash}`, grant: "legacy-read-grant", expiresAt: "2099-01-01T00:00:00.000Z" }] } });
+      }
+      if (input === `http://192.168.1.10/objects/${sourceHash}`) {
+        return new Response("wrong bytes", { status: 200, headers: { "content-length": "11" } });
+      }
+      throw new Error(`No reservation should be created: ${String(input)}`);
+    });
+
+    await assert.rejects(
+      migrateLegacyDeviceFileToEncrypted(sourceHash, "legacy-version-id", "old.txt", "", "text/plain", VECTOR_VAULT_ID),
+      /hash-verified copy/,
+    );
+    assert.equal(calls.length, 2);
   });
 
   test("downloads encrypted bytes with a scoped read grant and exports only authenticated plaintext", async () => {

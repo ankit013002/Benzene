@@ -22,6 +22,9 @@ export interface ListedFile {
   hasContent: boolean;
   /** Present for a committed device-backed version. */
   objectHash?: string;
+  /** True only when this is a device-backed legacy version that can be copied forward. */
+  canMigrateToEncrypted?: boolean;
+  currentVersionId?: string;
   /** Protection state used by the device download flow. */
   protection?: ObjectProtection;
 }
@@ -66,7 +69,7 @@ export async function listDirectory(
     isCurrent: true,
     status: "committed",
   })
-    .select("nodeId objectHash sha256")
+    .select("nodeId objectHash sha256 storage.key storageFormat")
     .lean();
   const versionByNode = new Map(
     currentVersions.map((version) => [version.nodeId.toString(), version])
@@ -110,6 +113,10 @@ export async function listDirectory(
         // Distinguishes a real file from one whose upload never completed.
         hasContent: Boolean(node.uploadedAt),
         ...(objectHash ? { objectHash } : {}),
+        ...(current ? { currentVersionId: current._id.toString() } : {}),
+        ...(objectHash && !current?.storage?.key && current?.storageFormat !== "benzene-encrypted-object-v1"
+          ? { canMigrateToEncrypted: true }
+          : {}),
         ...(protection ? { protection } : {}),
       });
     }

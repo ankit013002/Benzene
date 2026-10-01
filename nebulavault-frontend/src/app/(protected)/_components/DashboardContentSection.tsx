@@ -19,6 +19,7 @@ import {
   downloadLegacyFile,
   uploadFiles,
 } from "@/utils/file-system/uploadFiles";
+import { migrateLegacyDeviceFileToEncrypted } from "@/utils/file-system/encryptedTransfers";
 import {
   dashboardHref,
   normalizeDashboardSegments,
@@ -34,6 +35,8 @@ interface ListedFile {
   lastModified: number | null;
   hasContent: boolean;
   objectHash?: string;
+  canMigrateToEncrypted?: boolean;
+  currentVersionId?: string;
   protection?: FileType["protection"];
 }
 
@@ -53,6 +56,7 @@ export default function DashboardContentSection() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [vaultId, setVaultId] = useState<string | null>(null);
+  const [migratingFileId, setMigratingFileId] = useState<string | null>(null);
   const handleVaultKeyUnlocked = useCallback((persisted: boolean) => {
     setNotice(persisted
       ? "Vault key unlocked and saved through this computer’s operating system secure storage."
@@ -104,6 +108,8 @@ export default function DashboardContentSection() {
           lastModified: file.lastModified ?? undefined,
           hasContent: file.hasContent,
           objectHash: file.objectHash,
+          canMigrateToEncrypted: file.canMigrateToEncrypted,
+          currentVersionId: file.currentVersionId,
           protection: file.protection,
         }));
 
@@ -194,6 +200,34 @@ export default function DashboardContentSection() {
     }
   };
 
+  const handleMigrate = async (file: FileType) => {
+    if (!file.objectHash || !file.currentVersionId || !file.canMigrateToEncrypted || !vaultId) return;
+    if (!window.confirm(
+      `Create an encrypted version of “${file.name}”? This reads the existing copy, verifies its hash, and stores a new immutable version. The older version and its bytes are kept.`
+    )) return;
+    setError(null);
+    setNotice(null);
+    setMigratingFileId(file.id);
+    try {
+      const result = await migrateLegacyDeviceFileToEncrypted(
+        file.objectHash,
+        file.currentVersionId,
+        file.name,
+        file.path,
+        file.type,
+        vaultId,
+      );
+      setNotice(result.issues.length
+        ? `Encrypted version created. ${result.issues.join(". ")}`
+        : `Encrypted version created for “${file.name}”. The older version remains in history.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not create an encrypted version.");
+    } finally {
+      setMigratingFileId(null);
+      await fetchDir();
+    }
+  };
+
   const updatePath = (child: string) => {
     router.push(dashboardHref([...pathSegments, child]));
   };
@@ -243,6 +277,8 @@ export default function DashboardContentSection() {
           updatePath={(p: string) => updatePath(p)}
           onDownload={handleDownload}
           onDelete={handleDelete}
+          onMigrate={handleMigrate}
+          migratingFileId={migratingFileId}
         />
       </div>
     </>

@@ -337,6 +337,7 @@ export async function reserveEncryptedDeviceUpload(
     path: string;
     contentType?: string;
     encryptedObject: EncryptedObjectV1Metadata;
+    migrationSource?: { versionId: string; objectHash: string };
   }
 ): Promise<EncryptedDeviceUploadReservation> {
   const cfg = config();
@@ -353,26 +354,58 @@ export async function reserveEncryptedDeviceUpload(
     throw AppError.badRequest("Encrypted object metadata belongs to a different Vault");
   }
 
-  const contentType = input.contentType?.trim() || DEFAULT_CONTENT_TYPE;
+  let contentType = input.contentType?.trim() || DEFAULT_CONTENT_TYPE;
   const filePath = normalizePath(input.path);
-  const parent = await ensureFolderChain(ownerId, filePath);
-  const node = await DriveNodeModel.findOneAndUpdate(
-    { ownerId, path: filePath, nameLower: input.name.toLowerCase(), isDeleted: false },
-    {
-      $setOnInsert: {
+  let node: DriveNodeDocument;
+  if (input.migrationSource) {
+    const sourceVersion = await FileVersionModel.findOne({
+      _id: input.migrationSource.versionId,
+      ownerId,
+      status: "committed",
+      isCurrent: true,
+    }).lean();
+    if (!sourceVersion || sourceVersion.storageFormat === "benzene-encrypted-object-v1" || sourceVersion.storage?.key) {
+      throw AppError.conflict("This older file changed or is no longer eligible for encrypted migration. Refresh the folder and try again.");
+    }
+    const sourceHash = sourceVersion.objectHash ?? sourceVersion.sha256;
+    if (!sourceHash || sourceHash !== input.migrationSource.objectHash
+      || metadata.objectId !== sourceHash || metadata.plaintextSize !== sourceVersion.bytes) {
+      throw AppError.conflict("The encrypted copy does not match the current older file. Refresh the folder and try again.");
+    }
+    const sourceNode = await DriveNodeModel.findOne(
+      {
+        _id: sourceVersion.nodeId,
         ownerId,
-        type: "file",
-        name: input.name,
-        nameLower: input.name.toLowerCase(),
         path: filePath,
-        parentId: parent?._id ?? null,
-        ancestors: parent ? [...parent.ancestors, parent._id] : [],
-        createdBy: ownerId,
+        nameLower: input.name.toLowerCase(),
+        isDeleted: false,
       },
-      $set: { updatedBy: ownerId, contentType },
-    },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
-  );
+    );
+    if (!sourceNode || sourceNode.type !== "file") {
+      throw AppError.conflict("This older file moved or changed. Refresh the folder and try again.");
+    }
+    node = sourceNode;
+    contentType = sourceVersion.contentType ?? sourceNode.contentType ?? contentType;
+  } else {
+    const parent = await ensureFolderChain(ownerId, filePath);
+    node = await DriveNodeModel.findOneAndUpdate(
+      { ownerId, path: filePath, nameLower: input.name.toLowerCase(), isDeleted: false },
+      {
+        $setOnInsert: {
+          ownerId,
+          type: "file",
+          name: input.name,
+          nameLower: input.name.toLowerCase(),
+          path: filePath,
+          parentId: parent?._id ?? null,
+          ancestors: parent ? [...parent.ancestors, parent._id] : [],
+          createdBy: ownerId,
+        },
+        $set: { updatedBy: ownerId, contentType },
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+  }
 
   if (node.type !== "file") {
     throw AppError.conflict(`"${input.name}" already exists as a folder`);
@@ -392,6 +425,7 @@ export async function reserveEncryptedDeviceUpload(
       objectHash: storageHash,
       storageFormat: "benzene-encrypted-object-v1",
       encryptedObject: metadata,
+      ...(input.migrationSource ? { migrationSource: input.migrationSource } : {}),
       status: "pending",
       uploadedBy: ownerId,
       isCurrent: false,
@@ -552,77 +586,94 @@ async function promoteHighestCommittedVersion(
 ): Promise<void> {
   const token = await acquirePromotionLock(nodeId, ownerId);
   try {
-    const highest = await FileVersionModel.findOne({
-      nodeId,
-      ownerId,
-      status: "committed",
-    })
-      .sort({ version: -1 })
-      .lean();
-    if (!highest) return;
+    await promoteHighestCommittedVersionWithLock(ownerId, nodeId, token);
+  } finally {
+    await releasePromotionLock(ownerId, nodeId, token);
+  }
+}
 
-    const current = await FileVersionModel.findOne({
-      nodeId,
-      ownerId,
-      isCurrent: true,
-      status: "committed",
-    })
-      .sort({ version: -1 })
-      .lean();
+async function releasePromotionLock(
+  ownerId: string,
+  nodeId: Types.ObjectId,
+  token: string
+): Promise<void> {
+  await DriveNodeModel.updateOne(
+    { _id: nodeId, ownerId, "promotionLock.token": token },
+    { $unset: { promotionLock: 1 } },
+    { timestamps: false }
+  );
+}
 
-    if (!current || current._id.toString() !== highest._id.toString()) {
-      // The lock makes the two updates below a serialized promotion. The
-      // predicates still make each write conditional if a legacy caller or a
-      // manually repaired database changes the row between reads.
-      if (current) {
-        await FileVersionModel.updateOne(
-          { _id: current._id, nodeId, ownerId, isCurrent: true },
-          { $set: { isCurrent: false } }
-        );
-      }
+/** Promotes under a lock already acquired by the caller. */
+async function promoteHighestCommittedVersionWithLock(
+  ownerId: string,
+  nodeId: Types.ObjectId,
+  token: string
+): Promise<void> {
+  const highest = await FileVersionModel.findOne({
+    nodeId,
+    ownerId,
+    status: "committed",
+  })
+    .sort({ version: -1 })
+    .lean();
+  if (!highest) return;
+
+  const current = await FileVersionModel.findOne({
+    nodeId,
+    ownerId,
+    isCurrent: true,
+    status: "committed",
+  })
+    .sort({ version: -1 })
+    .lean();
+
+  if (!current || current._id.toString() !== highest._id.toString()) {
+    // The lock makes the two updates below a serialized promotion. The
+    // predicates still make each write conditional if a legacy caller or a
+    // manually repaired database changes the row between reads.
+    if (current) {
       await FileVersionModel.updateOne(
-        {
-          _id: highest._id,
-          nodeId,
-          ownerId,
-          status: "committed",
-          isCurrent: false,
-        },
-        { $set: { isCurrent: true } }
+        { _id: current._id, nodeId, ownerId, isCurrent: true },
+        { $set: { isCurrent: false } }
       );
     }
-
-    // Re-read the winner after promotion so metadata is always derived from
-    // the row that is actually current, not from the request that got the lock.
-    const winner = await FileVersionModel.findOne({
-      nodeId,
-      ownerId,
-      isCurrent: true,
-      status: "committed",
-    })
-      .sort({ version: -1 })
-      .lean();
-    if (!winner) return;
-
-    await DriveNodeModel.updateOne(
-      { _id: nodeId, ownerId, "promotionLock.token": token },
+    await FileVersionModel.updateOne(
       {
-        $set: {
-          bytes: winner.bytes,
-          versionsCount: winner.version,
-          uploadedAt: winner.uploadedAt,
-          updatedBy: ownerId,
-          ...(winner.contentType ? { contentType: winner.contentType } : {}),
-        },
-      }
-    );
-  } finally {
-    await DriveNodeModel.updateOne(
-      { _id: nodeId, ownerId, "promotionLock.token": token },
-      { $unset: { promotionLock: 1 } },
-      { timestamps: false }
+        _id: highest._id,
+        nodeId,
+        ownerId,
+        status: "committed",
+        isCurrent: false,
+      },
+      { $set: { isCurrent: true } }
     );
   }
+
+  // Re-read the winner after promotion so metadata is always derived from
+  // the row that is actually current, not from the request that got the lock.
+  const winner = await FileVersionModel.findOne({
+    nodeId,
+    ownerId,
+    isCurrent: true,
+    status: "committed",
+  })
+    .sort({ version: -1 })
+    .lean();
+  if (!winner) return;
+
+  await DriveNodeModel.updateOne(
+    { _id: nodeId, ownerId, "promotionLock.token": token },
+    {
+      $set: {
+        bytes: winner.bytes,
+        versionsCount: winner.version,
+        uploadedAt: winner.uploadedAt,
+        updatedBy: ownerId,
+        ...(winner.contentType ? { contentType: winner.contentType } : {}),
+      },
+    }
+  );
 }
 
 export interface CompletedUpload {
@@ -720,27 +771,59 @@ async function completeDeviceUploadsWithFormat(
       );
     }
 
-    if (version.status !== "committed") {
-      await markVersionCommitted(versionId, ownerId, {
-        bytes: version.bytes,
-        uploadedAt: new Date(),
-        contentType: version.contentType,
+    const migrationToken = encryptedV1 && version.migrationSource
+      ? await acquirePromotionLock(version.nodeId, ownerId)
+      : null;
+    try {
+      // Once the migrated version is committed, retries must remain safe even
+      // though the copy-forward itself has made its source non-current.
+      if (version.migrationSource && version.status !== "committed") {
+        const sourceVersion = await FileVersionModel.findOne({
+          _id: version.migrationSource.versionId,
+          nodeId: version.nodeId,
+          ownerId,
+          status: "committed",
+          isCurrent: true,
+        }).lean();
+        const sourceHash = sourceVersion?.objectHash ?? sourceVersion?.sha256;
+        if (!sourceVersion || sourceHash !== version.migrationSource.objectHash
+          || !version.encryptedObject
+          || version.encryptedObject.objectId !== sourceHash
+          || version.encryptedObject.plaintextSize !== sourceVersion.bytes
+          || sourceVersion.storage?.key
+          || sourceVersion.storageFormat === "benzene-encrypted-object-v1") {
+          throw AppError.conflict("The older source version is no longer current. Refresh the folder before migrating it again.");
+        }
+      }
+
+      if (version.status !== "committed") {
+        await markVersionCommitted(versionId, ownerId, {
+          bytes: version.bytes,
+          uploadedAt: new Date(),
+          contentType: version.contentType,
+        });
+      }
+
+      if (migrationToken) {
+        await promoteHighestCommittedVersionWithLock(ownerId, version.nodeId, migrationToken);
+      } else {
+        await promoteHighestCommittedVersion(ownerId, version.nodeId);
+      }
+      const committed = await FileVersionModel.findById(versionId).lean();
+      if (!committed) throw AppError.notFound(`Upload ${versionId} not found`);
+
+      completed.push({
+        nodeId: version.nodeId.toString(),
+        versionId,
+        version: committed.version,
+        objectHash: committed.objectHash ?? version.objectHash,
+        bytes: committed.bytes,
+        protection,
+        shortfall: protection.healthyReplicas < protection.desiredReplicas,
       });
+    } finally {
+      if (migrationToken) await releasePromotionLock(ownerId, version.nodeId, migrationToken);
     }
-
-    await promoteHighestCommittedVersion(ownerId, version.nodeId);
-    const committed = await FileVersionModel.findById(versionId).lean();
-    if (!committed) throw AppError.notFound(`Upload ${versionId} not found`);
-
-    completed.push({
-      nodeId: version.nodeId.toString(),
-      versionId,
-      version: committed.version,
-      objectHash: committed.objectHash ?? version.objectHash,
-      bytes: committed.bytes,
-      protection,
-      shortfall: protection.healthyReplicas < protection.desiredReplicas,
-    });
   }
 
   return completed;

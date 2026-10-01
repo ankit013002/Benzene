@@ -85,4 +85,46 @@ describe("FileVersion storage compatibility", () => {
 
     await expect(encrypted.validate()).rejects.toThrow("encryptedObject");
   });
+
+  it("persists a typed plaintext source reference only on encrypted copy-forward versions", async () => {
+    const storageHash = digest("migration ciphertext");
+    const encrypted = new FileVersionModel({
+      ...versionFields(),
+      bytes: 9,
+      storageBytes: 25,
+      objectHash: storageHash,
+      storageFormat: "benzene-encrypted-object-v1",
+      encryptedObject: {
+        format: "benzene-encrypted-object",
+        version: 1,
+        payloadAlgorithm: "AES-256-GCM",
+        keyWrapAlgorithm: "HKDF-SHA-256+AES-256-GCM",
+        vaultId: "vault_123",
+        objectId: digest("plaintext"),
+        storageHash,
+        plaintextSize: 9,
+        payloadNonce: "AAAAAAAAAAAAAAAA",
+        wrappedKeyNonce: "BBBBBBBBBBBBBBBB",
+        wrappedKeyCiphertext: "C".repeat(64),
+      },
+      migrationSource: { versionId: "0123456789abcdef01234567", objectHash: digest("plaintext") },
+    });
+
+    await expect(encrypted.validate()).resolves.toBeUndefined();
+    expect(encrypted.toObject()).toMatchObject({
+      migrationSource: { versionId: "0123456789abcdef01234567", objectHash: digest("plaintext") },
+    });
+
+    encrypted.migrationSource = {
+      versionId: "0123456789abcdef01234567",
+      objectHash: digest("different logical object"),
+    };
+    await expect(encrypted.validate()).rejects.toThrow("must match the encrypted object's logical objectId");
+
+    const legacy = new FileVersionModel({
+      ...versionFields(),
+      migrationSource: { versionId: "0123456789abcdef01234567", objectHash: digest("plaintext") },
+    });
+    await expect(legacy.validate()).rejects.toThrow("requires an encrypted v1 version");
+  });
 });

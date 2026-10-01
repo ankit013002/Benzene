@@ -10,6 +10,8 @@ interface FileRowProps {
   file: FileType;
   onDownload: (file: FileType) => void;
   onDelete: (nodeId: string) => void;
+  onMigrate: (file: FileType) => void;
+  isMigrating: boolean;
 }
 
 const AVAILABILITY_LABEL: Record<FileAvailability, string> = {
@@ -19,7 +21,7 @@ const AVAILABILITY_LABEL: Record<FileAvailability, string> = {
   unavailable: "Unavailable",
 };
 
-const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
+const FileRow = ({ file, onDownload, onDelete, onMigrate, isMigrating }: FileRowProps) => {
   // A reserved-but-unfinished upload has no bytes to fetch yet. A known
   // offline holder cannot serve a browser download until a device returns.
   const hasContent = file.hasContent !== false;
@@ -112,6 +114,18 @@ const FileRow = ({ file, onDownload, onDelete }: FileRowProps) => {
                 <FaRegTrashAlt />
               </button>
             </li>
+            {file.canMigrateToEncrypted && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => onMigrate(file)}
+                  disabled={isMigrating}
+                  aria-label={`Create encrypted version of ${file.name}`}
+                >
+                  {isMigrating ? "Creating encrypted version…" : "Create encrypted version"}
+                </button>
+              </li>
+            )}
           </ul>
         </div>
       </div>

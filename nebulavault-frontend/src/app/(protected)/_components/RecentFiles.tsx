@@ -20,6 +20,8 @@ interface RecentFilesProps {
   updatePath: (path: string) => void;
   onDownload: (file: FileType) => void;
   onDelete: (nodeId: string) => void;
+  onMigrate: (file: FileType) => void;
+  migratingFileId: string | null;
 }
 
 const RecentFiles = ({
@@ -29,6 +31,8 @@ const RecentFiles = ({
   updatePath,
   onDownload,
   onDelete,
+  onMigrate,
+  migratingFileId,
 }: RecentFilesProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [replaceFiles, setReplaceFiles] = useState<string[]>([]);
@@ -233,6 +237,8 @@ const RecentFiles = ({
                       file={dirItem}
                       onDownload={onDownload}
                       onDelete={onDelete}
+                      onMigrate={onMigrate}
+                      isMigrating={migratingFileId === dirItem.id}
                     />
                   </div>
                 );

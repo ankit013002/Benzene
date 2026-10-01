@@ -83,6 +83,10 @@ const encryptedDeviceUploadSchema = z
     path: pathString.default(""),
     contentType: z.string().max(255).optional(),
     encryptedObject: encryptedObjectV1MetadataSchema,
+    migrationSource: z.object({
+      versionId: z.string().regex(/^[a-f0-9]{24}$/i),
+      objectHash: z.string().regex(/^[a-f0-9]{64}$/i),
+    }).optional(),
   })
   .strict();
 

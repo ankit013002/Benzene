@@ -25,6 +25,9 @@ export type FileType = {
   hasContent?: boolean;
   /** Content address used for direct device downloads. */
   objectHash?: string;
+  /** The current immutable version is a legacy device object eligible for copy-forward. */
+  canMigrateToEncrypted?: boolean;
+  currentVersionId?: string;
   /** Current device protection state, when reported by the control plane. */
   protection?: {
     state?: string;

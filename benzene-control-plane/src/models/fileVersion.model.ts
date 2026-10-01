@@ -27,6 +27,11 @@ export interface FileVersion {
   storageBytes?: number;
   /** Compact client-produced metadata only. Ciphertext never belongs in Mongo. */
   encryptedObject?: EncryptedObjectV1Metadata;
+  /** Source plaintext version for an explicit encrypted copy-forward. */
+  migrationSource?: {
+    versionId: string;
+    objectHash: string;
+  };
   /** Legacy cloud/local storage descriptor. Absent for device-backed versions. */
   storage?: {
     driver: string;
@@ -93,6 +98,17 @@ const fileVersionSchema = new Schema<FileVersion>(
       required: false,
       default: undefined,
     },
+    migrationSource: {
+      type: new Schema(
+        {
+          versionId: { type: String, required: true, match: /^[a-f0-9]{24}$/i },
+          objectHash: { type: String, required: true, match: /^[a-f0-9]{64}$/i },
+        },
+        { _id: false, strict: "throw" }
+      ),
+      required: false,
+      default: undefined,
+    },
     storage: {
       type: new Schema(
         {
@@ -120,6 +136,9 @@ const fileVersionSchema = new Schema<FileVersion>(
 );
 
 fileVersionSchema.pre("validate", function (next) {
+  if (this.migrationSource && this.storageFormat !== "benzene-encrypted-object-v1") {
+    this.invalidate("migrationSource", "requires an encrypted v1 version");
+  }
   if (this.storageFormat === "benzene-encrypted-object-v1") {
     const metadata = this.encryptedObject;
     if (!metadata) this.invalidate("encryptedObject", "encrypted v1 metadata is required");
@@ -142,6 +161,8 @@ fileVersionSchema.pre("validate", function (next) {
           "encryptedObject",
           parsed.error.issues[0]?.message ?? "encrypted v1 metadata is invalid"
         );
+      } else if (this.migrationSource && this.migrationSource.objectHash !== parsed.data.objectId) {
+        this.invalidate("migrationSource.objectHash", "must match the encrypted object's logical objectId");
       } else if (this.objectHash !== parsed.data.storageHash) {
         this.invalidate("objectHash", "must be the encrypted object's physical storageHash");
       } else if (this.bytes !== parsed.data.plaintextSize) {
