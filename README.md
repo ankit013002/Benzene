@@ -121,6 +121,12 @@ repository-wide zero.
   window closes. A local macOS ARM64 installer was built unsigned. A manual
   protected signing/notarization workflow exists, but no signed/notarized
   release has been verified; Windows and Linux packaging are unverified.
+  Imported Vault keys persist through Electron `safeStorage`, scoped to the
+  configured app origin and Vault. Linux persistence is disabled when the
+  selected backend is `basic_text`. Corrupt records are repaired only after a
+  valid recovery-kit import, and a different valid key cannot replace an
+  existing key. The browser client continues to keep imported keys in tab
+  memory only.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. The optional
@@ -574,13 +580,15 @@ production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
-The current checkout has **81 mobile checks** (55 TypeScript tests plus 26
-JavaScript/configuration checks), **33 frontend tests**, **19 desktop tests**,
+The latest completed full CI baseline, run `36800692022`, is green. CI run
+`36851852613` for the current desktop key-persistence changes is still in
+progress and is not yet a green result. The current checkout has **81 mobile
+checks** (55 TypeScript tests plus 26 JavaScript/configuration checks), **35
+frontend tests**, **25 desktop tests**,
 **5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
-checks**. CI run [36799954434](https://github.com/ankit013002/Benzene/actions/runs/36799954434)
-is green, including mobile exports. These package counts do not establish signed
-builds or production deployment. Neither JavaScript exports nor local tests
-establish a signed native release or live remote relay journey. Default Turbopack and Webpack
+checks**. These package counts do not establish signed builds or production
+deployment. Neither JavaScript exports nor local tests establish a signed
+native release or live remote relay journey. Default Turbopack and Webpack
 production builds passed in CI; the local Webpack build also passed, while the
 local Turbopack worker was blocked by the sandbox's port policy.
 

@@ -19,6 +19,12 @@ streaming, mobile authentication/decryption and signed completion, but the
 deployed relay and a live remote end-to-end journey have not been verified. An
 installable Electron desktop client opens the web app and runs the node agent
 as an independent process; its locally built macOS ARM64 installer is unsigned.
+The desktop app persists imported Vault keys through Electron `safeStorage`,
+scoped to the configured app origin and Vault. It does not persist keys on Linux
+when the selected backend is `basic_text`. Corrupt saved records are repaired
+only after a valid recovery-kit import, and a different valid key cannot
+replace an existing key. The browser client still keeps imported keys in tab
+memory only.
 
 The commercial MVP still requires production remote/HTTPS access and a tested
 NAT/firewall path, a complete key lifecycle and recovery design, signed and
@@ -619,11 +625,11 @@ verify a signed native release, store acceptance, remote relay, or production
 readiness. Metadata restore rehearsal run `36707335396` is separately green at
 commit `3c2132c`.
 
-The newer full CI run `36799954434` is also green. It includes the current
-frontend and desktop changes, the mobile exports, and the existing PostgreSQL,
-cross-service, local-storage and user-profile acceptance jobs. The current
-checkout has **81 mobile checks** (55 TypeScript tests plus 26
-JavaScript/configuration checks), **33 frontend tests**, **19 desktop tests**,
+The latest completed full CI baseline, run `36800692022`, is green. CI run
+`36851852613` for the current desktop key-persistence changes is still in
+progress and must not be treated as green yet. The current checkout has **81
+mobile checks** (55 TypeScript tests plus 26 JavaScript/configuration checks),
+**35 frontend tests**, **25 desktop tests**,
 **5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
 checks**. No real signed or notarized desktop release, signed native mobile
 build, or live remote relay acceptance has been verified. Default Turbopack and Webpack production builds passed in CI; the
@@ -824,6 +830,11 @@ the standard to match.
   unsigned. A manual protected release workflow checks signing and
   notarization inputs; no real signed/notarized release or clean-machine release
   acceptance has been verified. Windows and Linux installers are unverified.
+  Imported Vault keys persist through Electron `safeStorage`, scoped by app
+  origin and Vault. Persistence is disabled on Linux when only the
+  `basic_text` backend is available. Corrupt records are replaced only after a
+  valid recovery import; a different valid key is refused. Browser keys remain
+  in tab memory only.
 - Mongo-backed upload versioning is concurrency-safe for both legacy presign
   and device-backed reservations: concurrent requests receive distinct
   immutable version numbers, and reverse-order completion leaves the highest
