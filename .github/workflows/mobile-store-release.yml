@@ -86,15 +86,26 @@ jobs:
         run: npm run check:store-submit -- "$PLATFORM"
 
       - name: Build signed native app with EAS
-        run: npx --yes eas-cli@24.3.0 build --platform "$PLATFORM" --profile production --non-interactive
+        id: build
+        run: |
+          npx --yes eas-cli@24.3.0 build --platform "$PLATFORM" --profile production --wait --json --non-interactive > "$RUNNER_TEMP/benzene-eas-builds.json"
+          npm run record:store-builds -- "$PLATFORM" "$RUNNER_TEMP/benzene-eas-builds.json"
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 
       - name: Submit draft builds to selected stores
         if: inputs.submit
-        run: npx --yes eas-cli@24.3.0 submit --platform "$PLATFORM" --profile production --latest --non-interactive
+        run: |
+          if [[ "$PLATFORM" == "all" || "$PLATFORM" == "ios" ]]; then
+            npx --yes eas-cli@24.3.0 submit --platform ios --profile production --id "$IOS_BUILD_ID" --non-interactive
+          fi
+          if [[ "$PLATFORM" == "all" || "$PLATFORM" == "android" ]]; then
+            npx --yes eas-cli@24.3.0 submit --platform android --profile production --id "$ANDROID_BUILD_ID" --non-interactive
+          fi
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          IOS_BUILD_ID: ${{ steps.build.outputs.ios_build_id }}
+          ANDROID_BUILD_ID: ${{ steps.build.outputs.android_build_id }}
 
       - name: Remove temporary store credentials
         if: always()

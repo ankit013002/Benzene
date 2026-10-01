@@ -23,6 +23,11 @@ test('native release preflights precede any EAS build or submit', () => {
   assert.ok(buildPreflight < build);
   assert.ok(submitPreflight > buildPreflight && submitPreflight < build);
   assert.ok(submit > build);
+  assert.match(workflow, /record:store-builds/);
+  assert.match(workflow, /--wait --json --non-interactive/);
+  assert.match(workflow, /submit --platform ios .*--id "\$IOS_BUILD_ID"/);
+  assert.match(workflow, /submit --platform android .*--id "\$ANDROID_BUILD_ID"/);
+  assert.doesNotMatch(workflow, /submit[^\n]*--latest/);
 });
 
 test('native release uses immutable action SHAs and a pinned EAS CLI version', () => {
