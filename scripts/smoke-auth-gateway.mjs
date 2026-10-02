@@ -28,9 +28,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
+import { decryptObject, encryptObject } from "../contracts/encrypted-object-v1/encrypted-object-v1.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const controlPlaneDir = path.join(repoRoot, "benzene-control-plane");
@@ -224,6 +225,16 @@ function cookieValue(cookies, name) {
 
 function decodeJwtPayload(token) {
   const payload = token?.split(".")[1];
+  if (!payload) return null;
+  try {
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function decodeTransferGrant(token) {
+  const [payload] = token.split(".");
   if (!payload) return null;
   try {
     return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
@@ -1082,6 +1093,9 @@ async function main() {
     const listing = (await jsonOrNull(listingResponse))?.data;
     check("Next directory-listing route succeeded", listingResponse.status === 200);
     check("listing exposes the device-backed object hash", listing?.files?.[0]?.objectHash === objectHash);
+    const legacyFile = listing?.files?.find((file) => file.name === "lan-journey.txt");
+    check("legacy listing marks the plaintext file eligible for encrypted copy-forward", legacyFile?.canMigrateToEncrypted === true);
+    check("legacy listing exposes the current immutable source version", typeof legacyFile?.currentVersionId === "string");
 
     const protectionResponse = await request(`${frontendUrl}/api/protection`, {
       headers: { Cookie: cookieHeader },
@@ -1137,6 +1151,153 @@ async function main() {
         );
       }
     }
+
+    console.log("\ncopy the eligible legacy file forward as a new encrypted immutable version");
+    const migrationSource = { versionId: legacyFile?.currentVersionId, objectHash };
+    // Use an independent secure test Vault key and rely on the shared contract
+    // for both encryption and readback.
+    const testVaultMasterKey = randomBytes(32);
+    const encryptedObject = await encryptObject(fileBody, testVaultMasterKey, vaultId);
+    check("shared contract preserves the legacy logical hash and plaintext size",
+      encryptedObject.metadata.objectId === objectHash && encryptedObject.metadata.plaintextSize === fileBody.length);
+    check("encrypted storage hash and ciphertext length describe the stored payload",
+      encryptedObject.metadata.storageHash === createHash("sha256").update(encryptedObject.ciphertext).digest("hex") &&
+        encryptedObject.ciphertext.byteLength === fileBody.length + 16);
+
+    const migrationPayload = {
+      name: legacyFile?.name,
+      path: "lan-journey",
+      contentType: "text/plain",
+      encryptedObject: encryptedObject.metadata,
+      migrationSource,
+    };
+    const mismatchedMigrationResponse = await request(`${frontendUrl}/api/files/uploads/device/v1/encrypted`, {
+      method: "POST",
+      headers: { Cookie: cookieHeader, "content-type": "application/json" },
+      body: JSON.stringify({
+        ...migrationPayload,
+        migrationSource: { ...migrationSource, objectHash: "0".repeat(64) },
+      }),
+    });
+    await mismatchedMigrationResponse.body?.cancel();
+    check("encrypted reservation rejects a tampered migration source hash", mismatchedMigrationResponse.status === 409,
+      `status ${mismatchedMigrationResponse.status}`);
+
+    const encryptedReservationResponse = await request(`${frontendUrl}/api/files/uploads/device/v1/encrypted`, {
+      method: "POST",
+      headers: { Cookie: cookieHeader, "content-type": "application/json" },
+      body: JSON.stringify(migrationPayload),
+    });
+    const encryptedReservation = (await jsonOrNull(encryptedReservationResponse))?.data;
+    const encryptedTargets = Array.isArray(encryptedReservation?.placement?.targets)
+      ? encryptedReservation.placement.targets
+      : [];
+    check("Next encrypted device route reserves the copy-forward", encryptedReservationResponse.status === 201,
+      JSON.stringify(encryptedReservation));
+    check("copy-forward reservation keeps the encrypted logical object identity",
+      encryptedReservation?.objectId === objectHash && encryptedReservation?.storageHash === encryptedObject.metadata.storageHash &&
+        encryptedReservation?.storageBytes === encryptedObject.ciphertext.byteLength);
+    check("copy-forward selects both independent agents", encryptedTargets.length === 2 &&
+      new Set(encryptedTargets.map((target) => target.deviceId)).size === 2 &&
+      encryptedTargets.every((target) => target.deviceId === firstId || target.deviceId === secondId));
+
+    for (const target of encryptedTargets) {
+      const grant = decodeTransferGrant(target.grant);
+      check(`encrypted PUT grant for ${target.deviceId} is scoped v2`,
+        grant?.v === 2 && grant?.objectHash === encryptedObject.metadata.storageHash &&
+          grant?.deviceId === target.deviceId && grant?.op === "put" &&
+          grant?.size === encryptedObject.ciphertext.byteLength &&
+          grant?.encryption === "benzene-encrypted-object-v1");
+      const putResponse = await request(target.url, {
+        method: "PUT",
+        headers: {
+          "X-Transfer-Grant": target.grant,
+          "Content-Type": "application/octet-stream",
+        },
+        body: encryptedObject.ciphertext,
+      });
+      check(`agent ${target.deviceId} accepted encrypted ciphertext directly`, putResponse.status === 201,
+        `status ${putResponse.status}`);
+      await putResponse.body?.cancel();
+    }
+    check("first agent has the exact hash-verified encrypted copy",
+      await first.store.verify(encryptedObject.metadata.storageHash));
+    check("second agent has the exact hash-verified encrypted copy",
+      await second.store.verify(encryptedObject.metadata.storageHash));
+
+    const encryptedCompleteResponse = await request(`${frontendUrl}/api/files/uploads/device/v1/encrypted/complete`, {
+      method: "POST",
+      headers: { Cookie: cookieHeader, "content-type": "application/json" },
+      body: JSON.stringify({ versionIds: [encryptedReservation?.versionId] }),
+    });
+    const encryptedCompleted = (await jsonOrNull(encryptedCompleteResponse))?.data;
+    check("Next encrypted completion route succeeded", encryptedCompleteResponse.status === 200,
+      JSON.stringify(encryptedCompleted));
+    check("copy-forward completion reports healthy Protected health",
+      encryptedCompleted?.completed?.[0]?.protection?.healthyReplicas === 2 &&
+        encryptedCompleted?.completed?.[0]?.protection?.desiredReplicas === 2,
+      JSON.stringify(encryptedCompleted));
+
+    const migratedListingResponse = await request(`${frontendUrl}/api/files?path=lan-journey`, {
+      headers: { Cookie: cookieHeader },
+    });
+    const migratedListing = (await jsonOrNull(migratedListingResponse))?.data;
+    const migratedFile = migratedListing?.files?.find((file) => file.name === "lan-journey.txt");
+    check("listing now exposes the encrypted immutable version as current",
+      migratedListingResponse.status === 200 && migratedFile?.currentVersionId === encryptedReservation?.versionId &&
+        migratedFile?.objectHash === encryptedObject.metadata.storageHash && migratedFile?.canMigrateToEncrypted !== true);
+
+    const FileVersionModel = controlPlaneRequire("./built/models/fileVersion.model.js").default;
+    const [retainedLegacyVersion, currentEncryptedVersion] = await Promise.all([
+      FileVersionModel.findById(legacyFile?.currentVersionId).lean(),
+      FileVersionModel.findById(encryptedReservation?.versionId).lean(),
+    ]);
+    check("old plaintext immutable version remains committed and retained",
+      retainedLegacyVersion?.status === "committed" && retainedLegacyVersion?.isCurrent === false &&
+        (retainedLegacyVersion?.objectHash ?? retainedLegacyVersion?.sha256) === objectHash);
+    check("new encrypted immutable version records the exact migration source",
+      currentEncryptedVersion?.status === "committed" && currentEncryptedVersion?.isCurrent === true &&
+        currentEncryptedVersion?.storageFormat === "benzene-encrypted-object-v1" &&
+        currentEncryptedVersion?.migrationSource?.versionId === legacyFile?.currentVersionId &&
+        currentEncryptedVersion?.migrationSource?.objectHash === objectHash);
+
+    const encryptedReadPlanResponse = await request(
+      `${frontendUrl}/api/placement/download-targets/${encryptedObject.metadata.storageHash}`,
+      { headers: { Cookie: cookieHeader } },
+    );
+    const encryptedReadTargets = (await jsonOrNull(encryptedReadPlanResponse))?.data?.targets;
+    check("encrypted read plan names both device copies", encryptedReadPlanResponse.status === 200 &&
+      Array.isArray(encryptedReadTargets) && encryptedReadTargets.length === 2 &&
+      new Set(encryptedReadTargets.map((target) => target.deviceId)).size === 2);
+    let decryptedFromAllAgents = Array.isArray(encryptedReadTargets) && encryptedReadTargets.length === 2;
+    if (Array.isArray(encryptedReadTargets)) {
+      for (const target of encryptedReadTargets) {
+        const grant = decodeTransferGrant(target.grant);
+        check(`encrypted GET grant for ${target.deviceId} is scoped v2`,
+          grant?.v === 2 && grant?.objectHash === encryptedObject.metadata.storageHash &&
+            grant?.deviceId === target.deviceId && grant?.op === "get" &&
+            grant?.encryption === "benzene-encrypted-object-v1");
+        const getResponse = await request(target.url, { headers: { "X-Transfer-Grant": target.grant } });
+        const downloadedCiphertext = Buffer.from(await getResponse.arrayBuffer());
+        check(`encrypted ciphertext read from ${target.deviceId} matches stored hash and size`,
+          getResponse.status === 200 && downloadedCiphertext.byteLength === encryptedObject.ciphertext.byteLength &&
+            createHash("sha256").update(downloadedCiphertext).digest("hex") === encryptedObject.metadata.storageHash);
+        try {
+          const decrypted = await decryptObject(encryptedObject.metadata, downloadedCiphertext, testVaultMasterKey);
+          const matchesOriginal = Buffer.from(decrypted).equals(fileBody);
+          check(`ciphertext from ${target.deviceId} authenticates and decrypts to the original plaintext`, matchesOriginal);
+          decryptedFromAllAgents &&= matchesOriginal;
+          decrypted.fill(0);
+        } catch {
+          decryptedFromAllAgents = false;
+          check(`ciphertext from ${target.deviceId} authenticates and decrypts to the original plaintext`, false);
+        } finally {
+          downloadedCiphertext.fill(0);
+        }
+      }
+    }
+    check("shared contract authenticates and decrypts ciphertext from both agents", decryptedFromAllAgents);
+    testVaultMasterKey.fill(0);
 
     console.log("\nrecord and inspect an account deletion request without claiming cleanup");
     const idempotencyKey = randomUUID();

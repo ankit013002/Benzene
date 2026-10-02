@@ -98,6 +98,7 @@ jobs:
               - 'nebula-gateway/**'
               - 'benzene-control-plane/**'
               - 'benzene-node-agent/**'
+              - 'contracts/encrypted-object-v1/**'
               - 'nebulavault-frontend/**'
               - 'scripts/smoke-auth-gateway.mjs'
               - '.github/workflows/**'
