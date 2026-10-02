@@ -586,9 +586,15 @@ vectors and updating every participating package in the same commit.
   one-shot token rejection, old-password rejection and new-password login. It
   is an HTTP route/topology harness, not a browser-runtime test: frontend
   helper execution, CORS, mixed-content and other browser enforcement are not
-  covered. Remote/TLS transfer, encryption and garbage collection are outside
-  this 64-assertion LAN smoke. The user service has a separate acceptance. It
-  also checks gateway identity header stripping and anonymous rejection.
+  covered. The current 91-assertion version proves eligible legacy-file
+  listing, returns 409 for a tampered migration source, reserves and completes
+  the encrypted current version through Next and the gateway, and uses signed v2 grants for
+  direct ciphertext PUT/GET to both agents. It confirms the old immutable
+  version remains, checks ciphertext hash/size, and locally decrypts downloads
+  from both agents. This remains HTTP route/topology coverage, not browser-runtime
+  enforcement or live production migration; remote/TLS relay and garbage
+  collection are outside it. The user service has a separate acceptance. It
+  also checks gateway identity-header stripping and anonymous rejection.
 
 The separate `scripts/smoke-user-profile.mjs` acceptance starts the real auth
 service, gateway, user service and Next frontend. It covers real signup/session,
@@ -638,17 +644,21 @@ verify a signed native release, store acceptance, remote relay, or production
 readiness. Metadata restore rehearsal run `36707335396` is separately green at
 commit `3c2132c`.
 
-Full CI run `36927498130` is green for commit `8e6c115` across all jobs. The
-control-plane suite passed **415/415 tests** across 31 files, including all
+Earlier full CI run `36927498130` passed across all jobs at commit `8e6c115`.
+Its control-plane suite passed **415/415 tests** across 31 files, including all
 three real PostgreSQL/MongoDB storage-format reconciliation integration cases.
-The desktop suite passed **32/32 tests**, and CI built and silently installed an
+Its desktop suite passed **32/32 tests**, and CI built and silently installed an
 unsigned Windows NSIS package in an isolated runner directory, confirming
-`Benzene.exe` and `resources/node-agent.cjs` were installed. This verifies the
-CI packaging smoke only; the guarded reconciliation command has not been run on
-production data, and signed Windows clean-machine acceptance remains unrun. No
-real signed or notarized desktop release, signed native mobile build, or live
-remote relay acceptance has been verified. Counts recorded for earlier CI
-revisions above are historical, not for this revision. Default Turbopack and Webpack production builds passed in CI; the
+`Benzene.exe` and `resources/node-agent.cjs` were installed. The newer full run
+`36952099989` is currently red solely because the mobile job found a
+`node-forge` audit advisory; do not describe that full run as green. Its
+cross-service authenticated LAN acceptance job `110667103347` succeeded at
+commit `828f5ec` with exactly 91 `ok` assertions, including the encrypted
+copy-forward journey described above. The guarded reconciliation command has
+not been run against production data, and signed Windows clean-machine
+acceptance remains unrun. No real signed or notarized desktop release, signed
+native mobile build, or live remote relay acceptance has been verified. Counts
+recorded for earlier CI revisions above are historical. Default Turbopack and Webpack production builds passed in CI; the
 local Webpack build also passed, while the local Turbopack worker was blocked by
 the sandbox's port policy. A live browser check verified that the landing page renders
 without an overlay and navigates to sign-in; that check also caught and fixed
@@ -763,13 +773,16 @@ the standard to match.
   first; clients may request a signed WSS relay ticket and receive opaque
   ciphertext, which is validated and decrypted locally. Next.js proxies only
   the ticket request. These browser flows are limited to 25 MiB. Plaintext-era
-  objects remain readable. The shared web/desktop UI offers a user-triggered, hash-verified
-  copy-forward for eligible legacy device files: it encrypts the bytes and
-  creates a new immutable version while retaining the old version. It requires
-  an unlocked, recovery-acknowledged Vault key, a reachable source device, and
-  fits within the existing 25 MiB encrypted-transfer limit. This flow is not
-  available in mobile and has not been verified against a live production deployment. The user service
-  has a separate acceptance described above.
+  objects remain readable. The shared web/desktop UI offers a user-triggered,
+  hash-verified copy-forward for eligible legacy device files: it encrypts the
+  bytes and creates a new immutable version while retaining the old version. It
+  requires an unlocked, recovery-acknowledged Vault key and a reachable source;
+  mobile does not offer this flow. The 91-assertion HTTP route/topology
+  acceptance verifies the migration through Next and the gateway, direct
+  ciphertext transfers to two agents with signed v2 grants, retention of the
+  old version, and local hash/size verification and decryption from both. It
+  does not exercise browser runtime behavior or live production migration. The
+  user service has a separate acceptance described above.
   Gateway identity-header stripping and anonymous rejection are also covered.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation

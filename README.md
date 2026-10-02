@@ -224,12 +224,16 @@ repository-wide zero.
 - Authenticated LAN web-route/topology acceptance through Next.js, the Java
   gateway, auth/control plane and two real node agents: enrollment and
   approval, heartbeats, a default Protected two-device upload, completion,
-  listing, protection/read planning and byte-identical reads from both agents
-  are verified in CI. The current harness also exercises signup and email
-  verification through loopback SMTP. This is not a browser-runtime test;
-  frontend helper execution, CORS/mixed-content/browser enforcement,
-  remote/TLS transfer, encryption and garbage collection remain outside this
-  64-assertion LAN acceptance; the user service has a separate acceptance below.
+  listing, protection/read planning, and encrypted copy-forward of an eligible
+  legacy file are verified in CI. The current harness also exercises signup and
+  email verification through loopback SMTP. Its 91 assertions cover eligible
+  plaintext listing, a 409 rejection for a tampered migration source, encrypted
+  current-version reservation/completion through Next and the gateway, signed v2 ciphertext
+  PUT/GET to two agents, retention of the old immutable version, and hash/size
+  checks plus local decryption from both agents. It is HTTP route/topology
+  coverage, not a browser-runtime test or live production migration; CORS,
+  mixed-content enforcement, remote/TLS transfer and garbage collection remain
+  outside it. The user service has a separate acceptance below.
 - The user-profile acceptance signs up through Next, captures SMTP delivery,
   verifies pre-bootstrap 404 behavior, bootstraps and reads the persisted
   profile through the gateway and Next bridge, checks default profile/quota
@@ -578,13 +582,17 @@ the real auth service, control plane, Java gateway, Next server and two node
 agents. It exercises authenticated Next web routes and direct LAN device
 transfers, including signup and email verification through loopback SMTP,
 pairing approval, heartbeats, Protected upload, completion/list/protection/read
-planning, and byte-identical reads from both agents. It also covers password
+planning, and byte-identical reads from both agents. The current 91-assertion
+version also proves encrypted copy-forward for an eligible legacy file through
+the Next/gateway routes: a tampered source returns 409, v2 grants authorize
+ciphertext PUT/GET to both agents, the old immutable version remains, and each
+download passes hash/size checks and local decryption. It also covers password
 recovery requests and reset completion, one-shot token rejection, old-password
-rejection and new-password login. It is an HTTP route/topology harness, not a
+rejection and new-password login. This is HTTP route/topology coverage, not a
 browser-runtime test: it does not execute frontend helpers or validate CORS,
-mixed-content, or other browser enforcement. Remote/TLS transfer, encryption
-and garbage collection are not covered by this 64-assertion LAN harness; the
-user service has a separate 17-assertion acceptance.
+mixed-content, or other browser enforcement. Live production migration,
+remote/TLS transfer and garbage collection remain unverified; the user service
+has a separate 17-assertion acceptance.
 
 The user-profile acceptance (`node scripts/smoke-user-profile.mjs`) starts the
 real auth service, gateway, user service and Next frontend. It covers real
@@ -626,17 +634,22 @@ production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
-Full CI run `36927498130` is green across all jobs at commit `8e6c115`. The
-control-plane suite passed **415/415 tests** across 31 files, including all
-three real PostgreSQL/MongoDB storage-format reconciliation integration cases.
-The desktop suite passed **32/32 tests**. CI also built and silently installed
+Earlier full CI run `36927498130` passed across all jobs at commit `8e6c115`.
+The latest cross-service authenticated LAN acceptance job, `110667103347`,
+passed in run `36952099989` at commit `828f5ec` with exactly 91 `ok`
+assertions, including the encrypted legacy copy-forward journey described
+above. The newer full run is currently red solely because the mobile job found
+a `node-forge` audit advisory; do not treat that full run as green. The earlier
+green run's control-plane suite passed **415/415 tests** across 31 files,
+including three real PostgreSQL/MongoDB storage-format reconciliation cases;
+its desktop suite passed **32/32 tests**. It also built and silently installed
 an unsigned Windows NSIS package in an isolated runner directory and confirmed
 `Benzene.exe` and `resources/node-agent.cjs` were installed. The reconciliation
-command is implemented and tested, but has not been run against production data.
-This Windows smoke covers packaging and install layout only; signed Windows
-clean-machine acceptance, signed/notarized desktop releases, signed native
-mobile builds and a live remote relay journey remain unverified. Earlier CI
-counts above are snapshots for their stated commits, not this revision. Default
+command has not been run against production data. This Windows smoke covers
+packaging and install layout only; signed Windows clean-machine acceptance,
+signed/notarized desktop releases, signed native mobile builds and a live remote
+relay journey remain unverified. Earlier CI counts above are snapshots for
+their stated commits, not this revision. Default
 Turbopack and Webpack production builds passed in CI; the local Webpack build
 also passed, while the
 local Turbopack worker was blocked by the sandbox's port policy.
