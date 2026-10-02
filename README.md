@@ -81,7 +81,11 @@ standalone, and `.next/static` artifacts. The frontend, auth-service, gateway,
 control-plane and user-service production runtime images run as dedicated
 non-root `benzene` users. The node agent remains a host/LAN process. Full
 `npm audit` reports 0 vulnerabilities for the frontend, node-agent and
-auth-service and mobile client. The frontend's production-only
+auth-service. Mobile currently reports one `node-forge` GHSA through four
+dependency paths. The repository pins `node-forge` 1.4.0 and applies a
+checked-in temporary patch, with an exploit regression test and a narrow
+fail-closed CI exception. No official fixed release has been verified; do not
+report the full mobile audit as clean. The frontend's production-only
 (`npm audit --omit=dev`) audit also reports 0, and the control-plane's
 production-only audit reports 0. The
 control-plane full audit still reports four moderate, dev-only `esbuild`
@@ -125,8 +129,8 @@ repository-wide zero.
   eligible legacy device files: it downloads from a reachable holder, verifies
   the source SHA-256, encrypts locally, and commits a new immutable version
   while retaining the old one. This flow is unavailable in mobile, requires
-  recovery-acknowledged key state and fits within the existing 25 MiB bound; it has not been verified
-  in a live production deployment.
+  recovery-acknowledged key state and fits within the existing 25 MiB bound; it
+  has not been verified in a live production deployment.
 - Web and desktop can create and export mobile-compatible v1 recovery kits
   using secure randomness. Newly created keys cannot upload until the user
   confirms that the kit was saved; importing a kit is itself recovery proof.
@@ -227,10 +231,11 @@ repository-wide zero.
   listing, protection/read planning, and encrypted copy-forward of an eligible
   legacy file are verified in CI. The current harness also exercises signup and
   email verification through loopback SMTP. Its 91 assertions cover eligible
-  plaintext listing, a 409 rejection for a tampered migration source, encrypted
-  current-version reservation/completion through Next and the gateway, signed v2 ciphertext
-  PUT/GET to two agents, retention of the old immutable version, and hash/size
-  checks plus local decryption from both agents. It is HTTP route/topology
+  plaintext listing, a 409 rejection for a tampered migration source, and
+  reservation/completion of the encrypted current version through Next and the
+  gateway. Signed v2 grants authorize ciphertext PUT/GET to two agents. The old
+  immutable version remains; downloads pass hash/size checks and local
+  decryption from both agents. It is HTTP route/topology
   coverage, not a browser-runtime test or live production migration; CORS,
   mixed-content enforcement, remote/TLS transfer and garbage collection remain
   outside it. The user service has a separate acceptance below.
@@ -607,8 +612,9 @@ at commit `f927aada7d8ddc4cb04dfd69cd7cce78aba44341`. It verifies
 **402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
 tests**, **16/16 relay-service tests**, **75 mobile checks** (51 TypeScript
 transfer/crypto/folder tests plus 24 JavaScript/configuration checks), **28
-frontend tests**, and the **9-check** mobile store deployment probe. It also verifies typechecks and production builds, relay
-contract vectors, all three mobile JavaScript exports, five metadata-backup
+frontend tests**, and the **9-check** mobile store deployment probe. It also
+verifies typechecks and production builds, relay contract vectors, all three
+mobile JavaScript exports, five metadata-backup
 safeguards, the **68-check** core smoke, the **50-check** protection/rebalance
 smoke, the **64-assertion** authenticated LAN acceptance, the **17-assertion**
 user-profile/account-deletion acceptance, and the **11-check** real-component
@@ -628,18 +634,21 @@ HTTPS URLs and a publisher support contact still need deployment configuration.
 A read-only verifier now checks those public pages, exact association documents,
 publisher IDs and signing fingerprints, but has not been run against a real
 publisher deployment. Store submission is gated on that live check passing;
-build-only runs do not exercise the publisher-link gate. This workflow and these pages do not establish
-a signed/reviewed native release, store approval, remote relay acceptance, or
-production readiness.
+build-only runs do not exercise the publisher-link gate. This workflow and
+these pages do not establish a signed/reviewed native release, store approval,
+remote relay acceptance, or production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
 Earlier full CI run `36927498130` passed across all jobs at commit `8e6c115`.
-The latest cross-service authenticated LAN acceptance job, `110667103347`,
-passed in run `36952099989` at commit `828f5ec` with exactly 91 `ok`
-assertions, including the encrypted legacy copy-forward journey described
-above. The newer full run is currently red solely because the mobile job found
-a `node-forge` audit advisory; do not treat that full run as green. The earlier
+The cross-service authenticated LAN acceptance job `110667103347` passed in
+run `36952099989` at commit `828f5ec` with exactly 91 `ok` assertions, including
+the encrypted legacy copy-forward journey described above. Full CI run
+`36953762499` then succeeded across all jobs, including Mobile Expo, at commit
+`acd9403`. Mobile `npm audit` still reports one `node-forge` GHSA through four
+dependency paths. The narrow CI gate verifies the pinned 1.4.0 local patch and
+exploit regression, but the full audit is not clean and no official fixed
+upstream release has been verified. The earlier
 green run's control-plane suite passed **415/415 tests** across 31 files,
 including three real PostgreSQL/MongoDB storage-format reconciliation cases;
 its desktop suite passed **32/32 tests**. It also built and silently installed
@@ -649,8 +658,8 @@ command has not been run against production data. This Windows smoke covers
 packaging and install layout only; signed Windows clean-machine acceptance,
 signed/notarized desktop releases, signed native mobile builds and a live remote
 relay journey remain unverified. Earlier CI counts above are snapshots for
-their stated commits, not this revision. Default
-Turbopack and Webpack production builds passed in CI; the local Webpack build
+their stated commits, not this revision. Default Turbopack and Webpack
+production builds passed in CI; the local Webpack build
 also passed, while the
 local Turbopack worker was blocked by the sandbox's port policy.
 

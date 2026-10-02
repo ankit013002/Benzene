@@ -31,8 +31,15 @@ and a small checked-in patch adapts the router's CommonJS imports to that
 package's default export. The Expo iOS project parser uses `uuid` 11.1.1.
 Focused tests cover real router path parsing/stringifying and Xcode project UUID
 generation.
-The full mobile dependency audit currently reports zero vulnerabilities; when
-upstream Expo dependencies update, recheck these overrides before removing them.
+`npm audit` currently reports one high-severity `node-forge` GHSA
+(`GHSA-86w9-cpqp-85rv`) through four dependency paths. The repository pins
+`node-forge` 1.4.0 and applies a checked-in temporary patch to RSA signature
+verification. An exploit regression test covers the forged-signature case.
+CI allows only this exact audit finding after checking the pinned package,
+patch/source hashes and regression test; it fails closed if other findings or
+unexpected package state appear. This is a local mitigation, not an official
+fixed release, and the full `npm audit` is not clean. Remove the exception when
+an official fixed upstream release is verified.
 
 Expo Application Services profiles are in `eas.json`. Native store builds
 require the team's Apple/Google accounts, certificates, provisioning data and

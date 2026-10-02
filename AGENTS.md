@@ -587,11 +587,11 @@ vectors and updating every participating package in the same commit.
   is an HTTP route/topology harness, not a browser-runtime test: frontend
   helper execution, CORS, mixed-content and other browser enforcement are not
   covered. The current 91-assertion version proves eligible legacy-file
-  listing, returns 409 for a tampered migration source, reserves and completes
-  the encrypted current version through Next and the gateway, and uses signed v2 grants for
-  direct ciphertext PUT/GET to both agents. It confirms the old immutable
-  version remains, checks ciphertext hash/size, and locally decrypts downloads
-  from both agents. This remains HTTP route/topology coverage, not browser-runtime
+  listing, returns 409 for a tampered migration source, and reserves/completes
+  the encrypted current version through Next and the gateway. Signed v2 grants
+  authorize direct ciphertext PUT/GET to both agents. The old immutable version
+  remains; downloads pass hash/size checks and local decryption from both agents.
+  This remains HTTP route/topology coverage, not browser-runtime
   enforcement or live production migration; remote/TLS relay and garbage
   collection are outside it. The user service has a separate acceptance. It
   also checks gateway identity-header stripping and anonymous rejection.
@@ -620,8 +620,9 @@ CI run `36792947122` is green at commit
 control-plane tests**, **156/156 node-agent tests**, **133/133 auth tests**,
 **16/16 relay-service tests**, **75 mobile checks** (51 TypeScript
 transfer/crypto/folder tests plus 24 JavaScript/configuration checks), **28
-frontend tests**, and the **9-check** mobile store deployment probe. It also verifies typechecks and production builds, relay
-contract vectors, all three mobile JavaScript exports, five metadata-backup
+frontend tests**, and the **9-check** mobile store deployment probe. It also
+verifies typechecks and production builds, relay contract vectors, all three
+mobile JavaScript exports, five metadata-backup
 safeguards, the **68-check** core smoke, the **50-check** Protected
 repair/rebalance smoke, the **64-assertion** authenticated LAN acceptance, the
 **17-assertion** user-profile/account-deletion acceptance, and the **11-check**
@@ -649,20 +650,24 @@ Its control-plane suite passed **415/415 tests** across 31 files, including all
 three real PostgreSQL/MongoDB storage-format reconciliation integration cases.
 Its desktop suite passed **32/32 tests**, and CI built and silently installed an
 unsigned Windows NSIS package in an isolated runner directory, confirming
-`Benzene.exe` and `resources/node-agent.cjs` were installed. The newer full run
-`36952099989` is currently red solely because the mobile job found a
-`node-forge` audit advisory; do not describe that full run as green. Its
-cross-service authenticated LAN acceptance job `110667103347` succeeded at
-commit `828f5ec` with exactly 91 `ok` assertions, including the encrypted
-copy-forward journey described above. The guarded reconciliation command has
+`Benzene.exe` and `resources/node-agent.cjs` were installed. The 91-assertion
+cross-service authenticated LAN acceptance job `110667103347` succeeded in
+run `36952099989` at commit `828f5ec`, including the encrypted copy-forward
+journey described above. Full CI run `36953762499` succeeded across all jobs,
+including Mobile Expo, at commit `acd9403`. Mobile `npm audit` still reports
+one `node-forge` GHSA through four dependency paths; the narrow CI gate verifies
+the pinned 1.4.0 local patch and exploit regression, but this is not a clean
+audit and no official fixed release has been verified. The guarded
+reconciliation command has
 not been run against production data, and signed Windows clean-machine
 acceptance remains unrun. No real signed or notarized desktop release, signed
 native mobile build, or live remote relay acceptance has been verified. Counts
-recorded for earlier CI revisions above are historical. Default Turbopack and Webpack production builds passed in CI; the
-local Webpack build also passed, while the local Turbopack worker was blocked by
-the sandbox's port policy. A live browser check verified that the landing page renders
-without an overlay and navigates to sign-in; that check also caught and fixed
-CSS import ordering and a missing base selector.
+recorded for earlier CI revisions above are historical. Default Turbopack and
+Webpack production builds passed in CI; the local Webpack build also passed,
+while the local Turbopack worker was blocked by the sandbox's port policy. A
+live browser check verified that the landing page renders without an overlay
+and navigates to sign-in; that check also caught and fixed CSS import ordering
+and a missing base selector.
 
 Six real-database rebalancing regressions cover copy-before-delete, retry
 identity, Vault-wide rate limiting, protection priority, GC exclusion, corrupt
@@ -674,17 +679,20 @@ legacy-token consumption.
 
 The frontend, auth-service, gateway, control-plane and user-service production
 runtime images run as dedicated non-root `benzene` users. The node agent remains
-a host/LAN process. The frontend Docker context
-excludes local `.env*` files while allowing the committed `.env.example`; its
-runtime stage contains only `public`, Next standalone, and `.next/static`
-artifacts. Full `npm audit` reports 0 vulnerabilities for the frontend,
-node-agent, auth-service and mobile client; the mobile lockfile pins patched
-transitive query-string and uuid releases, with compatibility tests and a
-checked-in Expo Router import patch. The
-frontend's production-only (`npm audit --omit=dev`) audit also reports 0, and the control-plane's
-production-only audit reports 0. The control-plane full audit still reports
-four moderate, dev-only `esbuild` findings through `drizzle-kit`; the only
-offered forced fix is a breaking downgrade, so these package-specific results
+a host/LAN process. The frontend Docker context excludes local `.env*` files
+while allowing the committed `.env.example`; its runtime stage contains only
+`public`, Next standalone, and `.next/static` artifacts. Full `npm audit`
+reports 0 vulnerabilities for the frontend, node-agent and auth-service. Mobile
+currently reports one `node-forge` GHSA through four dependency paths. The repo
+pins `node-forge` 1.4.0 and applies a checked-in temporary patch, with an exploit
+regression test and a narrow fail-closed CI exception. No official fixed
+release has been verified; do not report the full mobile audit as clean. The
+mobile lockfile also pins patched `query-string` and `uuid` releases, with
+compatibility tests and a checked-in Expo Router import patch. The frontend's
+production-only (`npm audit --omit=dev`) audit also reports 0, and the control
+plane's production-only audit reports 0. The control-plane full audit still
+reports four moderate, dev-only `esbuild` findings through `drizzle-kit`; its
+only offered forced fix is a breaking downgrade, so these package-specific results
 must not be summarized as a repository-wide zero. Logout clears browser
 credentials even when upstream revocation is unavailable; the protected client
 leaves the session UI and keeps that revocation failure observable. File and
@@ -936,12 +944,13 @@ the standard to match.
   the shared `encrypted-object-v1` format; its recovery-kit import remains only
   in tab memory. Key rotation, trusted-device recovery, cross-client key
   lifecycle, and recovery under device loss have not been designed and
-  verified. The shared web/desktop UI now supports an explicit user-triggered migration for
-  eligible legacy device-backed plaintext files: it reads from a reachable
+verified. The shared web/desktop UI supports a user-triggered migration for
+eligible legacy device-backed plaintext files: it reads from a reachable
   source, verifies the original SHA-256, encrypts locally, and commits a new
   immutable version without deleting the old one. This copy-forward is not
-  available in mobile, is bounded by the 25 MiB transfer limit, and is unverified in live production; it
-  does not establish broad migration/reconciliation coverage. **Do not entrust
+  available in mobile, is bounded by the 25 MiB transfer limit, and is unverified
+  in live production; it does not establish broad migration/reconciliation
+  coverage. **Do not entrust
   real user data yet.**
 - **Production remote access** — the control plane creates bounded relay
   assignments for encrypted reads, and node agents produce opaque ciphertext
