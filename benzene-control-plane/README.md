@@ -2,7 +2,9 @@
 
 The control plane owns Vault, Device, allocation, policy, replica and logical
 file metadata. It answers where bytes belong and whether protection is
-satisfied; device agents carry the bytes directly over the LAN.
+satisfied; device agents carry the bytes directly. Web clients can also request
+an explicitly authorized encrypted-read fallback through the separately
+deployed opaque WSS relay; the control plane never handles file bytes.
 
 ## Storage safety
 
@@ -25,10 +27,14 @@ from a ciphertext-looking hash or its old `none` sidecar. Downloads fail closed
 for those rows, and repair/rebalance will not copy them until their format is
 explicitly reconciled. The bytes and replica rows are retained; this is a
 temporary availability gate, not deletion. Before upgrading a deployed fleet,
-pause new transfers and reconcile existing replicas against authoritative
-version metadata as a coordinated operation. There is not yet an automated
-reconciliation command, so this pre-production migration is not a zero-downtime
-rolling upgrade.
+pause new transfers and use the guarded `storage-format:reconcile` command to
+classify eligible rows from committed MongoDB version metadata. Its default is
+a read-only report. Follow [the reconciliation runbook](storage-format-reconciliation.md)
+for the safety rules and explicitly confirmed maintenance-window apply step.
+The command and real PostgreSQL/MongoDB integration cases pass in CI, but it has
+not been run against production data. A deployed fleet remains unavailable for
+these objects until an operator completes reconciliation; CI is not evidence
+that production data has been migrated.
 
 Repair assignments bind a target reservation to one healthy source and a
 persisted one-shot assignment id. A signed source-failure report must name
@@ -150,7 +156,15 @@ latest fully verified cross-service counts.
 
 ## Explicit limits
 
-This slice is whole-file and LAN-only. Encryption and key recovery, remote
-access and chunking/manifests remain unfinished. Rebalancing is intentionally
-limited to one whole-file move per Vault cooldown, without bandwidth or power
-awareness, user scheduling, multi-object queues or chunk-level resumption.
+Placement remains whole-file; chunking and manifests are not implemented.
+Encrypted uploads and reads are implemented in the web, desktop and mobile
+clients, but the full key lifecycle and production remote journey remain
+unfinished. The shared web/desktop UI provides a user-triggered, hash-verified
+copy-forward for eligible legacy device-backed plaintext files. It reads from a
+reachable holder, checks the old object's SHA-256, stores a new encrypted
+immutable version, and retains the old version. It is unavailable in mobile,
+limited by the current 25 MiB encrypted-transfer bound, and has not been
+verified in live production.
+Rebalancing is intentionally limited to one whole-file move per Vault cooldown,
+without bandwidth or power awareness, user scheduling, multi-object queues or
+chunk-level resumption.

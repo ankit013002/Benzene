@@ -121,14 +121,20 @@ repository-wide zero.
   ticket to receive opaque ciphertext, which is scope/expiry/size/frame/hash/
   close-validated before local decryption and export. Next.js proxies only the
   ticket request. Browser transfers are capped at 25 MiB. Plaintext-era objects
-  remain readable but are not migrated.
+  remain readable. The shared web/desktop UI now offers a user-triggered copy-forward for
+  eligible legacy device files: it downloads from a reachable holder, verifies
+  the source SHA-256, encrypts locally, and commits a new immutable version
+  while retaining the old one. This flow is unavailable in mobile, requires
+  recovery-acknowledged key state and fits within the existing 25 MiB bound; it has not been verified
+  in a live production deployment.
 - Web and desktop can create and export mobile-compatible v1 recovery kits
   using secure randomness. Newly created keys cannot upload until the user
   confirms that the kit was saved; importing a kit is itself recovery proof.
   Browser keys and pending recovery state stay in tab memory. Desktop persists
   through Electron `safeStorage` only after confirmation or valid import,
   scoped to app origin and Vault. Restored keys remain acknowledged because
-  only those two paths can reach secure storage. Linux
+  only those two paths can reach secure storage. After a browser reload, the
+  recovery kit must be imported again to establish proof before upload. Linux
   persistence is disabled when `basic_text` is the selected backend. Corrupt
   records are repaired only after a valid import, and a different valid key
   cannot replace the saved key.
@@ -136,7 +142,10 @@ repository-wide zero.
   runs the node agent as an independent process, which continues after the
   window closes. A local macOS ARM64 installer was built unsigned. A manual
   protected signing/notarization workflow exists, but no signed/notarized
-  release has been verified; Windows and Linux packaging are unverified.
+  release has been verified. An unsigned Windows NSIS build and silent install
+  smoke passes in CI. A signed Windows clean-machine acceptance script is
+  available but unrun; signed Windows and Linux installer acceptance remain
+  unverified.
   Imported Vault keys persist through Electron `safeStorage` after explicit
   save confirmation, scoped to the configured app origin and Vault. Linux
   persistence is disabled when the selected backend is `basic_text`. Corrupt
@@ -272,16 +281,28 @@ repository-wide zero.
   recovery proof. Desktop key persistence and restore use Electron
   `safeStorage`, while browser keys
   remain in tab memory. Key rotation, trusted-device recovery, and migration
-  of plaintext-era objects are not complete. Do not entrust real user data
-  before those paths are resolved and verified.
+  of plaintext-era objects are not complete. The web/desktop copy-forward flow for
+  eligible legacy device files is user-triggered, hash-verified, bounded to
+  25 MiB, and retains the old immutable version; it is not live-production
+  verified or broad migration coverage. Do not entrust real user data before
+  those paths are resolved and verified.
+- Transfer-grant v2 marks pre-v2 replica formats `unknown` instead of guessing.
+  The guarded control-plane `storage-format:reconcile` command defaults to a
+  read-only report and requires an explicit maintenance-window confirmation to
+  apply classifications from committed MongoDB version metadata. Its
+  PostgreSQL/MongoDB integration cases passed in CI, but it has not been run on
+  production data. Follow the
+  [storage-format reconciliation runbook](benzene-control-plane/storage-format-reconciliation.md).
 - Signed encrypted-read relay fallback is wired for mobile and web/desktop
   across the control plane, node agent and client; clients stream opaque
   ciphertext and decrypt locally. The local vertical acceptance covers the
   mobile path, but the relay is not deployed or verified over a live remote
   network. Production WSS/TLS/DNS/key configuration and NAT behavior remain
-  unverified. Browser CORS works for the HTTP LAN development path and the
-  agent can terminate explicitly configured HTTPS, but that alone is not an
-  automatic remote-access solution.
+  unverified. A GitHub Actions public-ingress probe and a live remote
+  client-to-device acceptance helper are available, but neither has been run
+  against a live deployment. Browser CORS works for the HTTP LAN development
+  path and the agent can terminate explicitly configured HTTPS, but that alone
+  is not an automatic remote-access solution.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -312,11 +333,15 @@ association endpoints and no bearer-token custom-scheme handoff. None of this
 validates a signed native build or the complete Vault journey.
 This branch is not yet that commercial MVP. Signed and validated desktop and
 mobile releases, deployed and end-to-end verified remote relay access, complete
-key recovery/rotation and plaintext-object migration,
+key recovery/rotation and verified broad plaintext-object migration,
 filesystem mounts, cloud-protection policy and billing, chunking, sharing and
-search remain blockers. Store legal URLs and publisher/release configuration
-also need to be supplied. Availability, single-copy policy and key recovery
-remain open product questions; this status does not resolve them.
+search remain blockers. A bounded user-triggered web/desktop copy-forward for eligible
+legacy device files exists, but has not been verified in production. Mobile
+store submission now requires a live publisher-link/legal-page deployment check;
+the verifier has not been run against real publisher-owned values. Store legal
+URLs and publisher/release configuration also need to be supplied. Availability,
+single-copy policy and key recovery remain open product questions; this status
+does not resolve them.
 
 ## Security model
 
@@ -569,7 +594,7 @@ Next anonymous redirect and gateway anonymous 401, then password-confirmed
 account deletion, real profile cleanup, recreation blocking and the storage
 cleanup grace period. It has exactly 17 `ok` assertions.
 
-The latest previously verified CI baseline is [36792947122](https://github.com/ankit013002/Benzene/actions/runs/36792947122),
+The previously verified CI baseline is [36792947122](https://github.com/ankit013002/Benzene/actions/runs/36792947122),
 at commit `f927aada7d8ddc4cb04dfd69cd7cce78aba44341`. It verifies
 **402/402 control-plane tests**, **156/156 node-agent tests**, **133/133 auth
 tests**, **16/16 relay-service tests**, **75 mobile checks** (51 TypeScript
@@ -594,22 +619,26 @@ until publisher identifiers and signing fingerprints are configured. Real public
 HTTPS URLs and a publisher support contact still need deployment configuration.
 A read-only verifier now checks those public pages, exact association documents,
 publisher IDs and signing fingerprints, but has not been run against a real
-publisher deployment. This workflow and these pages do not establish
+publisher deployment. Store submission is gated on that live check passing;
+build-only runs do not exercise the publisher-link gate. This workflow and these pages do not establish
 a signed/reviewed native release, store approval, remote relay acceptance, or
 production readiness.
 
 Metadata restore rehearsal run `36707335396` is separately green.
 
-The latest full CI run `36853362943` for commit `cb3ba67` is green, including
-the current end-to-end encrypted client changes. The current checkout has **81
-mobile checks** (55 TypeScript tests
-plus 26 JavaScript/configuration checks), **48 frontend tests**, **25 desktop
-tests**,
-**5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
-checks**. These package counts do not establish signed builds or production
-deployment. Neither JavaScript exports nor local tests establish a signed
-native release or live remote relay journey. Default Turbopack and Webpack
-production builds passed in CI; the local Webpack build also passed, while the
+Full CI run `36927498130` is green across all jobs at commit `8e6c115`. The
+control-plane suite passed **415/415 tests** across 31 files, including all
+three real PostgreSQL/MongoDB storage-format reconciliation integration cases.
+The desktop suite passed **32/32 tests**. CI also built and silently installed
+an unsigned Windows NSIS package in an isolated runner directory and confirmed
+`Benzene.exe` and `resources/node-agent.cjs` were installed. The reconciliation
+command is implemented and tested, but has not been run against production data.
+This Windows smoke covers packaging and install layout only; signed Windows
+clean-machine acceptance, signed/notarized desktop releases, signed native
+mobile builds and a live remote relay journey remain unverified. Earlier CI
+counts above are snapshots for their stated commits, not this revision. Default
+Turbopack and Webpack production builds passed in CI; the local Webpack build
+also passed, while the
 local Turbopack worker was blocked by the sandbox's port policy.
 
 GitHub Actions runs changed-area checks for the frontend, mobile client, auth

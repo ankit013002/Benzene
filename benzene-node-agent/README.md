@@ -122,8 +122,14 @@ Deploy transfer-grant v2 in a coordinated control-plane/agent rollout. New
 agents intentionally reject v1 PUT grants because those grants do not bind a
 storage format. The control-plane migration marks all pre-v2 replicas
 `unknown`; it retains their bytes but blocks reads and copies until an operator
-reconciles their mode. There is no automated reconciliation tool yet, so do not
-roll v2 onto a fleet with live objects without a separately planned migration.
+reconciles their mode. The guarded control-plane `storage-format:reconcile`
+command defaults to a read-only report and uses committed MongoDB version
+metadata to classify eligible rows. Follow the [storage-format reconciliation
+runbook](../benzene-control-plane/storage-format-reconciliation.md); it requires
+operators to pause writers and explicitly confirm a maintenance window before
+apply. Its integration path passed in CI against real PostgreSQL and MongoDB,
+but the command has not been run against production data. Do not treat the
+passing CI run as evidence that any deployed fleet has been reconciled.
 
 **Relay production is a separate, encrypted-object path.** On explicit
 `POST /placement/relay-read`, the control plane selects an online healthy
@@ -191,9 +197,9 @@ fixture only; no production key or private key belongs in these vectors.
 
 ## Verification
 
-The current node-agent suite has **155 tests**, including relay-ticket
-conformance and a local producer-to-consumer integration against the relay
-server. This test does not cover control-plane issuance, a production TLS
+The node-agent suite covers relay-ticket conformance and a local
+producer-to-consumer integration against the relay server. This test does not
+cover control-plane issuance, a production TLS
 endpoint, a browser/mobile consumer, direct-first fallback, or remote network
 behavior. The last fully green broader baseline before the relay job was added
 is CI run `36508422483`; the repository guide records its exact cross-package

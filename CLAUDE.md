@@ -36,13 +36,17 @@ The commercial MVP still requires production remote/HTTPS access and a tested
 NAT/firewall path, a complete key lifecycle and recovery design, signed and
 validated desktop and mobile releases, and the other blockers in §9. Web and
 mobile encrypted transfers are bounded to 25 MiB. Browser keys and unconfirmed
-recovery kits stay in tab memory and must be reimported after reload.
-Plaintext-era objects remain read-only and have no migration path. A manual
-protected desktop signing/notarization workflow exists, but no real signed or
-notarized release has been verified. An unsigned JavaScript export is not a
-release-ready client. Do not describe the application as complete,
-MVP-complete or production-ready until the capabilities and open product
-decisions are resolved and verified.
+recovery kits stay in tab memory and must be reimported after reload. The shared
+web/desktop interface offers a user-triggered, hash-verified copy-forward for
+eligible legacy device files: it writes a new encrypted immutable version and
+retains the older version. This is unavailable in mobile, limited by the
+existing transfer size bound, and has not been verified in a live production
+deployment. A manual protected desktop signing/notarization workflow exists,
+but no real signed or notarized release or signed Windows clean-machine
+acceptance has been verified. An unsigned
+JavaScript export is not a release-ready client. Do not describe the application
+as complete, MVP-complete or production-ready until the capabilities and open
+product decisions are resolved and verified.
 
 ### Completion gate
 
@@ -51,10 +55,13 @@ by end-to-end evidence, not merely scaffolding or unit tests:
 
 - The implemented encrypted relay path is deployed and end-to-end verified
   outside the local LAN, including the chosen NAT/firewall fallback, without
-  turning the control plane into the normal byte path.
+  turning the control plane into the normal byte path. The `Verify public relay
+  ingress` GitHub Actions probe and a live remote client-to-device acceptance
+  helper exist, but neither has established a production remote journey yet.
 - All intended clients encrypt data before permanent storage, with an
-  implemented key lifecycle and tested recovery design. Plaintext-era object
-  compatibility and migration are explicit.
+  implemented key lifecycle and tested recovery design. The shared web/desktop
+  legacy plaintext copy-forward is bounded and has not been verified in production;
+  broader client compatibility and migration behavior remain explicit.
 - Reference-safe garbage collection and automatic, rate-limited rebalancing are
   implemented and tested against interruption, offline devices and retries.
 - Installable desktop and mobile clients complete the intended Vault journey;
@@ -631,13 +638,17 @@ verify a signed native release, store acceptance, remote relay, or production
 readiness. Metadata restore rehearsal run `36707335396` is separately green at
 commit `3c2132c`.
 
-The latest full CI run `36853362943` for commit `cb3ba67` is green, including
-the current end-to-end encrypted client changes. The current checkout has **81
-mobile checks** (55 TypeScript tests plus 26 JavaScript/configuration checks),
-**48 frontend tests**, **25 desktop tests**,
-**5 relay deployment-verifier tests**, and **9 mobile store deployment-verifier
-checks**. No real signed or notarized desktop release, signed native mobile
-build, or live remote relay acceptance has been verified. Default Turbopack and Webpack production builds passed in CI; the
+Full CI run `36927498130` is green for commit `8e6c115` across all jobs. The
+control-plane suite passed **415/415 tests** across 31 files, including all
+three real PostgreSQL/MongoDB storage-format reconciliation integration cases.
+The desktop suite passed **32/32 tests**, and CI built and silently installed an
+unsigned Windows NSIS package in an isolated runner directory, confirming
+`Benzene.exe` and `resources/node-agent.cjs` were installed. This verifies the
+CI packaging smoke only; the guarded reconciliation command has not been run on
+production data, and signed Windows clean-machine acceptance remains unrun. No
+real signed or notarized desktop release, signed native mobile build, or live
+remote relay acceptance has been verified. Counts recorded for earlier CI
+revisions above are historical, not for this revision. Default Turbopack and Webpack production builds passed in CI; the
 local Webpack build also passed, while the local Turbopack worker was blocked by
 the sandbox's port policy. A live browser check verified that the landing page renders
 without an overlay and navigates to sign-in; that check also caught and fixed
@@ -752,8 +763,13 @@ the standard to match.
   first; clients may request a signed WSS relay ticket and receive opaque
   ciphertext, which is validated and decrypted locally. Next.js proxies only
   the ticket request. These browser flows are limited to 25 MiB. Plaintext-era
-  objects remain readable but have no migration flow. The user service has a
-  separate acceptance described above.
+  objects remain readable. The shared web/desktop UI offers a user-triggered, hash-verified
+  copy-forward for eligible legacy device files: it encrypts the bytes and
+  creates a new immutable version while retaining the old version. It requires
+  an unlocked, recovery-acknowledged Vault key, a reachable source device, and
+  fits within the existing 25 MiB encrypted-transfer limit. This flow is not
+  available in mobile and has not been verified against a live production deployment. The user service
+  has a separate acceptance described above.
   Gateway identity-header stripping and anonymous rejection are also covered.
 - Vaults, device enrollment (pairing code, user-approved), presence/heartbeat,
   storage allocation
@@ -781,6 +797,13 @@ the standard to match.
   directly, hash-verified and recorded before the old source receives a durable,
   retry-safe deletion assignment. The three-device smoke proves the bytes move
   and subsequent reads name only the new holder.
+- Guarded storage-format reconciliation handles pre-v2 replicas marked
+  `unknown`. Its default is a read-only report; apply requires an explicit
+  maintenance-window confirmation and classifies only eligible rows from
+  committed MongoDB file-version metadata. Real PostgreSQL/MongoDB integration
+  cases pass in CI. Follow
+  [the operator runbook](benzene-control-plane/storage-format-reconciliation.md);
+  production data has not been reconciled.
 - The node agent can serve the existing grant-protected transfer API over
   explicitly configured HTTPS. Its integration test uses a trusted test
   certificate with hostname/IP SAN validation; certificate issuance, renewal
@@ -811,8 +834,11 @@ the standard to match.
   buffer whole files, and trusted-device recovery,
   key rotation and release-ready native builds remain open. Production/store
   preflight rejects placeholder identifiers, missing public legal/support/
-  deletion URLs, absent EAS linkage and missing submission credentials. The
-  iOS required-reason API manifest and minimal Android permission set are pinned.
+  deletion URLs, absent EAS linkage and missing submission credentials. Store
+  submission is additionally blocked until the live deployment verifier confirms
+  publisher-owned app links and public legal/support pages; the verifier has not
+  been run against a real publisher deployment. The iOS required-reason API
+  manifest and minimal Android permission set are pinned.
 - Password-confirmed account-deletion requests revoke renewable sessions and
   enter a durable, leased cleanup phase runner. Missing or failed downstream
   handlers block and retry instead of reporting completion. Its optional
@@ -832,16 +858,22 @@ the standard to match.
   receive opaque ciphertext. Ticket scope, expiry, size, frame sequence, hash
   and close state are checked; ciphertext is authenticated and decrypted
   locally before export. Next.js proxies only the ticket request. Browser
-  recovery kits and keys stay in tab memory; desktop key persistence uses
-  `safeStorage` only after explicit save confirmation and user acknowledgement.
-  Transfers are limited to 25 MiB. Plaintext-era objects are read-only and
-  have no migration flow.
+  recovery kits and keys stay in tab memory; after a reload the user must
+  re-import the kit to establish recovery proof before uploading. Desktop key
+  persistence uses `safeStorage` only after explicit save confirmation and user
+  acknowledgement.
+  Transfers are limited to 25 MiB. The shared web/desktop UI can copy-forward eligible
+  legacy device-backed plaintext files into new encrypted immutable versions
+  after verifying the source hash; the older version is retained. This is a
+  user-triggered flow, is not available in mobile, and is not verified in live production.
 - The Electron desktop client opens the configured web app and launches the
   node agent as an independent process, so storage participation survives
   closing the window. A local macOS ARM64 installer has been built, but it is
   unsigned. A manual protected release workflow checks signing and
-  notarization inputs; no real signed/notarized release or clean-machine release
-  acceptance has been verified. Windows and Linux installers are unverified.
+  notarization inputs; no real signed/notarized release has been verified. A
+  Windows unsigned NSIS build/install smoke passes in CI. Its signed
+  clean-machine acceptance script is available but has not been run; signed
+  Windows and Linux installer acceptance remain unverified.
   Web and desktop can create/export mobile-compatible v1 recovery kits using
   secure randomness. Newly created keys require explicit confirmation that the
   kit was saved before upload; a valid import is treated as recovery proof.
@@ -858,14 +890,15 @@ the standard to match.
   per-file N+1 work. Zero-replica hashes still receive summaries, while empty
   input returns without creating vault or policy state.
 - Frontend tests cover encrypted-object interoperability and browser upload and
-  download behavior; the current suite has 48 tests. Reduced protection
+  download behavior; the last recorded CI baseline at `cb3ba67` had 48 tests.
+  Reduced protection
   messaging is based on authoritative completion state rather than the
   reservation plan. A live browser check also verifies the landing page renders
   without an overlay and can navigate to sign-in.
-- The desktop package has 27 tests for configuration, agent bundling, release
-  preflight and Windows clean-machine acceptance. Its manual protected
-  installer workflow has not produced
-  a verified signed artifact.
+- Desktop tests cover configuration, agent bundling, release preflight and
+  Windows clean-machine acceptance-script safeguards. The manual protected
+  installer workflow has not produced a verified signed artifact, and the
+  clean-machine script has not been run.
 - The user-profile acceptance covers real signup/session, SMTP delivery,
   pre-bootstrap 404, bootstrap and reads through the gateway and Next bridge,
   persisted default profile/quota fields, Next anonymous redirect and gateway
@@ -890,16 +923,22 @@ the standard to match.
   the shared `encrypted-object-v1` format; its recovery-kit import remains only
   in tab memory. Key rotation, trusted-device recovery, cross-client key
   lifecycle, and recovery under device loss have not been designed and
-  verified. Existing plaintext-era objects need an explicit
-  migration/reconciliation plan before broad rollout. **Do not entrust real
-  user data yet.**
+  verified. The shared web/desktop UI now supports an explicit user-triggered migration for
+  eligible legacy device-backed plaintext files: it reads from a reachable
+  source, verifies the original SHA-256, encrypts locally, and commits a new
+  immutable version without deleting the old one. This copy-forward is not
+  available in mobile, is bounded by the 25 MiB transfer limit, and is unverified in live production; it
+  does not establish broad migration/reconciliation coverage. **Do not entrust
+  real user data yet.**
 - **Production remote access** — the control plane creates bounded relay
   assignments for encrypted reads, and node agents produce opaque ciphertext
   over WSS. Web, desktop and mobile clients try direct transfers first and can
   use the signed relay ticket fallback, validating and decrypting locally. A
-  local vertical acceptance verifies the mobile path, but production relay
-  deployment/configuration, TLS/DNS and key operations, NAT behavior, and a
-  live remote client-to-device acceptance remain unverified.
+  local vertical acceptance verifies the mobile path. A public ingress workflow
+  and reproducible live remote client-to-device acceptance helper are available,
+  but the ingress probe and helper have not been run against a live deployment;
+  production relay configuration, TLS/DNS and key operations, NAT behavior, and
+  remote acceptance remain unverified.
 - Device removal deletes managed filesystem entries rather than securely
   overwriting media. The agent refuses unsafe roots and refuses nonempty
   legacy/unmarked store roots; use a new empty path or perform an explicit
@@ -907,7 +946,9 @@ the standard to match.
 - Signed/notarized desktop releases, signed/reviewed mobile store builds,
   filesystem mount, sharing, search and billing. An installable Electron client
   exists, but only an unsigned local macOS ARM64 installer has been verified;
-  Windows/Linux packaging and signed release acceptance remain unverified.
+  the unsigned Windows NSIS build/install smoke passes in CI, but the signed
+  clean-machine acceptance script has not been run. Signed Windows and Linux
+  installer acceptance remain unverified.
 - File metadata still in MongoDB, not yet migrated to Postgres
 
 ### Device-first MVP and commercial blockers
@@ -925,13 +966,18 @@ are implemented; this does not validate a signed native build or the complete
 Vault journey.
 This branch is not yet that commercial MVP. Signed and validated desktop and
 mobile builds, deployed and end-to-end verified remote relay access,
-complete key recovery/rotation and plaintext-object migration,
+complete key recovery/rotation and verified broad plaintext-object migration,
 filesystem mounts, cloud-protection policy and billing, chunking, sharing and
-search remain blockers. Store legal/deletion URLs, publisher/release
-configuration, App Store Connect/Play Console records, signing credentials and
-privacy/data-safety declarations also need to be supplied. Availability,
-single-copy policy and key recovery
-remain open product questions; this status does not resolve them.
+search remain blockers. A bounded user-triggered web/desktop copy-forward for eligible
+legacy device files now exists, but is unverified in production. Mobile store
+submission is gated on a live publisher-link/legal-page verifier that has not
+been run against publisher-owned deployment values. Store legal/deletion URLs,
+publisher/release configuration, App Store Connect/Play Console records,
+signing credentials and privacy/data-safety declarations also need to be
+supplied. The public relay ingress workflow and live remote acceptance helper
+are available but unrun against a live deployment. Availability, single-copy
+policy and key recovery remain open product questions; this status does not
+resolve them.
 
 ### Known limits worth repeating
 

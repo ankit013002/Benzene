@@ -101,7 +101,8 @@ prove that two real peers can exchange ciphertext through the deployment, that
 home NAT/firewall conditions trigger the fallback, or that a specific proxy
 configuration preserves session affinity under scale or restart. Keep the
 existing local real-component relay acceptance and complete a live remote
-journey before treating remote access as verified.
+journey before treating remote access as verified. The ingress workflow has
+not yet been run against a live public deployment.
 
 ### Live remote client-to-device acceptance
 
@@ -112,7 +113,8 @@ binding against the ticket, then uses the mobile receiver implementation to
 receive the exact ciphertext and checks SHA-256 and byte count before saving
 those ciphertext bytes. It accepts only encrypted-object transfers up to the
 current 25 MiB client limit. It never asks for a Vault key or device signing
-key, and it never sends file bytes to the control plane.
+key, and it never sends file bytes to the control plane. This acceptance helper
+is implemented but has not been run against a live relay deployment.
 
 For a bounded operator rehearsal:
 
