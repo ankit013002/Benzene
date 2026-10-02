@@ -61,6 +61,7 @@
     "verify:store-deployment": "node ../scripts/verify-mobile-store-deployment.mjs",
     "prepare:store-release": "node scripts/prepare-store-release.mjs",
     "record:store-builds": "node scripts/record-store-builds.mjs",
+    "security:audit": "node scripts/security-audit.mjs",
     "postinstall": "patch-package",
     "typecheck": "tsc --noEmit",
     "lint": "eslint app src tests --max-warnings 0",

@@ -200,7 +200,7 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --include=dev
       - name: Audit all mobile dependencies
-        run: npm audit --audit-level=moderate
+        run: npm run security:audit
       - name: Check Expo SDK compatibility
         run: npx expo install --check
       - name: Typecheck
